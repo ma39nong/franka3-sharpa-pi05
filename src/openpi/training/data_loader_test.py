@@ -1,10 +1,32 @@
 import dataclasses
 
 import jax
+import numpy as np
+import torch
 
 from openpi.models import pi0_config
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
+
+
+def test_weighted_concat_dataset_sampling():
+    dataset = _data_loader.WeightedConcatDataset(
+        [list(range(65)), list(range(60))],
+        [0.4, 0.6],
+    )
+
+    assert len(dataset) == 125
+    np.testing.assert_allclose(dataset.sample_weights[:65].sum(), 0.4)
+    np.testing.assert_allclose(dataset.sample_weights[65:].sum(), 0.6)
+
+    sampler = torch.utils.data.WeightedRandomSampler(
+        torch.as_tensor(dataset.sample_weights),
+        num_samples=20_000,
+        replacement=True,
+        generator=torch.Generator().manual_seed(0),
+    )
+    sampled = np.fromiter(sampler, dtype=np.int64)
+    np.testing.assert_allclose(np.mean(sampled < 65), 0.4, atol=0.015)
 
 
 def test_torch_data_loader():

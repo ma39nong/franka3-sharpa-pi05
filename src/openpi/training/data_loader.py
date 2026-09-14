@@ -66,6 +66,30 @@ class TransformedDataset(Dataset[T_co]):
         return len(self._dataset)
 
 
+class WeightedConcatDataset(torch.utils.data.ConcatDataset):
+    """Concatenate datasets and expose per-frame weights for random sampling.
+
+    Each source dataset constructs its own action windows before concatenation,
+    so a future action window cannot cross a dataset boundary.
+    """
+
+    def __init__(self, datasets: Sequence[Dataset], weights: Sequence[float]):
+        if len(datasets) != len(weights) or not datasets:
+            raise ValueError("datasets and weights must have the same non-zero length")
+        super().__init__(typing.cast(Sequence[torch.utils.data.Dataset], datasets))
+        if any(len(dataset) == 0 for dataset in datasets):
+            raise ValueError("Weighted LeRobot datasets must not be empty")
+        normalized = np.asarray(weights, dtype=np.float64)
+        normalized /= normalized.sum()
+        self.sample_weights = np.concatenate(
+            [
+                np.full(len(dataset), weight / len(dataset), dtype=np.float64)
+                for dataset, weight in zip(datasets, normalized, strict=True)
+            ]
+        )
+        self.dataset_probabilities = tuple(float(weight) for weight in normalized)
+
+
 class IterableTransformedDataset(IterableDataset[T_co]):
     def __init__(
         self,
@@ -229,21 +253,51 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+    if data_config.local_dataset_loader is not None and data_config.lerobot_datasets:
+        raise ValueError("Weighted LeRobot datasets do not support local_dataset_loader")
     if data_config.local_dataset_loader is not None:
         return _create_local_dataset(data_config, action_horizon)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
-        delta_timestamps={
-            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-        },
+    def create_one(dataset_repo_id: str) -> tuple[Dataset, lerobot_dataset.LeRobotDatasetMetadata]:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_repo_id)
+        dataset: Dataset = lerobot_dataset.LeRobotDataset(
+            dataset_repo_id,
+            delta_timestamps={
+                key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
+            },
+        )
+        if data_config.prompt_from_task:
+            dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        return dataset, dataset_meta
+
+    if not data_config.lerobot_datasets:
+        return create_one(repo_id)[0]
+
+    datasets_and_meta = [create_one(spec.repo_id) for spec in data_config.lerobot_datasets]
+    datasets = [item[0] for item in datasets_and_meta]
+    metas = [item[1] for item in datasets_and_meta]
+    reference = metas[0]
+    required_keys = {"observation.state", *data_config.action_sequence_keys, *reference.camera_keys}
+    for spec, meta in zip(data_config.lerobot_datasets[1:], metas[1:], strict=True):
+        if meta.fps != reference.fps:
+            raise ValueError(f"{spec.repo_id}: fps {meta.fps} does not match {reference.fps}")
+        if set(meta.camera_keys) != set(reference.camera_keys):
+            raise ValueError(f"{spec.repo_id}: camera keys do not match the first dataset")
+        for key in required_keys:
+            if key not in meta.features or key not in reference.features:
+                raise ValueError(f"{spec.repo_id}: required feature {key!r} is missing")
+            expected = reference.features[key]
+            actual = meta.features[key]
+            if actual["dtype"] != expected["dtype"] or tuple(actual["shape"]) != tuple(expected["shape"]):
+                raise ValueError(f"{spec.repo_id}: feature {key!r} is incompatible with the first dataset")
+    logging.info(
+        "Weighted LeRobot mixture: %s",
+        ", ".join(
+            f"{spec.repo_id}={spec.weight:g} ({len(dataset)} frames)"
+            for spec, dataset in zip(data_config.lerobot_datasets, datasets, strict=True)
+        ),
     )
-
-    if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
-
-    return dataset
+    return WeightedConcatDataset(datasets, [spec.weight for spec in data_config.lerobot_datasets])
 
 
 def create_rlds_dataset(
@@ -395,6 +449,7 @@ def create_torch_data_loader(
         seed: The seed to use for shuffling the data.
     """
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
+    sample_weights = getattr(dataset, "sample_weights", None)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks
@@ -423,6 +478,7 @@ def create_torch_data_loader(
         sharding=None if framework == "pytorch" else sharding,
         shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
         sampler=sampler,
+        sample_weights=sample_weights,
         num_batches=num_batches,
         num_workers=num_workers,
         seed=seed,
@@ -484,6 +540,7 @@ class TorchDataLoader:
         sharding: jax.sharding.Sharding | None = None,
         shuffle: bool = False,
         sampler: torch.utils.data.Sampler | None = None,
+        sample_weights: np.ndarray | None = None,
         num_batches: int | None = None,
         num_workers: int = 0,
         seed: int = 0,
@@ -526,6 +583,15 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        if sample_weights is not None:
+            if sampler is not None:
+                raise NotImplementedError("Weighted LeRobot sampling with distributed PyTorch is not supported")
+            sampler = torch.utils.data.WeightedRandomSampler(
+                torch.as_tensor(sample_weights, dtype=torch.double),
+                num_samples=len(dataset),
+                replacement=True,
+                generator=generator,
+            )
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,

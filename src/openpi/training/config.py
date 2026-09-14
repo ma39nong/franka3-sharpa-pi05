@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import math
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -63,6 +64,20 @@ class AssetsConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotDatasetSpec:
+    """One dataset in a weighted LeRobot training mixture."""
+
+    repo_id: str
+    weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.repo_id:
+            raise ValueError("LeRobot dataset repo_id must not be empty")
+        if not math.isfinite(self.weight) or self.weight <= 0:
+            raise ValueError(f"LeRobot dataset weight must be finite and positive, got {self.weight}")
+
+
+@dataclasses.dataclass(frozen=True)
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
@@ -95,6 +110,10 @@ class DataConfig:
     # LeRobot-style datasets that cannot be opened by the installed LeRobot API.
     local_dataset_loader: str | None = None
     local_dataset_video_keys: Sequence[str] = ()
+
+    # Optional weighted mixture of standard LeRobot datasets. When empty, repo_id
+    # identifies the single dataset. For a mixture, repo_id is its logical asset ID.
+    lerobot_datasets: Sequence[LeRobotDatasetSpec] = ()
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -367,6 +386,7 @@ class LeRobotFr3WujiDataConfig(DataConfigFactory):
 
     extra_delta_transform: bool = False
     action_sequence_keys: Sequence[str] = ("action",)
+    lerobot_datasets: Sequence[LeRobotDatasetSpec] = ()
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -401,6 +421,7 @@ class LeRobotFr3WujiDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=ModelTransformFactory()(model_config),
             action_sequence_keys=self.action_sequence_keys,
+            lerobot_datasets=self.lerobot_datasets,
         )
 
 
@@ -1057,6 +1078,69 @@ _CONFIGS = [
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]
+
+# Independent assets/checkpoints for the curated dataset with source episode 58 removed.
+_fr3_wuji_base = next(config for config in _CONFIGS if config.name == "pi05_fr3_wuji")
+_CONFIGS.append(
+    dataclasses.replace(
+        _fr3_wuji_base,
+        name="pi05_fr3_wuji_60ep",
+        data=dataclasses.replace(
+            _fr3_wuji_base.data,
+            repo_id="fr3_wuji/tomato_standard_quality_60ep",
+        ),
+    )
+)
+
+# Joint training on all 65 previous episodes and the 60 curated new episodes.
+_CONFIGS.append(
+    dataclasses.replace(
+        _fr3_wuji_base,
+        name="pi05_fr3_wuji_125ep",
+        data=dataclasses.replace(
+            _fr3_wuji_base.data,
+            repo_id="fr3_wuji/tomato_joint_125ep",
+        ),
+    )
+)
+
+# Weighted, non-copying view of the same 65 + 60 episodes. The shared norm was
+# computed once over every frame; weights affect training sampling only.
+_CONFIGS.append(
+    dataclasses.replace(
+        _fr3_wuji_base,
+        name="pi05_fr3_wuji_weighted",
+        data=dataclasses.replace(
+            _fr3_wuji_base.data,
+            repo_id="fr3_wuji/tomato_weighted_40_60",
+            assets=AssetsConfig(asset_id="fr3_wuji/tomato_weighted_40_60"),
+            lerobot_datasets=(
+                LeRobotDatasetSpec(repo_id="fr3_wuji/65_0907", weight=0.4),
+                LeRobotDatasetSpec(repo_id="fr3_wuji/60_0909", weight=0.6),
+            ),
+        ),
+    )
+)
+
+# Unified normalization/training view of the three disjoint tomato datasets
+# collected through 2026-09-11. Norm statistics use every frame once; these
+# weights only control training sampling and can be changed later.
+_CONFIGS.append(
+    dataclasses.replace(
+        _fr3_wuji_base,
+        name="pi05_fr3_wuji_269ep",
+        data=dataclasses.replace(
+            _fr3_wuji_base.data,
+            repo_id="fr3_wuji/tomato_42_102_125",
+            assets=AssetsConfig(asset_id="fr3_wuji/tomato_42_102_125"),
+            lerobot_datasets=(
+                LeRobotDatasetSpec(repo_id="fr3_wuji/42_high_0911", weight=1.0),
+                LeRobotDatasetSpec(repo_id="fr3_wuji/102_0911", weight=1.0),
+                LeRobotDatasetSpec(repo_id="fr3_wuji/125_0909", weight=1.0),
+            ),
+        ),
+    )
+)
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
