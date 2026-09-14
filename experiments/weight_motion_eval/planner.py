@@ -36,8 +36,8 @@ def validate_config(config):
             raise ValueError(f"Invalid positive configuration: {key}")
     if not 10 <= config["sample_hz"] <= 200 or not 1 <= config["minimum_time_scale"] <= 100:
         raise ValueError("Sampling or time scale out of supported range")
-    if config["max_total_seconds"] > 120 or config["arm_raw_initial_delta_rad"] > 0.2:
-        raise ValueError("This experiment supports at most 120 seconds and 0.2 rad raw arm acquisition")
+    if config["max_total_seconds"] > 120 or config["arm_raw_initial_delta_rad"] > 0.3:
+        raise ValueError("This experiment supports at most 120 seconds and 0.3 rad raw arm acquisition")
     passes = config.get("smoothing_passes")
     if type(passes) is not int or not 0 <= passes <= 10:
         raise ValueError("Smoothing passes must be an integer between 0 and 10")
@@ -119,12 +119,15 @@ class Phase:
 def make_phase(name, times, positions, config, limits, minimum_scale=1.0):
     spline = rest_spline(times, positions)
     low, high = extrema(spline)
-    if np.any(low[0] < limits["lower"] - 1e-9) or np.any(high[0] > limits["upper"] + 1e-9):
+    indices = np.r_[0:7, 27:34] if config.get("hand_control") == "slider" else np.arange(54)
+    if np.any(low[0, indices] < limits["lower"][indices] - 1e-9) or np.any(
+        high[0, indices] > limits["upper"][indices] + 1e-9
+    ):
         raise ValueError(f"{name}: continuous spline exceeds position limits; no clipping or automatic fallback")
     scale = float(minimum_scale)
     for order, derivative in enumerate(("velocity", "acceleration", "jerk"), 1):
         peak = np.maximum(np.abs(low[order]), np.abs(high[order]))
-        scale = max(scale, float(np.max(peak / caps(config, name, derivative))) ** (1 / order))
+        scale = max(scale, float(np.max(peak[indices] / caps(config, name, derivative)[indices])) ** (1 / order))
     scale *= 1 + 1e-8
     return Phase(name, spline, scale, low, high)
 
@@ -164,7 +167,13 @@ def build_plan(raw, start, config, limits, names):
     for value in (raw, start):
         if np.any(value < limits["lower"]) or np.any(value > limits["upper"]):
             raise ValueError("Raw actions or recorded start exceed reference joint limits")
+    steps = config.get("execution_steps", 50)
+    if type(steps) is not int or not 2 <= steps <= 50:
+        raise ValueError("execution_steps must be between 2 and 50")
+    raw = raw[:steps].copy()
     delta, knots = np.abs(raw[0] - start), smooth_knots(raw, config["smoothing_passes"])
+    if config.get("hand_control") == "slider":
+        knots[:, np.r_[7:27, 34:54]] = raw[:, np.r_[7:27, 34:54]]
     diagnostics = {}
     for group, section in GROUPS.items():
         part = "arm" if group.endswith("arm") else "hand"
@@ -180,12 +189,15 @@ def build_plan(raw, start, config, limits, names):
             "raw_acquisition_limit_rad": threshold,
             "max_knot_modification_rad": modification,
             "raw_velocity_max_rad_s": float(np.abs(np.diff(raw[:, section], axis=0)).max() * 30),
-            "raw_acceleration_max_rad_s2": float(np.abs(np.diff(raw[:, section], n=2, axis=0)).max() * 900),
+            "raw_acceleration_max_rad_s2": float(np.abs(np.diff(raw[:, section], n=2, axis=0)).max() * 900) if len(raw) > 2 else 0.0,
         }
     # Two knots plus rest velocity/acceleration boundary conditions define the
     # quintic approach; all 54 joints share its duration.
     approach = make_phase("approach", np.array([0.0, 1.0]), np.stack([start, raw[0]]), config, limits)
-    playback = make_phase("playback", np.arange(50) / 30, knots, config, limits, config["minimum_time_scale"])
+    if config.get("hand_control") == "slider":
+        # Give the slider command time to traverse the initial hand distance.
+        approach.scale = max(approach.scale, float(delta[np.r_[7:27, 34:54]].max()))
+    playback = make_phase("playback", np.arange(len(raw)) / 30, knots, config, limits, config["minimum_time_scale"])
     total = approach.duration + playback.duration + 2 * config["settle_seconds"]
     if total > config["max_total_seconds"]:
         raise ValueError(f"Required plan duration {total:.3f}s exceeds experiment limit; do not truncate")
@@ -201,6 +213,8 @@ def build_plan(raw, start, config, limits, names):
     report = {
         "schema_version": 1,
         "mode": "offline_weight_motion_evaluation",
+        "hand_control": config.get("hand_control", "strict"),
+        "hand_command_note": "In slider mode, hand spline samples are unused references; raw model poses are targets and SDK-sent positions are recorded in hand_output. Arm spline timing is retained.",
         "hardware_output": False,
         "hardware_ready": False,
         "planning_checks_passed": True,

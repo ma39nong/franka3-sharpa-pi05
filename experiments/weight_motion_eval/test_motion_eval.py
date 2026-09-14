@@ -70,18 +70,18 @@ def test_more_time_reduces_derivatives_without_changing_path(inputs):
         np.testing.assert_allclose(slower.playback.sample(slower.playback.duration * 0.37, order), expected, atol=1e-7)
 
 
-def test_default_plan_slows_50_degree_hand_ramp_to_30_without_truncating(inputs):
+def test_default_plan_slows_50_degree_hand_ramp_to_45_without_truncating(inputs):
     raw, start, config, limits, names = inputs
     raw = np.zeros_like(raw)
     raw[:, 7:27] = np.deg2rad(50) * np.arange(50)[:, None] / 30
     raw[:, 34:54] = -raw[:, 7:27]
     plan = build_plan(raw, start, config, limits, names)
-    assert config["approach"]["hand"]["velocity"] == pytest.approx(np.deg2rad(15))
-    assert config["playback"]["hand"]["velocity"] == pytest.approx(np.deg2rad(30))
+    assert config["approach"]["hand"]["velocity"] == pytest.approx(np.deg2rad(45))
+    assert config["playback"]["hand"]["velocity"] == pytest.approx(np.deg2rad(45))
     assert plan.playback.duration > 49 / 30
     for group in ("left_hand", "right_hand"):
         assert plan.report["groups"][group]["raw_velocity_max_rad_s"] == pytest.approx(np.deg2rad(50))
-        assert plan.report["groups"][group]["playback"]["velocity_max"] <= np.deg2rad(30)
+        assert plan.report["groups"][group]["playback"]["velocity_max"] <= np.deg2rad(45)
     np.testing.assert_allclose(plan.playback.sample(plan.playback.duration), raw[-1], atol=1e-10)
 
 
@@ -93,7 +93,7 @@ def test_invalid_or_out_of_range_raw_predictions_are_rejected(inputs, bad):
 
 
 def test_large_raw_acquisition_is_rejected_before_smoothing(inputs):
-    inputs[0][0, 0] = 0.201
+    inputs[0][0, 0] = 0.300001
     with pytest.raises(ValueError, match="raw initial delta"):
         build_plan(*inputs)
 
@@ -229,3 +229,10 @@ def test_capture_requests_exactly_once_and_preserves_stale_failure(tmp_path, mon
     report = json.loads((output / "capture-report.json").read_text())
     assert report["status"] == ("failed" if expired else "captured")
     assert report["hardware_output"] is False
+
+
+@pytest.mark.parametrize("delta", [0.200486, 0.242335, 0.3])
+def test_arm_acquisition_within_updated_limit(inputs, delta):
+    inputs[0][:, 0] = delta
+    plan = build_plan(*inputs)
+    assert plan.raw[0, 0] == delta

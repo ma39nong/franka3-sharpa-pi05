@@ -6,6 +6,7 @@ splitter must not be running alongside these nodes.
 
 import argparse
 import copy
+import json
 from pathlib import Path
 import sys
 import time
@@ -52,7 +53,40 @@ class ArmBoundary:
             if result is None or candidate.side_faults or len(result.positions) != 14:
                 raise ValueError("Dual-arm gate rejected all/part of command: " + str(candidate.side_faults))
             if not np.allclose(result.positions, message.positions, atol=1e-9, rtol=0):
-                raise ValueError("Gateway contact/slew protection changed the planned target")
+                details = []
+                target = np.asarray(message.positions)
+                output = np.asarray(result.positions)
+                for side_index, side in enumerate(("left", "right")):
+                    offset = side_index * 7
+                    previous = self.gate.last_output[side]
+                    last_time = self.gate.last_time[side]
+                    dt = (min(0.1, max(candidate.nominal_dt, now_mono - last_time))
+                          if last_time is not None else candidate.nominal_dt)
+                    previous = (np.asarray(previous) if previous is not None
+                                else np.asarray(measured)[offset:offset + 7])
+                    for joint in range(7):
+                        index = offset + joint
+                        if abs(output[index] - target[index]) <= 1e-9:
+                            continue
+                        contact = joint + 1 in candidate.pressing_joints[side]
+                        delta = float(target[index] - previous[joint])
+                        max_step = candidate.max_joint_speed * dt
+                        slew = abs(delta) > max_step + 1e-9
+                        causes = (["接触力矩保护"] if contact else []) + (["变化率限制"] if slew else [])
+                        details.append({
+                            "arm": "左臂" if side == "left" else "右臂",
+                            "joint": joint + 1, "joint_name": message.joint_names[index],
+                            "causes": causes or ["其他目标修改"],
+                            "planned_rad": float(target[index]), "output_rad": float(output[index]),
+                            "previous_rad": float(previous[joint]),
+                            "measured_rad": float(np.asarray(measured)[index]),
+                            "requested_step_rad": delta, "max_step_rad": float(max_step),
+                            "dt_ms": float(dt * 1000),
+                            "external_torque_nm": float(torques[side][joint]),
+                            "contact_threshold_nm": float(candidate.contact_torque_thresholds[joint]),
+                        })
+                raise ValueError("Gateway contact/slew protection changed the planned target; 网关拒绝详情="
+                                 + json.dumps({"sequence": sequence, "joints": details}, ensure_ascii=False))
             self.gate, self.session, self.sequence = candidate, run, sequence
             return result
         except ValueError as error:
@@ -90,9 +124,13 @@ def main():
     if params["max_joint_speed"] != 0.7 or params["max_initial_delta"] != 0.05:
         raise ValueError("Reference gateway limits changed")
 
+    # Pi05 supervised deployment contact thresholds, Nm for each arm.
+    params["contact_torque_thresholds"] = [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
+
     class Gateway(Node):
         def __init__(self):
             super().__init__("pi05_oneshot_gateway")
+            self.get_logger().info("Pi05 contact thresholds Nm: " + str(params["contact_torque_thresholds"]))
             self.boundary = ArmBoundary(
                 CommandSafetyGate(
                     **{

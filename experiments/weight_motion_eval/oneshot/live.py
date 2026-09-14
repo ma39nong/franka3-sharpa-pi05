@@ -41,7 +41,7 @@ class LiveConsumer:
             return
         self.requested = True
         self.ws.send(packet)
-        result = self.ws.recv(timeout=0.2 - max(ages))
+        result = self.ws.recv(timeout=1.0 - max(ages))
         received = time.monotonic()
         if abs((time.time() - wall) - (received - sent)) > 0.05:
             raise ValueError("Host clock changed during inference")
@@ -98,6 +98,7 @@ class LiveConsumer:
                 "phase": frame.phase,
                 "command": frame.positions.tolist(),
                 "hand_output": submission.get("hands"),
+                "submission_timings_ms": submission.get("timings_ms"),
                 "measured": feedback.positions.tolist(),
                 "measured_velocity": feedback.velocities.tolist(),
             }

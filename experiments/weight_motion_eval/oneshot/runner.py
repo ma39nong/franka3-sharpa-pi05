@@ -4,19 +4,24 @@ import time
 
 import numpy as np
 
+from .core import HAND
 from .core import Admission
 from .core import ConsumerGuard
 from .core import Feedback
 from .core import OneShot
+from .limits import SLIDER_SPEED_RAD_S
 
 
 class SimulatedDevices:
     hardware_output = False
 
-    def __init__(self, start, lower, upper, *, inject=None):
-        self.guard = ConsumerGuard(lower, upper)
+    def __init__(self, start, lower, upper, *, inject=None, hand_control="strict"):
+        self.hand_control = hand_control
+        self.guard = ConsumerGuard(lower, upper, hand_control=hand_control)
         self.positions = np.array(start, copy=True)
         self.target = self.positions.copy()
+        self.requested_target = self.target.copy()
+        self.last_send = None
         self.velocity = np.zeros(54)
         self.now = 0.0
         self.inject = inject
@@ -31,7 +36,15 @@ class SimulatedDevices:
             self.velocity = (self.positions - before) / dt
             self.now = now
         stamp = now - 0.16 if self.inject == "feedback_loss" and now > 0.5 else now
-        return Feedback(self.positions, self.velocity, (stamp,) * 4, (stamp,) * 4)
+        reached = np.max(np.abs(self.target[HAND] - self.requested_target[HAND])) <= 1e-6
+        return Feedback(
+            self.positions,
+            self.velocity,
+            (stamp,) * 4,
+            (stamp,) * 4,
+            hand_control=self.hand_control,
+            hand_targets_reached=reached,
+        )
 
     def prepare(self, player, feedback, now):
         self.guard.arm(player.run_id, player.digest, feedback, now)
@@ -40,7 +53,15 @@ class SimulatedDevices:
         if self.inject == "consumer_delay" and now > 0.5:
             now = frame.valid_until + 0.001
         self.guard.validate(frame, self.feedback(now), now)
-        self.target = frame.positions.copy()
+        target = frame.positions.copy()
+        self.requested_target = target.copy()
+        if self.hand_control == "slider":
+            dt = 0.01 if self.last_send is None else now - self.last_send
+            target[HAND] = self.target[HAND] + np.clip(
+                target[HAND] - self.target[HAND], -SLIDER_SPEED_RAD_S * dt, SLIDER_SPEED_RAD_S * dt
+            )
+        self.target = target
+        self.last_send = now
         self.submitted.append(frame)
         self.guard.commit(frame)
 
@@ -56,7 +77,13 @@ def simulate(plan, limits, *, inject=None):
     # Virtual admission only. No loaded record is represented as fresh hardware feedback.
     admission = Admission(0.0, 0.05, 0.15, "virtual-request", "simulated", 0)
     player = OneShot(plan, admission, 0.2)
-    device = SimulatedDevices(plan.start, limits["lower"], limits["upper"], inject=inject)
+    device = SimulatedDevices(
+        plan.start,
+        limits["lower"],
+        limits["upper"],
+        inject=inject,
+        hand_control=plan.config.get("hand_control", "strict"),
+    )
     now = 0.2
     feedback = device.feedback(now)
     device.prepare(player, feedback, now)
@@ -133,6 +160,7 @@ def run_live(player, devices, *, stop_requested, emit, clock=time.monotonic, sle
         feedback = devices.feedback(clock())
         player.start(feedback, clock())
         due = clock()
+        submitted_feedback = None
         while player.state not in {"complete", "fault", "stopping"}:
             if stop_requested():
                 player.request_stop(clock())
@@ -143,13 +171,22 @@ def run_live(player, devices, *, stop_requested, emit, clock=time.monotonic, sle
             now = clock()
             if now - due > 0.01:
                 raise RuntimeError("Output deadline missed; no burst catch-up")
-            feedback = devices.feedback(now)
+            feedback_started = now
+            feedback = submitted_feedback if submitted_feedback is not None else devices.feedback(now)
+            feedback.check(clock(), feedback.epoch)
             now = clock()
             if now - due > 0.01:
-                raise RuntimeError("Feedback acquisition missed the output deadline")
+                raise RuntimeError(
+                    f"Feedback acquisition missed the output deadline: "
+                    f"wake_lateness_ms={(feedback_started - due) * 1000:.3f}, "
+                    f"feedback_ms={(now - feedback_started) * 1000:.3f}, "
+                    f"total_ms={(now - due) * 1000:.3f}, phase={player.state}"
+                )
             frame = player.tick(feedback, now)
             if frame is not None:
-                devices.submit(frame, clock())
+                submitted_feedback = devices.submit(frame, clock())
+                for warning in getattr(devices, "last_submission", {}).get("warnings", []):
+                    print("【手部警告】" + warning, flush=True)
                 emit(frame, feedback)
             due += 0.01
             if player.state not in {"complete", "fault", "stopping"} and clock() > due:

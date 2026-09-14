@@ -65,8 +65,27 @@ class RemoteDevices:
         self.counter += 1
         self.sock.settimeout(timeout)
         request = {"id": self.counter, "operation": operation, **values}
-        self.sock.sendall(encode(request))
-        result = receive(self.sock)
+        began = time.monotonic()
+        try:
+            self.sock.sendall(encode(request))
+            remaining = timeout - (time.monotonic() - began)
+            if remaining <= 0:
+                raise TimeoutError("IPC send exhausted request deadline")
+            self.sock.settimeout(remaining)
+            result = receive(self.sock)
+        except (TimeoutError, OSError, EOFError) as error:
+            # Reply identity is uncertain after transport failure. Disconnect
+            # triggers owner stop; never put another RPC behind a late reply.
+            self.close()
+            if isinstance(error, TimeoutError):
+                elapsed = (time.monotonic() - began) * 1000
+                sequence = values.get("frame", {}).get("sequence", "n/a")
+                raise TimeoutError(
+                    f"设备通信超时: operation={operation}, sequence={sequence}, "
+                    f"elapsed_ms={elapsed:.3f}, budget_ms={timeout * 1000:.3f}; {error}"
+                ) from error
+            raise
+
         if result.get("id") != self.counter:
             raise RuntimeError("IPC reply sequence mismatch; do not retry motion")
         if result.get("ok") is not True:
@@ -84,7 +103,7 @@ class RemoteDevices:
             raise RuntimeError("Read-only client cannot acquire devices")
         self.call(
             "prepare",
-            timeout=6,
+            timeout=20,
             run_id=player.run_id,
             plan_hash=player.digest,
             start=player.plan.start.tolist(),
@@ -99,6 +118,7 @@ class RemoteDevices:
         if result.get("sequence") != frame.sequence:
             raise RuntimeError("Wrong submitted-frame acknowledgement")
         self.last_submission = result
+        return Feedback(**result["feedback"]) if "feedback" in result else None
 
     def finish(self):
         result = self.call("finish", timeout=3)

@@ -313,7 +313,7 @@ def main(argv=None, *, consumer=None, single_shot=False):
                     obs, metadata = store.snapshot()
                     if measurement_start is None:
                         measurement_start = now
-                        print(f"First synchronized real observation after {now - started:.1f}s", flush=True)
+                        print(f"【阶段】实时观测就绪，用时 {now - started:.1f} 秒", flush=True)
                     if metadata["target_stamp"] != last_target:
                         accepted += 1
                         last_target = metadata["target_stamp"]
@@ -329,7 +329,7 @@ def main(argv=None, *, consumer=None, single_shot=False):
                 except ObservationUnavailableError as error:
                     rejected[str(error)] += 1
                 if now >= next_update:
-                    print(f"Accepted {accepted} distinct observations; rejected polls: {dict(rejected)}", flush=True)
+                    print(f"【观测】已接收 {accepted} 组不同时间的观测；未通过检查：{dict(rejected)}", flush=True)
                     next_update = now + 15
                 time.sleep(args.poll_interval)
             if first is not None:
@@ -369,7 +369,7 @@ def main(argv=None, *, consumer=None, single_shot=False):
         report["invalid_source_samples"] = store.invalid
         report["last_invalid_reason"] = last_invalid
         (output / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-        print(f"Report: {output / 'report.json'}", flush=True)
+        print(f"报告：{output / 'report.json'}", flush=True)
     if report["status"] != "captured":
         raise RuntimeError(report["status"])
 

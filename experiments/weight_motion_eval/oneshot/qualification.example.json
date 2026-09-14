@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "controller_sha256": null,
-  "hand_velocity_rad_s": 0.5235987755982988,
+  "hand_velocity_rad_s": 0.7853981633974483,
   "hand_raw_initial_delta_rad": null,
   "hands": {"left": null, "right": null},
   "tests": {

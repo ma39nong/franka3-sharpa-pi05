@@ -14,7 +14,11 @@ import uuid
 
 import numpy as np
 
+from .limits import ARM_TRACKING_TOLERANCE_RAD
+from .limits import HAND_ENDPOINT_TOLERANCE_RAD
 from .limits import HAND_SPEED_RAD_S
+from .limits import SLIDER_POSITION_TOLERANCE_RAD
+from .limits import check_hand_control
 
 ARM = np.r_[0:7, 27:34]
 HAND = np.r_[7:27, 34:54]
@@ -45,15 +49,40 @@ class Feedback:
     receipt_times: tuple[float, ...]
     epoch: int = 0
     healthy: bool = True
+    hand_control: str = "strict"
+    hand_targets_reached: bool = True
+    hand_soft_limits: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, "positions", vector(self.positions))
         object.__setattr__(self, "velocities", vector(self.velocities))
+        check_hand_control(self.hand_control)
+        limits = tuple(tuple(item) for item in self.hand_soft_limits)
+        indices = set()
+        for item in limits:
+            if len(item) != 3:
+                raise ValueError("Invalid hand soft limit")
+            index, direction, bound = item
+            if type(index) is not int or index not in HAND or index in indices or type(direction) is not int or direction not in (-1, 1) or not math.isfinite(bound):
+                raise ValueError("Invalid hand soft limit")
+            indices.add(index)
+        if limits and self.hand_control != "slider":
+            raise ValueError("Stall soft limits require slider mode")
+        object.__setattr__(self, "hand_soft_limits", limits)
         if len(self.source_times) != 4 or len(self.receipt_times) != 4:
             raise ValueError("Need timestamps for all four device groups")
         object.__setattr__(self, "source_times", tuple(self.source_times))
         object.__setattr__(self, "receipt_times", tuple(self.receipt_times))
         finite(*self.source_times, *self.receipt_times)
+
+    def effective_target(self, target):
+        if not self.hand_soft_limits:
+            return target
+        result = np.asarray(target, dtype=float).copy()
+        for index, direction, bound in self.hand_soft_limits:
+            if direction * (result[index] - bound) > 0:
+                result[index] = bound
+        return result
 
     def check(self, now, epoch):
         finite(now)
@@ -61,7 +90,8 @@ class Feedback:
             raise ValueError("Feedback clock epoch changed or device unhealthy")
         if any(not 0 <= now - t <= 0.15 for t in (*self.source_times, *self.receipt_times)):
             raise ValueError("Missing, future or stale device feedback")
-        exceeded = np.flatnonzero(np.abs(self.velocities) > SPEED + 1e-9)
+        indices = ARM if self.hand_control == "slider" else np.arange(54)
+        exceeded = indices[np.abs(self.velocities[indices]) > SPEED[indices] + 1e-9]
         if exceeded.size:
             details = []
             for index in exceeded:
@@ -98,8 +128,8 @@ class Admission:
             raise ValueError("Missing inference provenance")
         if not 0 <= self.sent_time - self.observation_time <= 0.07:
             raise ValueError("Inference observation exceeded 70 ms send budget")
-        if not self.sent_time <= self.received_time <= self.observation_time + 0.2:
-            raise ValueError("Inference response exceeded original 200 ms admission deadline")
+        if not self.sent_time <= self.received_time <= self.observation_time + 1.0:
+            raise ValueError("Inference response exceeded original 1 s admission deadline")
 
 
 @dataclass(frozen=True)
@@ -138,6 +168,21 @@ def plan_digest(plan):
     return h.hexdigest()
 
 
+def check_tracking(target, feedback, indices, label):
+    errors = np.abs(target[indices] - feedback.positions[indices])
+    limits = np.where(np.isin(indices, ARM), ARM_TRACKING_TOLERANCE_RAD, 0.05)
+    bad = np.flatnonzero(errors > limits)
+    if bad.size:
+        j = bad[np.argmax(errors[bad])]
+        index = int(indices[j])
+        group, offset = next((name, start) for name, start, end in (
+            ("left_arm", 0, 7), ("left_hand", 7, 27),
+            ("right_arm", 27, 34), ("right_hand", 34, 54)) if start <= index < end)
+        raise ValueError(f"{label} error exceeds {limits[j]:.2f} rad: {group}[{index-offset}], "
+                         f"target={target[index]:.6f}, measured={feedback.positions[index]:.6f}, "
+                         f"error={errors[j]:.6f} rad")
+
+
 class ConsumerGuard:
     """Must run at the final send boundary, not just when a frame is queued.
 
@@ -145,7 +190,9 @@ class ConsumerGuard:
     A guard may arm once and may not be reused after stop/failure.
     """
 
-    def __init__(self, lower, upper):
+    def __init__(self, lower, upper, *, hand_control="strict"):
+        self.hand_control = check_hand_control(hand_control)
+        self.checked = ARM if hand_control == "slider" else np.arange(54)
         self.lower, self.upper = vector(lower), vector(upper)
         if np.any(self.lower >= self.upper):
             raise ValueError("Invalid position bounds")
@@ -156,7 +203,9 @@ class ConsumerGuard:
         if self.state != "new":
             raise ValueError("Output consumer is single-use")
         feedback.check(now, feedback.epoch)
-        if not run_id or not digest or np.any(np.abs(feedback.velocities) > 0.02):
+        if feedback.hand_control != self.hand_control:
+            raise ValueError("Hand control mode mismatch")
+        if not run_id or not digest or np.any(np.abs(feedback.velocities[self.checked]) > 0.02):
             raise ValueError("Acquisition requires identity and stationary feedback")
         self.run_id, self.digest, self.epoch = run_id, digest, feedback.epoch
         self.initial = feedback.positions.copy()
@@ -166,18 +215,22 @@ class ConsumerGuard:
         if self.state != "armed":
             raise ValueError("Output consumer is not armed")
         feedback.check(now, self.epoch)
+        if feedback.hand_control != self.hand_control:
+            raise ValueError("Hand control mode changed")
         if (frame.run_id, frame.plan_hash) != (self.run_id, self.digest):
             raise ValueError("Foreign or superseded frame")
         if not frame.created <= now < frame.valid_until:
             raise ValueError("Expired or future command at final consumer")
         if np.any(frame.positions < self.lower) or np.any(frame.positions > self.upper):
             raise ValueError("Command position exceeds joint limits")
-        if np.any(np.abs(frame.velocities) > SPEED + 1e-9):
+        if np.any(np.abs(frame.velocities[self.checked]) > SPEED[self.checked] + 1e-9):
             raise ValueError("Command derivative exceeds joint speed ceiling")
-        if np.max(np.abs(frame.positions - feedback.positions)) > 0.05:
-            raise ValueError("Tracking error exceeds 0.05 rad")
+        check_tracking(frame.positions, feedback, self.checked, "Tracking")
         if self.last is None:
-            if frame.sequence != 0 or np.max(np.abs(frame.positions - self.initial)) > 0.005:
+            if (
+                frame.sequence != 0
+                or np.max(np.abs(frame.positions[self.checked] - self.initial[self.checked])) > 0.005
+            ):
                 raise ValueError("First output must be the checked starting pose")
         else:
             if frame.sequence != self.last.sequence + 1:
@@ -185,8 +238,11 @@ class ConsumerGuard:
             dt = frame.created - self.last.created
             if not 0 < dt <= 0.030000001:
                 raise ValueError("Consumer command stream stalled; no catch-up")
-            if np.any(np.abs(frame.positions - self.last.positions) > SPEED * dt + 1e-8):
-                raise ValueError("Command slew exceeds arm 0.7 rad/s or hand 30 deg/s")
+            if np.any(
+                np.abs(frame.positions[self.checked] - self.last.positions[self.checked])
+                > SPEED[self.checked] * dt + 1e-8
+            ):
+                raise ValueError("Command slew exceeds arm 0.7 rad/s or hand 45 deg/s")
 
     def commit(self, frame):
         self.last = frame
@@ -206,15 +262,17 @@ class OneShot:
     transitions: list = field(default_factory=list)
 
     def __post_init__(self):
+        self.hand_control = check_hand_control(self.plan.config.get("hand_control", "strict"))
+        self.checked = ARM if self.hand_control == "slider" else np.arange(54)
         self.admission.check()
         finite(self.prepared_at)
         if self.prepared_at < self.admission.received_time:
             raise ValueError("Plan preparation predates inference")
-        if self.plan.raw.shape != (50, 54):
-            raise ValueError("This player executes one complete 50x54 prediction")
+        if self.plan.raw.shape != (self.plan.config.get("execution_steps", 50), 54):
+            raise ValueError("This player executes the configured prediction prefix")
         for phase in (self.plan.approach, self.plan.playback):
             speed = np.maximum(np.abs(phase.lower[1]), np.abs(phase.upper[1])) / phase.scale
-            if np.any(speed > SPEED + 1e-8):
+            if np.any(speed[self.checked] > SPEED[self.checked] + 1e-8):
                 raise ValueError("Planned motion exceeds agreed arm/hand speed ceiling")
         if self.plan.report["total_seconds"] > 60:
             raise ValueError("One-shot plan exceeds 60-second motion budget")
@@ -233,18 +291,20 @@ class OneShot:
             raise ValueError("A one-shot plan cannot restart or resume")
         self._check_plan()
         feedback.check(now, self.admission.epoch)
+        if feedback.hand_control != self.hand_control:
+            raise ValueError("Player and device hand control mismatch")
         if not self.prepared_at <= now <= self.prepared_at + 30:
             raise ValueError("Reviewed one-shot plan must start within 30 seconds of preparation")
-        if np.max(np.abs(feedback.positions - self.plan.start)) > 0.005:
+        if np.max(np.abs(feedback.positions[self.checked] - self.plan.start[self.checked])) > (0.03 if self.plan.config.get("continuation") else 0.005):
             raise ValueError("Start pose changed; rebuild from fresh feedback")
-        if np.max(np.abs(feedback.velocities)) > 0.02:
+        if np.max(np.abs(feedback.velocities[self.checked])) > 0.02:
             raise ValueError("Start requires stationary feedback")
 
     def start(self, feedback, now):
         self.check_start(feedback, now)
         self.started = now
         # The finite committed plan is distinct from a streaming policy.
-        # 200 ms still governed admission above, and is never re-stamped.
+        # 1 s still governed admission above, and is never re-stamped.
         self.deadline = now + self.plan.report["total_seconds"] + 10
         self.transition("approach", now, "single_plan_started")
 
@@ -261,6 +321,8 @@ class OneShot:
         if self.state != "stopping":
             raise ValueError("No stop is pending")
         feedback.check(now, self.admission.epoch)
+        if feedback.hand_control != self.hand_control:
+            raise ValueError("Player and device hand control mismatch")
         if np.max(np.abs(feedback.velocities)) > 0.02:
             self.settled_since = None
             return False
@@ -277,6 +339,8 @@ class OneShot:
         try:
             self._check_plan()
             feedback.check(now, self.admission.epoch)
+            if feedback.hand_control != self.hand_control:
+                raise ValueError("Player and device hand control mismatch")
             if now > self.deadline:
                 raise ValueError("One-shot execution exceeded finite lifetime")
             if self.last_tick is not None and not 0 < now - self.last_tick <= 0.030000001:
@@ -286,12 +350,31 @@ class OneShot:
                 phase = self.plan.approach if self.state == "approach" else self.plan.playback
                 elapsed = min(now - self.phase_started, phase.duration)
                 q, dq = phase.sample(elapsed), phase.sample(elapsed, 1)
+                if self.hand_control == "slider":
+                    index = 0 if self.state == "approach" else min(len(self.plan.raw) - 1, int(elapsed / phase.duration * (len(self.plan.raw) - 1)))
+                    q[HAND], dq[HAND] = self.plan.raw[index, HAND], 0.0
                 if elapsed >= phase.duration:
-                    self.transition("settle_start" if self.state == "approach" else "settle_end", now, "endpoint")
+                    self.transition(
+                        ("playback" if self.plan.config.get("continuation") else "settle_start")
+                        if self.state == "approach" else "settle_end", now, "endpoint"
+                    )
             else:
                 q = self.plan.raw[0] if self.state == "settle_start" else self.plan.raw[-1]
                 dq = np.zeros(54)
-                settled = np.max(np.abs(feedback.positions - q)) <= 0.01 and np.max(np.abs(feedback.velocities)) <= 0.02
+                settled = (
+                    np.max(np.abs(feedback.positions[ARM] - q[ARM])) <= 0.03
+                    and np.max(np.abs(feedback.velocities[self.checked])) <= 0.02
+                )
+                hand_tolerance = (HAND_ENDPOINT_TOLERANCE_RAD if self.state == "settle_end"
+                                  else SLIDER_POSITION_TOLERANCE_RAD if self.hand_control == "slider" else 0.01)
+                if self.hand_control == "strict":
+                    settled = settled and np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(q)[HAND])) <= hand_tolerance
+                if self.hand_control == "slider":
+                    settled = (
+                        settled
+                        and feedback.hand_targets_reached
+                        and np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(q)[HAND])) <= hand_tolerance
+                    )
                 if settled:
                     if self.settled_since is None:
                         self.settled_since = now
@@ -304,8 +387,7 @@ class OneShot:
                     self.settled_since = None
                 if now - self.phase_started > 5:
                     raise ValueError("Measured endpoint settling timed out")
-            if np.max(np.abs(q - feedback.positions)) > 0.05:
-                raise ValueError("Measured tracking error exceeds 0.05 rad")
+            check_tracking(q, feedback, self.checked, "Measured tracking")
             frame = Frame(
                 self.run_id,
                 self.digest,

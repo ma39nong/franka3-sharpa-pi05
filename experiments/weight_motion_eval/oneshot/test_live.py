@@ -30,9 +30,9 @@ def test_live_infers_once_and_rejects_stale_or_invalid_output(tmp_path, monkeypa
             sent.append(packet)
 
         def recv(self, timeout):
-            assert 0 < timeout <= 0.2
+            assert 0 < timeout <= 1.0
             if case == "stale_reply":
-                time.sleep(0.21)
+                time.sleep(1.01)
             shape = (49, 54) if case == "invalid_actions" else (50, 54)
             return msgpack_numpy.packb({"actions": np.full(shape, 0.01)})
 
@@ -57,7 +57,7 @@ def test_live_infers_once_and_rejects_stale_or_invalid_output(tmp_path, monkeypa
     stamp = time.time() - (0.08 if case == "stale_input" else 0.005)
     metadata = {"samples": {"cam0": {"stamp": stamp}}}
     if case in {"stale_reply", "invalid_actions"}:
-        with pytest.raises(ValueError, match="200 ms|50, 54"):
+        with pytest.raises(ValueError, match="1 s|50, 54"):
             consumer(None, obs, metadata, tmp_path)
         assert not executed
     else:

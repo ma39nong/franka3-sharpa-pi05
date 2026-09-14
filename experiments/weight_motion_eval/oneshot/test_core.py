@@ -61,7 +61,7 @@ def test_one_shot_complete_and_faults_stop_output(case, inject, expected):
         assert data["command_time"][-1] < 0.55
 
 
-@pytest.mark.parametrize("args", [(0, 0.071, 0.15), (0, 0.05, 0.201), (0, 0.15, 0.1), (0, 0.05, float("nan"))])
+@pytest.mark.parametrize("args", [(0, 0.071, 0.15), (0, 0.05, 1.001), (0, 0.15, 0.1), (0, 0.05, float("nan"))])
 def test_admission_never_renews_old_observation(args):
     with pytest.raises(ValueError, match="budget|deadline|Non-finite"):
         Admission(*args, "r", "weights", 0).check()
@@ -123,7 +123,7 @@ def test_measured_hand_speed_guard_and_clock_epoch(case):
     p = player(case)
     p.start(fb(), 0.2)
     velocities = np.zeros(54)
-    velocities[7] = np.deg2rad(31)
+    velocities[7] = np.deg2rad(46)
     assert p.tick(fb(0.21, velocity=velocities), 0.21) is None
     assert p.state == "fault"
     p = player(case)
@@ -139,7 +139,7 @@ def test_speed_fault_identifies_all_offending_joints_and_signed_values():
         fb(velocity=velocities).check(0.2, 0)
     message = str(error.value)
     assert "left_arm[0] action_index=0 velocity=0.710000000 rad/s limit=0.700000000 rad/s" in message
-    assert "right_hand[19] action_index=53 velocity=-0.800000000 rad/s limit=0.523598776 rad/s" in message
+    assert "right_hand[19] action_index=53 velocity=-0.800000000 rad/s limit=0.785398163 rad/s" in message
 
 
 def test_stop_confirmation_requires_continuous_stationarity(case):
@@ -166,3 +166,39 @@ def test_45_degree_limit_is_in_planning_not_only_output_checks(case):
     unconstrained = build_plan(raw, np.zeros(54), config, limits, [str(i) for i in range(54)])
     with pytest.raises(ValueError, match="speed ceiling"):
         OneShot(unconstrained, Admission(0, 0.05, 0.15, "r", "w", 0), 0.2)
+
+
+@pytest.mark.parametrize("received", [0.201, 0.8, 1.0])
+def test_admission_accepts_response_within_one_second(received):
+    Admission(0, 0.05, received, "r", "weights", 0).check()
+
+
+@pytest.mark.parametrize("phase", ["settle_start", "settle_end"])
+@pytest.mark.parametrize("error, reached", [(0.01544, True), (0.02999, True), (0.03001, False)])
+def test_arm_endpoint_settling_uses_three_centiradians(case, phase, error, reached):
+    p = player(case)
+    p.start(fb(), 0.2)
+    p.transition(phase, 0.2, "test endpoint")
+    target = p.plan.raw[0 if phase == "settle_start" else -1].copy()
+    target[6] += error
+    for i in range(61):
+        now = 0.2 + i * 0.01
+        p.tick(fb(now, position=target), now)
+        if p.state != phase:
+            break
+    assert (p.state != phase) == reached
+    if reached:
+        assert p.state == ("playback" if phase == "settle_start" else "complete")
+
+
+@pytest.mark.parametrize("error, accepted", [(0.05, True), (0.07999, True), (0.08001, False)])
+def test_arm_tracking_tolerance_and_error_detail(error, accepted):
+    from .core import ARM, check_tracking
+
+    q = np.zeros(54)
+    q[6] = error
+    if accepted:
+        check_tracking(q, fb(), ARM, "Measured tracking")
+    else:
+        with pytest.raises(ValueError, match=r"0.08 rad: left_arm\[6\].*error=0.080010"):
+            check_tracking(q, fb(), ARM, "Measured tracking")

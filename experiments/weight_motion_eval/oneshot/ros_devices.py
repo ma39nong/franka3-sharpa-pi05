@@ -8,6 +8,10 @@ from .core import ARM
 from .transport import ros_header
 
 
+class ArmFeedbackUnavailable(ValueError):
+    """Missing/expired streams; only preparation may wait for recovery."""
+
+
 class RosArms:
     def __init__(self, *, publish_reset_idle=False, output_enabled=True):
         import rclpy
@@ -90,16 +94,44 @@ class RosArms:
         if abs(time.time() - now - self.offset) > 0.05:
             raise ValueError("ROS device clock offset changed")
         if set(self.samples) != {"left", "right"}:
-            raise ValueError("Waiting for both measured arms with velocities")
+            raise ArmFeedbackUnavailable("Waiting for both measured arms with velocities; " + self.feedback_ages(now))
         samples = [self.samples[side] for side in ("left", "right")]
         if any(not 0 <= now - stamp <= 0.15 for sample in samples for stamp in sample[2:]):
-            raise ValueError("Arm source or receipt feedback expired")
+            raise ArmFeedbackUnavailable("Arm source or receipt feedback expired; " + self.feedback_ages(now))
         return (
             np.concatenate([s[0] for s in samples]),
             np.concatenate([s[1] for s in samples]),
             tuple(s[2] for s in samples),
             tuple(s[3] for s in samples),
         )
+
+    def feedback_ages(self, now):
+        return "; ".join(
+            f"{side}: source_age={now - self.samples[side][2]:.6f}s, "
+            f"receipt_age={now - self.samples[side][3]:.6f}s"
+            if side in self.samples else f"{side}: missing"
+            for side in ("left", "right")
+        )
+
+    def refresh_feedback(self, *, cancelled=lambda: False, timeout=3.0):
+        """Require new receipts on BOTH arms after blocking setup; no restamping."""
+        began = time.monotonic()
+        deadline = began + timeout
+        while time.monotonic() < deadline:
+            if cancelled():
+                raise RuntimeError("Arm feedback refresh cancelled")
+            self.spin(0.005)
+            try:
+                feedback = self.feedback(time.monotonic())
+            except ArmFeedbackUnavailable:
+                pass
+            else:
+                if all(stamp >= began for stamp in feedback[3]):
+                    print("Fresh arm feedback after preparation: " + self.feedback_ages(time.monotonic()), flush=True)
+                    return feedback
+            time.sleep(0.002)
+        raise RuntimeError("Arm feedback refresh timed out after " + str(timeout) + "s; "
+                           + self.feedback_ages(time.monotonic()))
 
     def check_ownership(self):
         if self.output is None:
@@ -116,6 +148,8 @@ class RosArms:
     def publish_hands(self, hands):
         now = time.monotonic()
         publish_now = now - self.last_hand_publish >= 0.01
+        if not publish_now:
+            return
         for side, hand in hands.items():
             try:
                 q, dq, stamp = hand.poll(time.monotonic(), time.time())
@@ -137,6 +171,10 @@ class RosArms:
             self.last_hand_publish = now
 
     def submit(self, frame):
+        pending = self.begin_submit(frame)
+        self.confirm_submit(frame, pending)
+
+    def begin_submit(self, frame):
         if self.stopped or self.output is None:
             raise RuntimeError("Arm source cannot restart after stop")
         stamp, tag = ros_header(frame, time.monotonic(), time.time_ns())
@@ -150,6 +188,9 @@ class RosArms:
         if time.monotonic() >= frame.valid_until:
             raise ValueError("Arm frame expired before ROS publication")
         self.output.publish(msg)
+        return msg
+
+    def confirm_submit(self, frame, msg):
         key = (frame.run_id, frame.sequence)
         while time.monotonic() < frame.valid_until:
             self.spin(0.0003)

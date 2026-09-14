@@ -21,6 +21,7 @@ import yaml
 
 from .ipc import RemoteDevices
 from .limits import HAND_SPEED_RAD_S
+from .limits import SLIDER_SPEED_RAD_S
 from .policy_server import checkpoint_contract
 from .qualification import Qualification
 from .qualification import SupervisedTrial
@@ -47,6 +48,11 @@ def parse_args(argv=None):
     parser.add_argument("--uri", default="ws://127.0.0.1:8001")
     parser.add_argument("--start-cameras", action="store_true")
     parser.add_argument("--finish-policy", choices=("hold", "disable"), default="hold")
+    parser.add_argument("--hand-control", choices=("slider", "strict"), default="slider")
+    parser.add_argument("--continuous", action="store_true", help="Execute fresh prediction prefixes in one held session")
+    parser.add_argument("--rounds", type=int, default=50)
+    parser.add_argument("--replan-steps", type=int, default=20)
+    parser.add_argument("--minimum-time-scale", type=float, default=2.5)
     parser.add_argument("--qualification", type=Path)
     parser.add_argument(
         "--supervised-trial",
@@ -57,6 +63,12 @@ def parse_args(argv=None):
         "--output", type=Path, default=ROOT / "logs/weight_motion_eval" / ("deployment-" + uuid.uuid4().hex[:10])
     )
     args = parser.parse_args(argv)
+    if args.rounds < 1 or not 2 <= args.replan_steps <= 50:
+        parser.error("rounds must be positive; replan-steps must be between 2 and 50")
+    if not 1 <= args.minimum_time_scale <= 100:
+        parser.error("minimum-time-scale must be between 1 and 100")
+    if args.continuous and args.execute and not args.supervised_trial:
+        parser.error("Continuous execution currently requires --supervised-trial")
     if args.supervised_trial and (not args.execute or args.qualification is not None):
         parser.error("--supervised-trial requires --execute and cannot be combined with --qualification")
     for value in (args.left_arm_ip, args.right_arm_ip):
@@ -111,6 +123,8 @@ def write_runtime(args, output):
         "controller_sha256": manifest["built_library_sha256"],
         "checkpoint": model,
         "finish_policy": args.finish_policy,
+        "hand_control": args.hand_control,
+        "continuous": args.continuous,
     }
     (output / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
     return runtime, limits, names
@@ -323,17 +337,24 @@ def main(argv=None):
     qualification = None
     if args.execute:
         qualification = (
-            SupervisedTrial()
+            SupervisedTrial(hand_control=args.hand_control)
             if args.supervised_trial
-            else Qualification(args.qualification, controller_sha256=runtime["controller_sha256"])
+            else Qualification(
+                args.qualification, controller_sha256=runtime["controller_sha256"], hand_control=args.hand_control
+            )
         )
         (output / "execution-admission.json").write_text(
             json.dumps(
                 {
                     "execution_mode": "supervised_trial" if args.supervised_trial else "commissioned",
                     "historical_stop_evidence_waived": args.supervised_trial,
-                    "hand_velocity_rad_s": HAND_SPEED_RAD_S,
+                    "hand_control": args.hand_control,
+                    "hand_velocity_rad_s": SLIDER_SPEED_RAD_S if args.hand_control == "slider" else HAND_SPEED_RAD_S,
+                    "hand_measured_speed_stop": args.hand_control == "strict",
                     "single_prediction_steps": 50,
+                    "continuous": args.continuous,
+                    "rounds": args.rounds if args.continuous else 1,
+                    "execution_steps": args.replan_steps if args.continuous else 50,
                     "physical_stop_qualified": not args.supervised_trial,
                 },
                 indent=2,
@@ -363,6 +384,7 @@ def main(argv=None):
         stack.callback(children.close)
         commands = launch_commands(args, output, ipc)
         (output / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
+        print("【阶段】启动机械臂、手部设备及网关通信", flush=True)
         for label, command in commands.items():
             children.launch(label, command)
         deadline = time.monotonic() + 45
@@ -411,8 +433,16 @@ def main(argv=None):
             recorder = recorder_module.AsyncRecorder(output)
             try:
                 config = read_config(Path(__file__).parents[1] / "config.yaml")
+                config["hand_control"] = args.hand_control
+                config["minimum_time_scale"] = args.minimum_time_scale
                 config["hand_raw_initial_delta_rad"] = qualification.data["hand_raw_initial_delta_rad"]
-                consumer = LiveConsumer(devices, ws, model, config, limits, names, output, recorder)
+                if args.continuous:
+                    from .continuous import ContinuousConsumer
+                    consumer = ContinuousConsumer(devices, ws, model, config, limits, names, output, recorder,
+                                                  rounds=args.rounds, replan_steps=args.replan_steps)
+                    stack.callback(consumer.close)
+                else:
+                    consumer = LiveConsumer(devices, ws, model, config, limits, names, output, recorder)
                 observe = deployment_module("observe")
                 options = [
                     "--arm-source",
@@ -420,7 +450,7 @@ def main(argv=None):
                     "--hand-source",
                     "ros",
                     "--duration",
-                    "3",
+                    str(args.rounds * 90 + 60) if args.continuous else "3",
                     "--poll-interval",
                     "0.005",
                     "--output",
@@ -428,11 +458,12 @@ def main(argv=None):
                 ]
                 if args.start_cameras:
                     options += ["--start-cameras", "--camera-profile", "rgb"]
+                print("【阶段】启动实时观测" + ("，等待相机稳定 35 秒" if args.start_cameras else ""), flush=True)
                 observe.main(options, consumer=consumer, single_shot=True)
                 if consumer.completed != 1:
                     raise RuntimeError("No fresh inference was admitted")
                 print(
-                    "One 50-step trajectory completed. "
+                    (f"{args.rounds} prediction rounds completed. " if args.continuous else "One 50-step trajectory completed. ")
                     + (
                         "Hands holding; Ctrl-C stops and releases after feedback confirmation."
                         if args.finish_policy == "hold"
@@ -442,17 +473,21 @@ def main(argv=None):
                 )
                 while args.finish_policy == "hold":
                     children.check()
+                    if args.continuous:
+                        consumer.poll()
                     if devices.hold_error:
                         raise RuntimeError("Hold monitoring failed: " + devices.hold_error)
                     time.sleep(0.1)
             finally:
                 # Stop motion/hold before potentially blocking on recorder drain.
                 try:
+                    if args.continuous:
+                        consumer.close()
                     devices.stop()
                 finally:
                     recorder.close()
         except KeyboardInterrupt:
-            print("Stop requested; waiting for device process cleanup.", flush=True)
+            print("【阶段】收到停止请求，等待设备停止及清理", flush=True)
         finally:
             if args.execute:
                 try:

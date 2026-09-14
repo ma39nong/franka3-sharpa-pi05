@@ -11,6 +11,8 @@ import math
 from pathlib import Path
 
 from .limits import HAND_SPEED_RAD_S
+from .limits import SLIDER_SPEED_RAD_S
+from .limits import check_hand_control
 
 
 def digest(path):
@@ -18,14 +20,18 @@ def digest(path):
 
 
 class Qualification:
-    def __init__(self, path, *, controller_sha256):
+    def __init__(self, path, *, controller_sha256, hand_control="strict"):
+        check_hand_control(hand_control)
         if path is None:
             raise ValueError("Hardware execution requires measured commissioning evidence (--qualification)")
         path = Path(path).resolve()
         self.data = json.loads(path.read_text())
         if self.data.get("schema_version") != 1 or self.data.get("controller_sha256") != controller_sha256:
             raise ValueError("Commissioning record/controller build mismatch")
-        if self.data.get("hand_velocity_rad_s") != HAND_SPEED_RAD_S:
+        if self.data.get("hand_control", "strict") != hand_control:
+            raise ValueError("Commissioning hand control mode mismatch")
+        expected_speed = SLIDER_SPEED_RAD_S if hand_control == "slider" else HAND_SPEED_RAD_S
+        if self.data.get("hand_velocity_rad_s") != expected_speed:
             raise ValueError("Commissioning record must use the agreed hand speed")
         acquisition = self.data.get("hand_raw_initial_delta_rad")
         if (
@@ -69,12 +75,15 @@ class SupervisedTrial:
     All motion, feedback, ownership and deadline guards remain in force.
     """
 
-    def __init__(self):
+    def __init__(self, hand_control="strict"):
+        check_hand_control(hand_control)
         self.data = {
             "execution_mode": "supervised_trial",
             "historical_commissioning_required": False,
             "physical_stop_qualified": False,
-            "hand_velocity_rad_s": HAND_SPEED_RAD_S,
+            "hand_control": hand_control,
+            "hand_velocity_rad_s": SLIDER_SPEED_RAD_S if hand_control == "slider" else HAND_SPEED_RAD_S,
+            "hand_measured_speed_stop": hand_control == "strict",
             "hand_raw_initial_delta_rad": None,
         }
         self.hands = None

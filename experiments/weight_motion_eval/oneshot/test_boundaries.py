@@ -263,7 +263,7 @@ def test_hand_final_send_checks_actual_and_commanded_motion(monkeypatch, fault):
     if fault == "joint_disabled":
         diagnostics[NIDS[0]].status_word.ext_state = 1
     owner.diagnostics = (diagnostics, 10.01)
-    velocity = np.full(20, np.deg2rad(31) if fault == "actual_speed" else 0.0)
+    velocity = np.full(20, np.deg2rad(46) if fault == "actual_speed" else 0.0)
     owner.poll = lambda *args: (np.zeros(20), velocity, 10.01)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.04 if fault == "expires_during_poll" else 10.01)
     target = np.full(20, 0.005)
@@ -286,7 +286,7 @@ def test_hand_final_send_checks_actual_and_commanded_motion(monkeypatch, fault):
         assert all(command == (0.005, 0.0, 0.0) for command in sent[0])
 
 
-def test_hand_limits_50_degree_targets_to_30_and_eventually_reaches_endpoint(monkeypatch):
+def test_hand_limits_50_degree_targets_to_45_and_eventually_reaches_endpoint(monkeypatch):
     from experiments.weight_motion_eval.oneshot import hand as module
 
     now = [10.0]
@@ -321,8 +321,8 @@ def test_hand_limits_50_degree_targets_to_30_and_eventually_reaches_endpoint(mon
     timestamps = np.array([10.0] + [t for t, commands in sent])
     positions = np.array([np.zeros(20)] + [[q for q, dq, effort in commands] for t, commands in sent])
     speed = np.abs(np.diff(positions, axis=0)) / np.diff(timestamps)[:, None]
-    assert np.all(speed <= np.deg2rad(30) + 1e-10)
-    assert speed.max() == pytest.approx(np.deg2rad(30))
+    assert np.all(speed <= np.deg2rad(45) + 1e-10)
+    assert speed.max() == pytest.approx(np.deg2rad(45))
     assert reports[0]["rate_limited_indices"] == list(range(20))
     assert reports[-1]["rate_limited_indices"] == []
     np.testing.assert_allclose(positions[-1], signs * np.deg2rad(5), atol=1e-12)
@@ -356,3 +356,29 @@ def test_hand_failed_clamped_send_does_not_advance_limiter(monkeypatch):
         )
     assert owner.last[1] == 10.0
     np.testing.assert_array_equal(owner.last[0], np.zeros(20))
+
+
+@pytest.mark.parametrize("contact", [False, True])
+def test_gateway_rejection_reports_contact_or_slew_details(contact):
+    import json
+    gate, names = reference_gate()
+    boundary = ArmBoundary(gate)
+    measured = np.tile([0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0], 2)
+    torques = {"left": np.zeros(7), "right": np.zeros(7)}
+    boundary.accept(message(measured, names), measured, torques, 1, 5_001_000_000)
+    target = measured.copy()
+    target[7] += 0.001 if contact else 0.02
+    if contact:
+        torques["right"][0] = 7
+    with pytest.raises(ValueError, match="网关拒绝详情") as caught:
+        boundary.accept(message(target, names, sequence=1), measured, torques, 1.01, 5_002_000_000)
+    details = json.loads(str(caught.value).split("网关拒绝详情=", 1)[1])
+    assert details["sequence"] == 1
+    joint = details["joints"][0]
+    assert joint["arm"] == "右臂"
+    assert joint["joint"] == 1
+    assert joint["causes"] == (["接触力矩保护"] if contact else ["变化率限制"])
+    assert joint["external_torque_nm"] == (7 if contact else 0)
+    assert joint["contact_threshold_nm"] == 6
+    assert joint["output_rad"] != joint["planned_rad"]
+    assert np.array_equal(boundary.gate.last_output["right"], measured[7:])
