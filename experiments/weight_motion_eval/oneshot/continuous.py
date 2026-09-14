@@ -232,6 +232,7 @@ class ContinuousConsumer(LiveConsumer):
     def __init__(self, *args, rounds=50, replan_steps=20, **kwargs):
         super().__init__(*args, **kwargs)
         self.config = dict(self.config, execution_steps=replan_steps)
+        self.config["project_hand_predictions"] = self.config.get("hand_control") == "slider"
         self.rounds, self.rounds_completed = rounds, 0
         self.process = None
         self.between = None
@@ -322,13 +323,27 @@ class ContinuousConsumer(LiveConsumer):
             start = np.asarray(self.between["target"])
         config = dict(self.config, continuation=self.process is not None, inference_request_id=admission.request_id)
         print("【阶段】推理返回，规划慢速动作段", flush=True)
-        plan = build_plan(actions, start, config, self.limits, self.names)
-        player = OneShot(plan, admission, time.monotonic())
         round_dir = self.output / f"round-{self.rounds_completed + 1:04d}"
         round_dir.mkdir()
-        save_plan(plan, round_dir / "plan")
-        np.savez_compressed(round_dir / "inference.npz", actions=actions, state=obs["observation/state"])
+        # Preserve the full prediction even when planning rejects its prefix.
+        np.savez_compressed(round_dir / "inference.npz", actions=actions,
+                            state=obs["observation/state"], recorded_start=start)
         (round_dir / "admission.json").write_text(json.dumps(asdict(admission), indent=2) + "\n")
+        try:
+            plan = build_plan(actions, start, config, self.limits, self.names)
+            player = OneShot(plan, admission, time.monotonic())
+        except ValueError as error:
+            (round_dir / "planning-error.json").write_text(
+                json.dumps({"error": str(error), "execution_steps": config.get("execution_steps", 50)}, indent=2) + "\n"
+            )
+            raise
+        save_plan(plan, round_dir / "plan")
+        projection = plan.report["hand_prediction_projection"]
+        if projection["adjustment_count"]:
+            print(f"【阶段】【手部预测警告】{projection['adjustment_count']} 个预测角度超出关节范围，"
+                  f"已限制到合法边界；最大调整 {projection['max_adjustment_rad']:.4f} rad，继续执行", flush=True)
+            self.recorder.event({"event": "hand_prediction_projected",
+                                 "round": self.rounds_completed + 1, **projection})
         self.recorder.event(
             {
                 "event": "round_admitted",

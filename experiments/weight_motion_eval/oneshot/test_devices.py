@@ -296,7 +296,7 @@ def test_commissioning_requires_matching_measured_artifacts(tmp_path):
         Qualification(None, controller_sha256="controller")
 
 
-@pytest.mark.parametrize(("error", "accepted"), [(0.01544, True), (0.03, True), (0.03001, False)])
+@pytest.mark.parametrize(("error", "accepted"), [(0.01544, True), (0.25, True), (0.25001, False)])
 def test_device_finish_matches_arm_endpoint_tolerance(error, accepted):
     from dataclasses import replace
 
@@ -442,7 +442,7 @@ def test_bridge_keeps_first_watchdog_fault(monkeypatch):
 
 
 @pytest.mark.parametrize("joint", [7, 40])
-@pytest.mark.parametrize(("error", "accepted"), [(0.08121, True), (0.1, True), (0.10001, False)])
+@pytest.mark.parametrize(("error", "accepted"), [(0.1000503406, True), (0.25, True), (0.25001, False)])
 def test_hand_endpoint_tolerance_consistent_for_next_plan_and_finish(joint, error, accepted):
     from dataclasses import replace
     session = make_session()

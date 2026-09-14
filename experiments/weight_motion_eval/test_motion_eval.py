@@ -92,6 +92,43 @@ def test_invalid_or_out_of_range_raw_predictions_are_rejected(inputs, bad):
         build_plan(*inputs)
 
 
+def test_slider_projection_bounds_both_hands_without_changing_input_or_arms(inputs):
+    raw, start, config, limits, names = inputs
+    config.update(hand_control="slider", project_hand_predictions=True, execution_steps=30)
+    raw[10, 7], raw[29, 53], raw[40, 49] = -2.1, 2.16, 2.3
+    original = raw.copy()
+    plan = build_plan(*inputs)
+    assert plan.raw[10, 7] == -2
+    assert plan.raw[29, 53] == 2
+    np.testing.assert_array_equal(raw, original)
+    np.testing.assert_array_equal(plan.raw[:, np.r_[0:7, 27:34]], original[:30, np.r_[0:7, 27:34]])
+    details = plan.report["hand_prediction_projection"]
+    assert details["adjustment_count"] == 2
+    assert details["max_adjustment_rad"] == pytest.approx(0.16)
+    assert plan.report["ignored_action_tail_joint_limits"]["violation_count"] == 1
+    assert details["examples"][1]["step"] == 30
+
+
+@pytest.mark.parametrize("source", ["arm", "start", "nan"])
+def test_slider_projection_keeps_arm_start_and_finite_checks(inputs, source):
+    raw, start, config, limits, names = inputs
+    config.update(hand_control="slider", project_hand_predictions=True)
+    if source == "arm":
+        raw[10, 27] = 2.1
+    elif source == "start":
+        start[7] = -2.1
+    else:
+        raw[10, 53] = np.nan
+    with pytest.raises(ValueError, match="limits|finite"):
+        build_plan(*inputs)
+
+
+def test_strict_mode_cannot_enable_hand_projection(inputs):
+    inputs[2].update(hand_control="strict", project_hand_predictions=True)
+    with pytest.raises(ValueError, match="requires slider"):
+        build_plan(*inputs)
+
+
 def test_large_raw_acquisition_is_rejected_before_smoothing(inputs):
     inputs[0][0, 0] = 0.300001
     with pytest.raises(ValueError, match="raw initial delta"):
@@ -236,3 +273,48 @@ def test_arm_acquisition_within_updated_limit(inputs, delta):
     inputs[0][:, 0] = delta
     plan = build_plan(*inputs)
     assert plan.raw[0, 0] == delta
+
+
+@pytest.mark.parametrize("tail_position", [-2.1, 2.1])
+def test_unexecuted_tail_limits_are_reported_without_changing_prefix(inputs, tail_position):
+    raw, start, config, limits, names = inputs
+    config["execution_steps"] = 30
+    expected = build_plan(*inputs)
+    raw[30:, 51] = tail_position
+    plan = build_plan(*inputs)
+    np.testing.assert_array_equal(plan.raw, expected.raw)
+    np.testing.assert_array_equal(plan.knots, expected.knots)
+    for phase in ("approach", "playback"):
+        actual, reference = getattr(plan, phase), getattr(expected, phase)
+        assert actual.duration == reference.duration
+        np.testing.assert_array_equal(actual.spline.c, reference.spline.c)
+    ignored = plan.report["ignored_action_tail_joint_limits"]
+    assert ignored["steps"] == 20
+    assert ignored["violation_count"] == 20
+    assert ignored["examples"][0]["step"] == 31
+    assert ignored["examples"][0]["joint_name"] == names[51]
+
+
+@pytest.mark.parametrize(("source", "position"), [("prefix", -2.1), ("prefix", 2.1),
+                                                  ("start", -2.1), ("start", 2.1)])
+def test_prefix_and_start_still_reject_limits_with_joint_details(inputs, source, position):
+    raw, start, config, limits, names = inputs
+    config["execution_steps"] = 30
+    if source == "prefix":
+        raw[29, 51] = position
+    else:
+        start[51] = position
+    with pytest.raises(ValueError, match="reference joint limits") as caught:
+        build_plan(*inputs)
+    details = json.loads(str(caught.value).split("; ", 1)[1])
+    assert details["violation_count"] == 1
+    detail = details["examples"][0]
+    assert detail["joint_name"] == names[51]
+    assert detail["step"] == (30 if source == "prefix" else None)
+    assert detail["position_rad"] == position
+
+
+def test_full_horizon_still_rejects_last_step_limits(inputs):
+    inputs[0][49, 51] = 2.1
+    with pytest.raises(ValueError, match="reference joint limits"):
+        build_plan(*inputs)

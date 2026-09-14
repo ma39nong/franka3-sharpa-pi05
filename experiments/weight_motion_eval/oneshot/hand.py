@@ -8,14 +8,16 @@ import time
 
 import numpy as np
 
+from .hand_contact import BoundedContactGrasp
 from .hand_faults import HandFaults
-from .hand_soft_limit import StallSoftLimit
 from .hand_trace import HandTrace
 from .limits import HAND_CLOCK_LEAD_SECONDS
+from .limits import HAND_CONTACT_SECONDS
 from .limits import HAND_CURRENT_A
 from .limits import HAND_KD
 from .limits import HAND_KP
 from .limits import HAND_SPEED_RAD_S
+from .limits import SLIDER_CURRENT_A
 from .limits import SLIDER_SPEED_RAD_S
 from .limits import check_hand_control
 from .poll_timing import PollTiming
@@ -109,7 +111,7 @@ class HandOwner:
         self.latest_received = None
         self.diagnostics = None
         self.trace = HandTrace()
-        self.soft_limit = StallSoftLimit()
+        self.contact_grasp = BoundedContactGrasp()
         self.fault_status = HandFaults(sdk, side)
         self.trace_identity = None
         self.hold_start = self.hold_quiet_since = self.hold_last_stamp = self.hold_last_sent = None
@@ -198,6 +200,8 @@ class HandOwner:
             raise HandFeedbackUnavailable("No fresh measured hand state")
         if self.diagnostics is None or now_mono - self.diagnostics[1] > 0.15:
             raise HandFeedbackUnavailable("No fresh hand diagnostics")
+        if getattr(self, "hand_control", "strict") == "slider" and self.owns_enable and not self.faulted:
+            self.contact_grasp.check_time(now_mono)
         return self.latest
 
     def identity(self):
@@ -219,11 +223,12 @@ class HandOwner:
             j.status_word.ext_state != 1 for j in self.diagnostics[0].values()
         ):
             raise RuntimeError("Parameter setup requires all 20 joints Ready and stationary")
+        current_limit = SLIDER_CURRENT_A if getattr(self, "hand_control", "strict") == "slider" else HAND_CURRENT_A
         before = self.identity()
         self.trace.add("deployment_parameters_before", identity=before)
-        self.trace.add("deployment_parameters_write_attempt", kp=HAND_KP, kd=HAND_KD, effort_a=HAND_CURRENT_A)
+        self.trace.add("deployment_parameters_write_attempt", kp=HAND_KP, kd=HAND_KD, effort_a=current_limit)
         # Lower/set the current ceiling before applying the agreed stiffness.
-        self.hand.effort_limit().set(HAND_CURRENT_A)
+        self.hand.effort_limit().set(current_limit)
         self.hand.mit_params().set([(HAND_KP, HAND_KD)] * 20)
         actual = self.identity()
         self.trace.add("deployment_parameters_readback", identity=actual)
@@ -231,7 +236,7 @@ class HandOwner:
         if len(gains) != 20 or not np.allclose(gains, [HAND_KP, HAND_KD], rtol=1e-6, atol=1e-7):
             raise RuntimeError("Deployment MIT parameter readback mismatch; hand not enabled")
         if len(actual["effort_limits"]) != 20 or not np.allclose(
-            actual["effort_limits"], HAND_CURRENT_A, rtol=1e-6, atol=1e-7
+            actual["effort_limits"], current_limit, rtol=1e-6, atol=1e-7
         ):
             raise RuntimeError("Deployment current limit readback mismatch; hand not enabled")
         self.trace_identity = actual
@@ -366,21 +371,21 @@ class HandOwner:
             raise ValueError("Hand command stream stalled or clock reversed")
         effective = q
         if getattr(self, "hand_control", "strict") == "slider":
-            if not hasattr(self, "soft_limit"):
-                self.soft_limit = StallSoftLimit()
+            if not hasattr(self, "contact_grasp"):
+                self.contact_grasp = BoundedContactGrasp()
             faults = getattr(self, "fault_status", None)
             stalled = set() if faults is None else {NIDS.index(nid) for nid in faults.stalled_nids()}
-            effective, contact_events = self.soft_limit.update(q, measured, self.last[0], stalled, send_at)
+            effective, contact_events = self.contact_grasp.update(q, measured, self.last[0], stalled, send_at)
             for event in contact_events:
                 nid = NIDS[event["index"]]
                 if getattr(self, "trace", None) is not None:
-                    self.trace.add("stall_soft_limit", nid=nid, **event)
+                    self.trace.add("bounded_contact", nid=nid, **event)
                 if faults is not None:
                     side = "左手" if getattr(self, "side", "unknown") == "left" else "右手"
-                    action = "启用" if event["action"] == "engaged" else "退回后释放"
-                    faults.pending.append(f"{side} NID={nid} 堵转软限位{action}; "
+                    action = f"开始（电流上限{SLIDER_CURRENT_A:g}A，最长{HAND_CONTACT_SECONDS:g}s）" if event["action"] == "engaged" else "退回后释放"
+                    faults.pending.append(f"{side} NID={nid} 接触抓取{action}; "
                                           f"方向={event['direction']}, 触发实测={event['measured_at_trigger']:.5f}rad, "
-                                          f"指令边界={event['bound']:.5f}rad")
+                                          f"触发指令={event['bound']:.5f}rad")
         delta = effective - self.last[0]
         speed = SLIDER_SPEED_RAD_S if getattr(self, "hand_control", "strict") == "slider" else HAND_SPEED_RAD_S
         allowed = speed * dt
@@ -413,7 +418,8 @@ class HandOwner:
             "rate_limited_indices": np.flatnonzero(np.abs(delta) > allowed).tolist(),
             "soft_limited_indices": np.flatnonzero(np.abs(q - effective) > 1e-9).tolist(),
             "effective_targets": effective.tolist(),
-            "soft_limits": self.soft_limit.snapshot(0) if hasattr(self, "soft_limit") else (),
+            "soft_limits": (),
+            "contacts": self.contact_grasp.snapshot() if hasattr(self, "contact_grasp") else (),
             "sent_at": self.last[1],
             "interval_seconds": dt,
         }

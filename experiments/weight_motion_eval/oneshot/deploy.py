@@ -21,6 +21,9 @@ import yaml
 
 from .ipc import RemoteDevices
 from .limits import HAND_SPEED_RAD_S
+from .limits import HAND_CURRENT_A
+from .limits import HAND_CONTACT_SECONDS
+from .limits import SLIDER_CURRENT_A
 from .limits import SLIDER_SPEED_RAD_S
 from .policy_server import checkpoint_contract
 from .qualification import Qualification
@@ -351,6 +354,8 @@ def main(argv=None):
                     "hand_control": args.hand_control,
                     "hand_velocity_rad_s": SLIDER_SPEED_RAD_S if args.hand_control == "slider" else HAND_SPEED_RAD_S,
                     "hand_measured_speed_stop": args.hand_control == "strict",
+                    "hand_current_limit_a": SLIDER_CURRENT_A if args.hand_control == "slider" else HAND_CURRENT_A,
+                    "hand_contact_duration_s": HAND_CONTACT_SECONDS if args.hand_control == "slider" else None,
                     "single_prediction_steps": 50,
                     "continuous": args.continuous,
                     "rounds": args.rounds if args.continuous else 1,

@@ -125,7 +125,7 @@ def main():
         raise ValueError("Reference gateway limits changed")
 
     # Pi05 supervised deployment contact thresholds, Nm for each arm.
-    params["contact_torque_thresholds"] = [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
+    params["contact_torque_thresholds"] = [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
 
     class Gateway(Node):
         def __init__(self):

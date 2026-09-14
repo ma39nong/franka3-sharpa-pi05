@@ -13,6 +13,7 @@ from .core import vector
 from .hand import stabilize_hands
 from .hand import wait_initial_feedback
 from .limits import HAND_ENDPOINT_TOLERANCE_RAD
+from .limits import ARM_ENDPOINT_TOLERANCE_RAD
 from .limits import check_hand_control
 from .motion_gc import MotionGC
 
@@ -69,8 +70,11 @@ class DeviceSession:
         soft_limits = tuple(item for side, hand in self.hands.items()
                             if self.hand_control == "slider" and hasattr(hand, "soft_limit")
                             for item in hand.soft_limit.snapshot(HAND_SLICES[side].start))
+        contacts = tuple(item for side, hand in self.hands.items()
+                         if self.hand_control == "slider" and hasattr(hand, "contact_grasp")
+                         for item in hand.contact_grasp.snapshot(HAND_SLICES[side].start))
         feedback = Feedback(q, dq, tuple(sources), tuple(receipts), hand_control=self.hand_control,
-                            hand_soft_limits=soft_limits)
+                            hand_soft_limits=soft_limits, hand_contacts=contacts)
         target = feedback.effective_target(self.last.positions) if self.last is not None else None
         reached = self.last is None or all(
             hand.last is not None and np.max(np.abs(hand.last[0] - target[HAND_SLICES[side]])) <= 1e-6
@@ -253,11 +257,10 @@ class DeviceSession:
     def check_endpoint(self):
         feedback = self.feedback()
         if (np.max(np.abs(feedback.velocities[self.checked])) > 0.02
-                or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > 0.03):
+                or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > ARM_ENDPOINT_TOLERANCE_RAD):
             raise ValueError("Devices have not settled at the last target")
         tolerance = HAND_ENDPOINT_TOLERANCE_RAD
-        if not feedback.hand_targets_reached or np.max(np.abs(
-                feedback.positions[HAND] - feedback.effective_target(self.last.positions)[HAND])) > tolerance:
+        if not feedback.hand_targets_reached or not feedback.hands_settled(self.last.positions, tolerance):
             raise ValueError("Hands have not settled at the last target")
 
     def finish(self):
@@ -266,7 +269,7 @@ class DeviceSession:
         feedback = self.feedback()
         if (
             np.max(np.abs(feedback.velocities[self.checked])) > 0.02
-            or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > 0.03
+            or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > ARM_ENDPOINT_TOLERANCE_RAD
         ):
             raise ValueError("Devices have not settled at the last target")
         if self.hand_control == "strict" and (
@@ -275,7 +278,7 @@ class DeviceSession:
             raise ValueError("Hands have not settled at the last target")
         if self.hand_control == "slider" and (
             not feedback.hand_targets_reached
-            or np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(self.last.positions)[HAND])) > HAND_ENDPOINT_TOLERANCE_RAD
+            or not feedback.hands_settled(self.last.positions, HAND_ENDPOINT_TOLERANCE_RAD)
         ):
             raise ValueError("Hands did not reach UI position tolerance")
         self.guard.stop()

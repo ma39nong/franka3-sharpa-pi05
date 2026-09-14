@@ -255,7 +255,8 @@ def test_full_simulated_response_restores_parameters_after_disable(monkeypatch, 
     assert calls[-2:] == ["disable", "close"]
 
 
-def test_deployment_profile_is_written_disabled_and_verified():
+@pytest.mark.parametrize(("mode", "current_limit"), [("strict", 1.0), ("slider", 2.0)])
+def test_deployment_profile_is_written_disabled_and_verified(mode, current_limit):
     owner = HandOwner.__new__(HandOwner)
     owner.owns_enable = owner.faulted = False
     owner.trace = HandTrace()
@@ -277,10 +278,11 @@ def test_deployment_profile_is_written_disabled_and_verified():
         effort_limit=lambda: SimpleNamespace(set=current), mit_params=lambda: SimpleNamespace(set=gains)
     )
     owner.identity = lambda: copy.deepcopy(actual)
+    owner.hand_control = mode
     result = owner.configure_deployment()
     assert writes == ["current", "gains"]
     assert result["mit_gains"] == [{"kp": 8, "kd": 0.1}] * 20
-    assert result["effort_limits"] == [1.0] * 20
+    assert result["effort_limits"] == [current_limit] * 20
     status.ext_state = 2
     with pytest.raises(RuntimeError, match="Ready"):
         owner.configure_deployment()

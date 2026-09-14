@@ -31,6 +31,9 @@ def validate_config(config):
         raise ValueError("Hardware output is unavailable in this tool")
     if config.get("source_hz") != 30:
         raise ValueError("The recorded policy uses 30 Hz")
+    project_hands = config.get("project_hand_predictions", False)
+    if type(project_hands) is not bool or (project_hands and config.get("hand_control") != "slider"):
+        raise ValueError("Hand prediction projection requires slider mode and a boolean flag")
     for key in ("sample_hz", "minimum_time_scale", "max_total_seconds", "settle_seconds", "arm_raw_initial_delta_rad"):
         if not positive(config.get(key)):
             raise ValueError(f"Invalid positive configuration: {key}")
@@ -164,13 +167,54 @@ def build_plan(raw, start, config, limits, names):
     for phase in ("approach", "playback"):
         if np.any(caps(config, phase, "velocity") > limits["speed"]):
             raise ValueError("Planning velocity exceeds existing reference limits")
-    for value in (raw, start):
-        if np.any(value < limits["lower"]) or np.any(value > limits["upper"]):
-            raise ValueError("Raw actions or recorded start exceed reference joint limits")
     steps = config.get("execution_steps", 50)
     if type(steps) is not int or not 2 <= steps <= 50:
         raise ValueError("execution_steps must be between 2 and 50")
+    discarded = raw[steps:]
+    discarded_violations = np.argwhere((discarded < limits["lower"]) | (discarded > limits["upper"]))
+    ignored_joint_limits = {
+        "steps": 50 - steps,
+        "violation_count": len(discarded_violations),
+        "examples": [
+            {"step": int(row) + steps + 1, "joint_name": names[int(joint)],
+             "action_index": int(joint), "position_rad": float(discarded[row, joint]),
+             "lower_rad": float(limits["lower"][joint]), "upper_rad": float(limits["upper"][joint])}
+            for row, joint in discarded_violations[:16]
+        ],
+    }
+    # The tail never participates in smoothing, interpolation or dispatch.
     raw = raw[:steps].copy()
+    hand_projection = {"enabled": config.get("project_hand_predictions", False),
+                       "adjustment_count": 0, "max_adjustment_rad": 0.0, "examples": []}
+    if hand_projection["enabled"]:
+        hands = np.r_[7:27, 34:54]
+        proposed = raw[:, hands].copy()
+        bounded = np.clip(proposed, limits["lower"][hands], limits["upper"][hands])
+        changed = np.argwhere(proposed != bounded)
+        hand_projection.update(
+            adjustment_count=len(changed),
+            max_adjustment_rad=float(np.max(np.abs(proposed - bounded))),
+            examples=[{"step": int(row) + 1, "action_index": int(hands[col]),
+                       "joint_name": names[int(hands[col])],
+                       "predicted_rad": float(proposed[row, col]),
+                       "target_rad": float(bounded[row, col])}
+                      for row, col in changed[:16]],
+        )
+        # Only model hand targets are projected; measured/start poses and arms
+        # still pass through the hard limit checks below unchanged.
+        raw[:, hands] = bounded
+    for label, value in (("executed action", raw), ("recorded start", start[None, :])):
+        violations = np.argwhere((value < limits["lower"]) | (value > limits["upper"]))
+        if len(violations):
+            details = [
+                {"source": label, "step": int(row) + 1 if label == "executed action" else None,
+                 "joint_name": names[int(joint)], "action_index": int(joint),
+                 "position_rad": float(value[row, joint]),
+                 "lower_rad": float(limits["lower"][joint]), "upper_rad": float(limits["upper"][joint])}
+                for row, joint in violations[:16]
+            ]
+            raise ValueError("Raw actions or recorded start exceed reference joint limits; "
+                             + json.dumps({"violation_count": len(violations), "examples": details}))
     delta, knots = np.abs(raw[0] - start), smooth_knots(raw, config["smoothing_passes"])
     if config.get("hand_control") == "slider":
         knots[:, np.r_[7:27, 34:54]] = raw[:, np.r_[7:27, 34:54]]
@@ -214,10 +258,12 @@ def build_plan(raw, start, config, limits, names):
         "schema_version": 1,
         "mode": "offline_weight_motion_evaluation",
         "hand_control": config.get("hand_control", "strict"),
-        "hand_command_note": "In slider mode, hand spline samples are unused references; raw model poses are targets and SDK-sent positions are recorded in hand_output. Arm spline timing is retained.",
+        "hand_command_note": "In slider mode, hand spline samples are unused references; model poses (after optional joint-limit projection) are targets and SDK-sent positions are recorded in hand_output. Arm spline timing is retained.",
         "hardware_output": False,
         "hardware_ready": False,
         "planning_checks_passed": True,
+        "ignored_action_tail_joint_limits": ignored_joint_limits,
+        "hand_prediction_projection": hand_projection,
         "unverified": [
             "collision_path",
             "live_start_and_feedback",

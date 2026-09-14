@@ -15,7 +15,10 @@ import uuid
 import numpy as np
 
 from .limits import ARM_TRACKING_TOLERANCE_RAD
+from .limits import ARM_ENDPOINT_TOLERANCE_RAD
 from .limits import HAND_ENDPOINT_TOLERANCE_RAD
+from .limits import HAND_CONTACT_SECONDS
+from .limits import HAND_CONTACT_SETTLE_SECONDS
 from .limits import HAND_SPEED_RAD_S
 from .limits import SLIDER_POSITION_TOLERANCE_RAD
 from .limits import check_hand_control
@@ -52,6 +55,7 @@ class Feedback:
     hand_control: str = "strict"
     hand_targets_reached: bool = True
     hand_soft_limits: tuple = ()
+    hand_contacts: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, "positions", vector(self.positions))
@@ -69,6 +73,20 @@ class Feedback:
         if limits and self.hand_control != "slider":
             raise ValueError("Stall soft limits require slider mode")
         object.__setattr__(self, "hand_soft_limits", limits)
+        contacts = tuple(tuple(item) for item in self.hand_contacts)
+        indices = set()
+        for item in contacts:
+            if len(item) != 4:
+                raise ValueError("Invalid hand contact")
+            index, direction, bound, started = item
+            if (type(index) is not int or index not in HAND or index in indices
+                    or type(direction) is not int or direction not in (-1, 1)
+                    or not math.isfinite(bound) or not math.isfinite(started)):
+                raise ValueError("Invalid hand contact")
+            indices.add(index)
+        if contacts and (self.hand_control != "slider" or limits):
+            raise ValueError("Timed hand contacts require slider mode without legacy soft limits")
+        object.__setattr__(self, "hand_contacts", contacts)
         if len(self.source_times) != 4 or len(self.receipt_times) != 4:
             raise ValueError("Need timestamps for all four device groups")
         object.__setattr__(self, "source_times", tuple(self.source_times))
@@ -84,8 +102,24 @@ class Feedback:
                 result[index] = bound
         return result
 
+    def contact_indices(self, target):
+        # Only the diagnosed loading direction can count as contact. An opening
+        # target must still be physically reached; a latched warning is not enough.
+        return tuple(index for index, direction, bound, _ in self.hand_contacts
+                     if direction * (target[index] - bound) >= 0
+                     and direction * (target[index] - self.positions[index]) > 0.005)
+
+    def hands_settled(self, target, tolerance):
+        errors = np.abs(self.positions - self.effective_target(target))
+        for index in self.contact_indices(target):
+            if abs(self.velocities[index]) <= 0.02:
+                errors[index] = 0.0
+        return bool(np.all(errors[HAND] <= tolerance))
+
     def check(self, now, epoch):
         finite(now)
+        if any(not 0 <= now - started < HAND_CONTACT_SECONDS for _, _, _, started in self.hand_contacts):
+            raise ValueError("Hand contact duration exceeded or timestamp is in the future")
         if self.epoch != epoch or not self.healthy:
             raise ValueError("Feedback clock epoch changed or device unhealthy")
         if any(not 0 <= now - t <= 0.15 for t in (*self.source_times, *self.receipt_times)):
@@ -295,7 +329,7 @@ class OneShot:
             raise ValueError("Player and device hand control mismatch")
         if not self.prepared_at <= now <= self.prepared_at + 30:
             raise ValueError("Reviewed one-shot plan must start within 30 seconds of preparation")
-        if np.max(np.abs(feedback.positions[self.checked] - self.plan.start[self.checked])) > (0.03 if self.plan.config.get("continuation") else 0.005):
+        if np.max(np.abs(feedback.positions[self.checked] - self.plan.start[self.checked])) > (ARM_ENDPOINT_TOLERANCE_RAD if self.plan.config.get("continuation") else 0.005):
             raise ValueError("Start pose changed; rebuild from fresh feedback")
         if np.max(np.abs(feedback.velocities[self.checked])) > 0.02:
             raise ValueError("Start requires stationary feedback")
@@ -305,7 +339,7 @@ class OneShot:
         self.started = now
         # The finite committed plan is distinct from a streaming policy.
         # 1 s still governed admission above, and is never re-stamped.
-        self.deadline = now + self.plan.report["total_seconds"] + 10
+        self.deadline = now + self.plan.report["total_seconds"] + (2 * HAND_CONTACT_SETTLE_SECONDS if self.hand_control == "slider" else 10)
         self.transition("approach", now, "single_plan_started")
 
     def _check_plan(self):
@@ -362,30 +396,31 @@ class OneShot:
                 q = self.plan.raw[0] if self.state == "settle_start" else self.plan.raw[-1]
                 dq = np.zeros(54)
                 settled = (
-                    np.max(np.abs(feedback.positions[ARM] - q[ARM])) <= 0.03
+                    np.max(np.abs(feedback.positions[ARM] - q[ARM])) <= ARM_ENDPOINT_TOLERANCE_RAD
                     and np.max(np.abs(feedback.velocities[self.checked])) <= 0.02
                 )
                 hand_tolerance = (HAND_ENDPOINT_TOLERANCE_RAD if self.state == "settle_end"
-                                  else SLIDER_POSITION_TOLERANCE_RAD if self.hand_control == "slider" else 0.01)
+                                  else SLIDER_POSITION_TOLERANCE_RAD if self.hand_control == "slider" else HAND_ENDPOINT_TOLERANCE_RAD)
                 if self.hand_control == "strict":
-                    settled = settled and np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(q)[HAND])) <= hand_tolerance
+                    settled = settled and feedback.hands_settled(q, hand_tolerance)
                 if self.hand_control == "slider":
                     settled = (
                         settled
                         and feedback.hand_targets_reached
-                        and np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(q)[HAND])) <= hand_tolerance
+                        and feedback.hands_settled(q, hand_tolerance)
                     )
                 if settled:
                     if self.settled_since is None:
                         self.settled_since = now
                     if now - self.settled_since >= self.plan.config["settle_seconds"]:
                         if self.state == "settle_end":
-                            self.transition("complete", now, "final_measured_settle")
+                            self.transition("complete", now, "final_contact_settle" if feedback.contact_indices(q) else "final_measured_settle")
                             return None
                         self.transition("playback", now, "initial_measured_settle")
                 else:
                     self.settled_since = None
-                if now - self.phase_started > 5:
+                settle_timeout = HAND_CONTACT_SETTLE_SECONDS if feedback.contact_indices(q) else 5
+                if now - self.phase_started > settle_timeout:
                     raise ValueError("Measured endpoint settling timed out")
             check_tracking(q, feedback, self.checked, "Measured tracking")
             frame = Frame(

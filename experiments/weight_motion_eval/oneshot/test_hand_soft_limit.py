@@ -57,7 +57,7 @@ def test_ambiguous_loading_direction_does_not_guess():
     assert not limit.contacts
 
 
-def test_sdk_boundary_caps_stall_but_retreat_still_obeys_rate_limit(monkeypatch):
+def test_sdk_boundary_continues_bounded_contact_and_retreat_obeys_rate_limit(monkeypatch):
     from . import hand as module
     clock = S(now=10.0)
     monkeypatch.setattr(module.time, "monotonic", lambda: clock.now)
@@ -78,21 +78,22 @@ def test_sdk_boundary_caps_stall_but_retreat_still_obeys_rate_limit(monkeypatch)
                             lower=np.full(20, -2), upper=np.full(20, 2))
     q[17] = 0.7
     report = submit(q)
-    assert report["positions"][17] == 0.1
-    assert report["soft_limited_indices"] == [17]
-    events = [e for e in owner.trace.before if e["event"] == "stall_soft_limit"]
+    assert report["positions"][17] == pytest.approx(0.11)
+    assert report["soft_limited_indices"] == []
+    assert report["contacts"] == ((17, 1, 0.1, 10.0),)
+    events = [e for e in owner.trace.before if e["event"] == "bounded_contact"]
     assert events[0]["nid"] == 22
     assert events[0]["bound"] == 0.1
     assert "NID=22" in owner.fault_status.pending[0]
     clock.now += 0.01
     q[17] = -0.5
     report = submit(q)
-    assert report["positions"][17] == pytest.approx(0.09)
+    assert report["positions"][17] == pytest.approx(0.10)
     assert report["rate_limited_indices"] == [17]
     assert report["soft_limited_indices"] == []
 
 
-@pytest.mark.parametrize(("measured_error", "reached", "accepted"), [(0.05, True, True), (0.12, True, False), (0.05, False, False)])
+@pytest.mark.parametrize(("measured_error", "reached", "accepted"), [(0.1000503406, True, True), (0.25001, True, False), (0.05, False, False)])
 def test_player_uses_clamped_target_but_requires_real_settling(measured_error, reached, accepted):
     config = read_config(Path(__file__).parents[1] / "config.yaml")
     config["hand_control"] = "slider"

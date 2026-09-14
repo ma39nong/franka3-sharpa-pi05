@@ -249,7 +249,8 @@ def test_spawned_controller_socket_transfer_and_two_rounds(tmp_path):
         server.join(1)
 
 
-def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path):
+@pytest.mark.parametrize("hand_over_limit", [False, True])
+def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path, hand_over_limit):
     import time
     from types import SimpleNamespace
 
@@ -262,9 +263,15 @@ def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path):
     devices = Devices(time.monotonic)
     devices.sock = SimpleNamespace(close=lambda: None)
     devices.counter, devices.finish_policy = 0, "disable"
+    def prediction(**kwargs):
+        actions = np.full((50, 54), 0.01 * len(requests))
+        if hand_over_limit:
+            actions[19, 49] = 2.16
+        return msgpack_numpy.packb({"actions": actions})
+
     ws = SimpleNamespace(
         send=lambda packet: requests.append(msgpack_numpy.unpackb(packet)),
-        recv=lambda **kwargs: msgpack_numpy.packb({"actions": np.full((50, 54), 0.01 * len(requests))}),
+        recv=prediction,
     )
     config = read_config(Path(__file__).parents[1] / "config.yaml")
     config["hand_control"] = "slider"
@@ -300,9 +307,56 @@ def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path):
     assert next_player.plan.raw.shape == (20, 54)
     np.testing.assert_allclose(next_player.plan.start, 0.01)
     assert next_player.plan.config["continuation"]
+    if hand_over_limit:
+        assert next_player.plan.raw[19, 49] == 2.0
+        assert next_player.plan.report["hand_prediction_projection"]["adjustment_count"] == 1
+        with np.load(tmp_path / "round-0002" / "inference.npz") as saved:
+            assert saved["actions"][19, 49] == 2.16
     assert next_player.admission.sent_time >= now
     consumer.status.put({"event": "round_complete", "round": 2})
     consumer.status.put({"event": "complete", "rounds": 2})
     consumer.poll()
     assert consumer.completed == 1
     assert consumer.rounds_completed == 2
+
+
+def test_planning_failure_preserves_prediction_start_and_joint_error(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace as S
+    from . import continuous as module
+    from .continuous import ContinuousConsumer
+
+    clock = Clock()
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(module.time, "time", lambda: clock.now)
+    consumer = ContinuousConsumer.__new__(ContinuousConsumer)
+    consumer.poll = lambda: None
+    consumer.completed = consumer.pending = False
+    consumer.process = None
+    consumer.rounds_completed, consumer.rounds = 0, 10
+    consumer.output = tmp_path
+    consumer.model = {"checkpoint_manifest_sha256": "weights"}
+    consumer.config = read_config(Path(__file__).parents[1] / "config.yaml")
+    consumer.config.update(execution_steps=30, hand_control="slider")
+    consumer.limits = {"lower": np.full(54, -2), "upper": np.full(54, 2), "speed": np.full(54, 2)}
+    consumer.names = [f"joint{i}" for i in range(54)]
+    actions = np.zeros((50, 54))
+    actions[29, 51] = 2.1
+    consumer.codec = S(packb=lambda obs: b"request", unpackb=lambda result: {"actions": actions})
+    def receive(**kwargs):
+        clock.now += 0.01
+        return b"response"
+    consumer.ws = S(send=lambda packet: None, recv=receive)
+    consumer.devices = S(feedback=lambda now: S(positions=np.zeros(54)))
+    obs = {"observation/state": np.zeros(54)}
+    with pytest.raises(ValueError, match="reference joint limits"):
+        consumer.consume(None, obs, {"samples": {"state": {"stamp": 10}}}, tmp_path)
+    directory = tmp_path / "round-0001"
+    with np.load(directory / "inference.npz") as saved:
+        np.testing.assert_array_equal(saved["actions"], actions)
+        np.testing.assert_array_equal(saved["recorded_start"], np.zeros(54))
+    assert (directory / "admission.json").exists()
+    error = json.loads((directory / "planning-error.json").read_text())
+    assert error["execution_steps"] == 30
+    assert "joint51" in error["error"]
+    assert not (directory / "plan").exists()
