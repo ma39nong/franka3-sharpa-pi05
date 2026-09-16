@@ -10,6 +10,7 @@ import numpy as np
 
 from .core import Feedback
 from .core import Frame
+from .core import checked_arm_speed
 
 MAX_PACKET = 64 * 1024
 
@@ -41,7 +42,8 @@ def wire_frame(frame):
 class RemoteDevices:
     """Synchronous acknowledgements; no queued or retried motion commands."""
 
-    def __init__(self, path, *, execute=False, finish_policy="hold", sock=None):
+    def __init__(self, path, *, execute=False, finish_policy="hold", sock=None, arm_speed_rad_s=0.7):
+        self.arm_speed_rad_s = checked_arm_speed(arm_speed_rad_s)
         self.sock = sock or socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         if sock is None:
             self.sock.settimeout(5)
@@ -92,9 +94,16 @@ class RemoteDevices:
             raise RuntimeError(result.get("error", "Device bridge rejected operation"))
         return result["result"]
 
+    def decode_feedback(self, result):
+        feedback = Feedback(**result)
+        if feedback.arm_speed_rad_s != self.arm_speed_rad_s:
+            self.close()
+            raise RuntimeError("Device/client arm speed configuration mismatch")
+        return feedback
+
     def feedback(self, now):
         result = self.call("feedback")
-        feedback = Feedback(**result)
+        feedback = self.decode_feedback(result)
         feedback.check(time.monotonic(), feedback.epoch)
         return feedback
 
@@ -118,7 +127,7 @@ class RemoteDevices:
         if result.get("sequence") != frame.sequence:
             raise RuntimeError("Wrong submitted-frame acknowledgement")
         self.last_submission = result
-        return Feedback(**result["feedback"]) if "feedback" in result else None
+        return self.decode_feedback(result["feedback"]) if "feedback" in result else None
 
     def finish(self):
         result = self.call("finish", timeout=3)

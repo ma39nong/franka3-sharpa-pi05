@@ -14,6 +14,7 @@ from experiments.weight_motion_eval.reference import reference_limits
 
 from .timeline import check_arm_speed
 from .timeline import checked_chunk
+from .timeline import limit_arm_speed
 
 
 def inspect_record(path, limits):
@@ -23,13 +24,16 @@ def inspect_record(path, limits):
     try:
         # Synthetic times exist only in this offline validator. Nothing is queued.
         chunk = checked_chunk(raw, Admission(1.0, 1.02, 1.1, "offline", "offline", 0), 1, limits)
+        raw_speed = float(np.abs(np.diff(chunk.actions[:, ARM], axis=0)).max() * 30)
+        limited, changed = limit_arm_speed(chunk.actions)
         row.update(
-            arm_speed_max_rad_s=float(np.abs(np.diff(chunk.actions[:, ARM], axis=0)).max() * 30),
+            arm_requested_speed_max_rad_s=raw_speed,
+            arm_rate_limited_values=changed,
             hand_requested_speed_max_rad_s=float(np.abs(np.diff(chunk.actions[:, HAND], axis=0)).max() * 30),
             projected_hand_values=chunk.projected_hand_values,
         )
-        check_arm_speed(chunk.actions)
-        row["status"] = "passes_raw_chunk_checks"
+        check_arm_speed(limited)
+        row["status"] = "passes_with_arm_rate_limit" if changed else "passes_raw_chunk_checks"
     except ValueError as error:
         row.update(status="rejected", reason=str(error))
     return row

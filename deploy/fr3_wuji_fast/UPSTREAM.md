@@ -26,8 +26,9 @@ Intentional adaptations:
 - Cubic guidance begins at the actual splice offset and anchors the current
   commanded position. The upstream cubic broker smooths the prefix before
   skipping latency steps, which can skip the smoothed part altogether.
-- The first and spliced arm segments must fit the existing 0.7 rad/s stream
-  ceiling. Playback is never automatically stretched to satisfy it.
+- First and spliced arm targets are projected onto the session-specific 1.0 rad/s
+  reachable set on the 30 Hz grid (shared slow callers keep their 0.7 rad/s
+  default). The original prediction remains in the run record.
 - A missing model/observation has a bounded 1.5-second wait from the trigger.
   Predictions must also pass the original 70 ms observation-send budget and
   1 s observation-to-admission deadline (checked again at live splice).

@@ -23,6 +23,7 @@ from experiments.weight_motion_eval.oneshot.limits import HAND_ENDPOINT_TOLERANC
 from experiments.weight_motion_eval.oneshot.live import LiveConsumer
 from experiments.weight_motion_eval.reference import deployment_module
 
+from .timeline import ARM_SPEED_RAD_S
 from .timeline import Timeline
 
 
@@ -52,6 +53,8 @@ def run_control(
 
     def check_initial():
         fb.check(clock(), first.chunk.admission.epoch)
+        if fb.arm_speed_rad_s != ARM_SPEED_RAD_S:
+            raise ValueError("Fast controller/device arm speed configuration mismatch")
         if fb.hand_control != "slider":
             raise ValueError("Normal-speed deployment requires the existing slider device mode")
         if not first.prepared_at <= clock() <= first.prepared_at + 30:
@@ -124,6 +127,7 @@ def run_control(
                             "latency_offset_steps": 0,
                             "sha256": first.chunk.sha256,
                             "projected_hand_values": first.chunk.projected_hand_values,
+                            "arm_rate_limited_values": first.chunk.arm_rate_limited_values,
                             "executed_nodes": first.chunk.actions.tolist(),
                         }
                     )
@@ -150,7 +154,7 @@ def run_control(
 
 
 def worker(sock, counter, finish_policy, first, limits, options, incoming, status, stop_flag, output):
-    devices = RemoteDevices(None, execute=True, finish_policy=finish_policy, sock=sock)
+    devices = RemoteDevices(None, execute=True, finish_policy=finish_policy, sock=sock, arm_speed_rad_s=ARM_SPEED_RAD_S)
     devices.counter = counter
     recorder = None
     local = queue.Queue(maxsize=1)

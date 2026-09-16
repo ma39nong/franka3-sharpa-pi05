@@ -22,7 +22,7 @@ HAND_SLICES = {"left": slice(7, 27), "right": slice(34, 54)}
 
 class DeviceSession:
     def __init__(
-        self, arms, hands, limits, *, execute=False, qualification=None, clock=time.monotonic, hand_control="strict", continuous=False, defer_motion_gc=False
+        self, arms, hands, limits, *, execute=False, qualification=None, clock=time.monotonic, hand_control="strict", continuous=False, defer_motion_gc=False, arm_speed_rad_s=0.7
     ):
         self.motion_gc = MotionGC() if defer_motion_gc else None
         self.continuous = continuous
@@ -30,7 +30,8 @@ class DeviceSession:
         self.checked = ARM if hand_control == "slider" else np.arange(54)
         self.arms, self.hands, self.limits = arms, hands, limits
         self.execute, self.qualification, self.clock = execute, qualification, clock
-        self.guard = ConsumerGuard(limits["lower"], limits["upper"], hand_control=hand_control)
+        self.guard = ConsumerGuard(limits["lower"], limits["upper"], hand_control=hand_control,
+                                   arm_speed_rad_s=arm_speed_rad_s)
         self.state = "readonly"
         self.fault = None
         self.plan_hashes = set()
@@ -74,7 +75,7 @@ class DeviceSession:
                          if self.hand_control == "slider" and hasattr(hand, "contact_grasp")
                          for item in hand.contact_grasp.snapshot(HAND_SLICES[side].start))
         feedback = Feedback(q, dq, tuple(sources), tuple(receipts), hand_control=self.hand_control,
-                            hand_soft_limits=soft_limits, hand_contacts=contacts)
+                            hand_soft_limits=soft_limits, hand_contacts=contacts, arm_speed_rad_s=self.guard.arm_speed_rad_s)
         target = feedback.effective_target(self.last.positions) if self.last is not None else None
         reached = self.last is None or all(
             hand.last is not None and np.max(np.abs(hand.last[0] - target[HAND_SLICES[side]])) <= 1e-6

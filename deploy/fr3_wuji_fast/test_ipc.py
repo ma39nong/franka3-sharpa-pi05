@@ -81,6 +81,7 @@ def test_spawned_rtg_worker_uses_original_device_session_and_releases(tmp_path):
         limits,
         execute=True,
         hand_control="slider",
+        arm_speed_rad_s=1.0,
         qualification=SimpleNamespace(check_hand=lambda *a: None),
     )
     done = threading.Event()

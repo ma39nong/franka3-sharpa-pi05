@@ -6,6 +6,7 @@ anchored to the current command, so latency cannot skip the smoothed prefix.
 """
 
 from dataclasses import dataclass
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -14,7 +15,6 @@ import numpy as np
 
 from experiments.weight_motion_eval.oneshot.core import ARM
 from experiments.weight_motion_eval.oneshot.core import HAND
-from experiments.weight_motion_eval.oneshot.core import SPEED
 from experiments.weight_motion_eval.oneshot.core import Admission
 from experiments.weight_motion_eval.oneshot.core import vector
 from experiments.weight_motion_eval.planner import make_phase
@@ -23,6 +23,7 @@ from experiments.weight_motion_eval.planner import read_config
 SOURCE_HZ = 30
 CONTROL_HZ = 100
 HORIZON = 50
+ARM_SPEED_RAD_S = 1.0
 
 
 @dataclass
@@ -33,6 +34,7 @@ class Chunk:
     actions: np.ndarray
     sha256: str
     projected_hand_values: int
+    arm_rate_limited_values: int = 0
 
 
 def checked_chunk(raw, admission, number, limits):
@@ -59,14 +61,29 @@ def checked_chunk(raw, admission, number, limits):
 
 def check_arm_speed(actions):
     velocities = np.diff(actions[:, ARM], axis=0) * SOURCE_HZ
-    bad = np.argwhere(np.abs(velocities) > SPEED[ARM] + 1e-8)
+    bad = np.argwhere(np.abs(velocities) > ARM_SPEED_RAD_S + 1e-8)
     if len(bad):
         step, column = bad[0]
         raise ValueError(
             f"30 Hz arm speed exceeds device ceiling: step={step}, action_index={ARM[column]}, "
-            f"requested={velocities[step, column]:.6f} rad/s, limit={SPEED[ARM[column]]:.6f}; "
+            f"requested={velocities[step, column]:.6f} rad/s, limit={ARM_SPEED_RAD_S:.6f}; "
             "playback was not silently slowed"
         )
+
+
+def limit_arm_speed(actions):
+    """Project arm targets onto the 1 rad/s reachable set on the 30 Hz grid."""
+    result = np.array(actions, dtype=np.float64, copy=True)
+    if result.ndim != 2 or result.shape[1] != 54 or not np.isfinite(result).all():
+        raise ValueError("Arm rate limiter requires finite 54-dimensional actions")
+    maximum_step = ARM_SPEED_RAD_S / SOURCE_HZ
+    changed = 0
+    for step in range(1, len(result)):
+        delta = result[step, ARM] - result[step - 1, ARM]
+        excessive = np.abs(delta) > maximum_step + 1e-12
+        changed += int(np.count_nonzero(excessive))
+        result[step, ARM] = result[step - 1, ARM] + np.clip(delta, -maximum_step, maximum_step)
+    return result, changed
 
 
 def smooth_prefix(chunk, anchor, count):
@@ -112,6 +129,8 @@ def prepare_initial(chunk, start, limits, config_path, now):
     start = vector(start)
     if np.any(start < limits["lower"]) or np.any(start > limits["upper"]):
         raise ValueError("Measured initial state outside joint limits")
+    limited, changed = limit_arm_speed(chunk.actions)
+    chunk = replace(chunk, actions=limited, arm_rate_limited_values=changed)
     check_arm_speed(chunk.actions)
     config = read_config(config_path)
     config = dict(config, hand_control="slider")
@@ -128,6 +147,7 @@ def prepare_initial(chunk, start, limits, config_path, now):
             "request": chunk.admission.request_id,
             "source_hz": SOURCE_HZ,
             "control_hz": CONTROL_HZ,
+            "arm_speed_rad_s": ARM_SPEED_RAD_S,
             "config": config,
         },
         sort_keys=True,
@@ -200,6 +220,7 @@ class Timeline:
         actions = smooth_prefix(chunk.actions[offset:], anchor, self.guidance_steps)
         if np.any(actions < limits["lower"]) or np.any(actions > limits["upper"]):
             raise ValueError("RTG splice exceeds joint limits")
+        actions, rate_limited = limit_arm_speed(actions)
         check_arm_speed(actions)
         # All checks precede replacement; failed predictions cannot leak a frame.
         self.actions, self.offset, self.number = actions, offset, chunk.number
@@ -212,6 +233,7 @@ class Timeline:
             "latency_offset_steps": offset,
             "sha256": chunk.sha256,
             "projected_hand_values": chunk.projected_hand_values,
+            "arm_rate_limited_values": chunk.arm_rate_limited_values + rate_limited,
             "executed_nodes": actions.tolist(),
         }
 

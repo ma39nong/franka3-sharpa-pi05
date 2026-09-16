@@ -6,6 +6,7 @@ import json
 import multiprocessing as mp
 from pathlib import Path
 import queue
+import sys
 import time
 import uuid
 
@@ -65,9 +66,11 @@ class FastConsumer:
                 print("【阶段】" + event["text"], flush=True)
             elif kind == "chunk_started":
                 self.report["chunks"].append({k: v for k, v in event.items() if k != "executed_nodes"})
+                limited = event.get("arm_rate_limited_values", 0)
                 print(
                     f"【阶段】动作块 {event['number']}/{self.options['rounds']}："
-                    f"30 Hz，延迟补偿跳过 {event['latency_offset_steps']} 步",
+                    f"30 Hz，延迟补偿跳过 {event['latency_offset_steps']} 步"
+                    + (f"，机械臂 {limited} 个目标按 1 rad/s 限幅" if limited else ""),
                     flush=True,
                 )
             elif kind == "complete":
@@ -84,9 +87,17 @@ class FastConsumer:
     def __call__(self, store, obs, metadata, directory):
         try:
             self.consume(store, obs, metadata, directory)
-        except BaseException:
-            # observe.main cleans up cameras before returning. Stop motion now.
+        except BaseException as error:
+            # observe.main cleans up cameras before returning. Stop motion now,
+            # then expose the original failure before its potentially slow cleanup.
             self.stop_flag.set()
+            detail = f"{type(error).__name__}: {error}"
+            self.report.update(state="failed", error=detail)
+            print("【执行失败】" + detail, file=sys.stderr, flush=True)
+            try:
+                self.save_report()
+            except OSError as report_error:
+                print("【报告写入失败】" + str(report_error), file=sys.stderr, flush=True)
             raise
 
     def consume(self, store, obs, metadata, directory):

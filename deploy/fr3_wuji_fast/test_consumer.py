@@ -39,7 +39,7 @@ def make_consumer(tmp_path, response):
 
 
 @pytest.mark.parametrize("kind", ["server_error", "wrong_shape"])
-def test_inference_error_signals_stop_before_observation_cleanup(tmp_path, kind):
+def test_inference_error_signals_stop_before_observation_cleanup(tmp_path, kind, capsys):
     from openpi_client import msgpack_numpy
 
     response = "model failed" if kind == "server_error" else msgpack_numpy.packb({"actions": np.zeros((50, 64))})
@@ -51,6 +51,10 @@ def test_inference_error_signals_stop_before_observation_cleanup(tmp_path, kind)
             )
         assert consumer.stop_flag.is_set()
         assert consumer.process is None
+        # Check before close/observe cleanup: the operator already has the cause.
+        report = json.loads((tmp_path / "fast-report.json").read_text())
+        assert report["state"] == "failed"
+        assert report["error"] in capsys.readouterr().err
     finally:
         consumer.close()
 

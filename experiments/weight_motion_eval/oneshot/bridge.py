@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from .core import checked_arm_speed
 from .devices import DeviceSession
 from .hand import HandOwner
 from .hand import wait_initial_feedback
@@ -127,6 +128,7 @@ def main():
     if args.supervised_trial and (not args.execute or args.qualification is not None):
         parser.error("Supervised trial must explicitly enable output and cannot claim commissioning")
     config = json.loads(args.runtime.read_text())
+    arm_speed = checked_arm_speed(config.get("arm_speed_rad_s", 0.7))
     for path, expected in config["reference_hashes"].items():
         if digest(path) != expected:
             raise ValueError("Runtime reference limits changed: " + path)
@@ -202,6 +204,7 @@ def main():
             execute=args.execute,
             continuous=config.get("continuous", False),
             defer_motion_gc=True,
+            arm_speed_rad_s=arm_speed,
             qualification=qualification,
             hand_control=config.get("hand_control", "strict"),
         )

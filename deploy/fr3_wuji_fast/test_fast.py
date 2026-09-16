@@ -11,16 +11,22 @@ from deploy.fr3_wuji_fast.deploy import parse_args
 from deploy.fr3_wuji_fast.timeline import Timeline
 from deploy.fr3_wuji_fast.timeline import check_arm_speed
 from deploy.fr3_wuji_fast.timeline import checked_chunk
+from deploy.fr3_wuji_fast.timeline import limit_arm_speed
 from deploy.fr3_wuji_fast.timeline import prepare_initial
 from deploy.fr3_wuji_fast.timeline import sample_nodes
 from deploy.fr3_wuji_fast.timeline import smooth_prefix
 from experiments.weight_motion_eval.oneshot import deploy as old_deploy
+from experiments.weight_motion_eval.oneshot.core import ARM
 from experiments.weight_motion_eval.oneshot.core import Admission
 from experiments.weight_motion_eval.oneshot.core import ConsumerGuard
 from experiments.weight_motion_eval.oneshot.core import Feedback
 
 CONFIG = old_deploy.ROOT / "experiments/weight_motion_eval/config.yaml"
-LIMITS = {"lower": np.full(54, -2.0), "upper": np.full(54, 2.0), "speed": np.full(54, 2.0)}
+LIMITS = {
+    "lower": np.full(54, -2.0),
+    "upper": np.full(54, 2.0),
+    "speed": np.full(54, 2.0),
+}
 
 
 class Clock:
@@ -37,7 +43,10 @@ class Clock:
 def chunk(number=1, sent=9.85, received=9.9, raw=None):
     actions = np.tile(np.linspace(0.0, 0.01, 50)[:, None], (1, 54)) if raw is None else raw
     return checked_chunk(
-        actions, Admission(sent - 0.02, sent, received, f"request-{number}", "weights", 0), number, LIMITS
+        actions,
+        Admission(sent - 0.02, sent, received, f"request-{number}", "weights", 0),
+        number,
+        LIMITS,
     )
 
 
@@ -47,13 +56,20 @@ class Devices:
     def __init__(self, clock):
         self.clock = clock
         self.q = np.zeros(54)
-        self.guard = ConsumerGuard(LIMITS["lower"], LIMITS["upper"], hand_control="slider")
+        self.guard = ConsumerGuard(LIMITS["lower"], LIMITS["upper"], hand_control="slider", arm_speed_rad_s=1.0)
         self.frames = []
         self.prepares = self.finishes = 0
         self.last_submission = {}
 
     def feedback(self, now):
-        return Feedback(self.q, np.zeros(54), (now,) * 4, (now,) * 4, hand_control="slider")
+        return Feedback(
+            self.q,
+            np.zeros(54),
+            (now,) * 4,
+            (now,) * 4,
+            hand_control="slider",
+            arm_speed_rad_s=1.0,
+        )
 
     def prepare(self, player, fb, now):
         self.prepares += 1
@@ -139,11 +155,32 @@ def test_foreign_model_shapes_and_nonfinite_outputs_rejected(raw):
         chunk(raw=raw)
 
 
-def test_original_speed_violation_rejected_instead_of_silent_slowdown():
+def test_original_speed_violation_runs_at_one_rad_per_second():
     raw = np.zeros((50, 54))
     raw[1:, 0] = 0.1
-    with pytest.raises(ValueError, match="speed exceeds"):
-        initial(chunk(raw=raw))
+    prepared = initial(chunk(raw=raw))
+    assert prepared.chunk.arm_rate_limited_values > 0
+    assert np.max(np.abs(np.diff(prepared.chunk.actions[:, ARM], axis=0))) == pytest.approx(1 / 30)
+    check_arm_speed(prepared.chunk.actions)
+
+
+def test_rate_limiter_tracks_targets_at_one_rad_per_second_and_catches_up():
+    raw = np.zeros((8, 54))
+    raw[1:, 6] = [0.1, 0.1, 0.1, 0.05, 0.0, 0.0, 0.0]
+    limited, changed = limit_arm_speed(raw)
+    np.testing.assert_allclose(limited[:, 6], [0, 1 / 30, 2 / 30, 0.1, 2 / 30, 1 / 30, 0, 0], atol=1e-15)
+    assert changed == 4
+    check_arm_speed(limited)
+
+
+def test_rtg_cubic_overspeed_is_limited_instead_of_rejected():
+    timeline = Timeline(chunk(), rounds=2)
+    timeline.start(10)
+    timeline.request(10 + 25 / 30)
+    new = chunk(2, 10.84, 10.98, raw=np.full((50, 54), 0.1))
+    event = timeline.install(new, 11, LIMITS)
+    assert event["arm_rate_limited_values"] > 0
+    check_arm_speed(timeline.actions)
 
 
 def test_rtg_splice_compensates_latency_and_blends_at_actual_offset():
@@ -177,9 +214,9 @@ def test_rejected_splice_does_not_replace_current_actions(case):
     elif case == "old_request":
         new.admission = replace(new.admission, sent_time=10.8, observation_time=10.79)
     else:
-        new = chunk(2, 10.85, 10.95, raw=np.full((50, 54), 1.0))
+        new.actions[:] = 3.0
     old = t.actions.copy()
-    with pytest.raises(ValueError, match="Unexpected|stale|speed exceeds"):
+    with pytest.raises(ValueError, match="Unexpected|stale|speed exceeds|RTG splice"):
         t.install(new, now, LIMITS)
     assert t.number == 1
     assert t.pending_since is not None
@@ -206,7 +243,12 @@ def test_two_chunks_run_continuously_through_existing_guard():
         if event["event"] == "infer":
             pending = (
                 clock() + 0.12,
-                chunk(event["number"], clock() + 0.01, clock() + 0.11, raw=np.full((50, 54), 0.02)),
+                chunk(
+                    event["number"],
+                    clock() + 0.01,
+                    clock() + 0.11,
+                    raw=np.full((50, 54), 0.02),
+                ),
             )
 
     def sleep(dt):
@@ -260,7 +302,10 @@ def test_single_chunk_duration_is_fifty_policy_ticks():
     assert not any(e["event"] == "infer" for e in events)
 
 
-@pytest.mark.parametrize("failure", ["inference_loss", "overrun", "stale_feedback", "operator_stop", "device_reject"])
+@pytest.mark.parametrize(
+    "failure",
+    ["inference_loss", "overrun", "stale_feedback", "operator_stop", "device_reject"],
+)
 def test_control_failure_terminates_without_finishing_or_restarting(failure):
     clock, devices = Clock(), None
     devices = Devices(clock)

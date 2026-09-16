@@ -25,9 +25,11 @@ from experiments.weight_motion_eval.oneshot.qualification import SupervisedTrial
 from experiments.weight_motion_eval.reference import deployment_module
 
 from .consumer import FastConsumer
+from .timeline import ARM_SPEED_RAD_S
 from .timeline import Timeline
 
 ROOT = hardware.ROOT
+GATEWAY_ARM_SPEED_RAD_S = 1.2
 DEFAULT_CHECKPOINT = ROOT / "checkpoints/19999_269/19999"
 
 
@@ -96,11 +98,20 @@ def stream_options(args):
     }
 
 
+def launch_commands(args, output, ipc):
+    commands = hardware.launch_commands(args, output, ipc)
+    if "gateway" in commands:
+        commands["gateway"] += ["--arm-speed-rad-s", str(GATEWAY_ARM_SPEED_RAD_S)]
+    return commands
+
+
 def main(argv=None):
     args = parse_args(argv)
     output = safe_output(args.output)
     output.mkdir(parents=True)
     runtime, limits, _ = hardware.write_runtime(args, output)
+    runtime["arm_speed_rad_s"] = ARM_SPEED_RAD_S
+    (output / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
     settings = {
         "source_hz": 30,
         "control_hz": 100,
@@ -111,7 +122,8 @@ def main(argv=None):
         "options": stream_options(args),
         "initial_approach": "existing bounded quintic approach only",
         "device_limits_inherited": {
-            "arm_speed_rad_s": 0.7,
+            "arm_speed_rad_s": ARM_SPEED_RAD_S,
+            "gateway_arm_speed_ceiling_rad_s": GATEWAY_ARM_SPEED_RAD_S,
             "arm_tracking_rad": ARM_TRACKING_TOLERANCE_RAD,
             "slider_speed_rad_s": SLIDER_SPEED_RAD_S,
             "hand_current_a": SLIDER_CURRENT_A,
@@ -126,7 +138,7 @@ def main(argv=None):
     if not args.execute and not args.read_only:
         preview = copy.copy(args)
         preview.execute, preview.supervised_trial, preview.qualification = True, True, None
-        commands = hardware.launch_commands(preview, output, Path("/tmp/pi05-fast-RUNTIME"))
+        commands = launch_commands(preview, output, Path("/tmp/pi05-fast-RUNTIME"))
         (output / "commands-preview.json").write_text(json.dumps(commands, indent=2) + "\n")
         print(
             json.dumps(
@@ -174,7 +186,7 @@ def main(argv=None):
         ipc = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="pi05-fast-")))
         children = hardware.Children(output)
         stack.callback(children.close)
-        commands = hardware.launch_commands(args, output, ipc)
+        commands = launch_commands(args, output, ipc)
         (output / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
         print("【阶段】启动现有 FR3 网关与 Wuji 设备接口", flush=True)
         for label, command in commands.items():
@@ -185,7 +197,12 @@ def main(argv=None):
             if time.monotonic() >= deadline:
                 raise RuntimeError("Device bridge startup timed out")
             time.sleep(0.1)
-        devices = RemoteDevices(ipc / "devices.sock", execute=args.execute, finish_policy=args.finish_policy)
+        devices = RemoteDevices(
+            ipc / "devices.sock",
+            execute=args.execute,
+            finish_policy=args.finish_policy,
+            arm_speed_rad_s=ARM_SPEED_RAD_S,
+        )
         stack.callback(devices.close)
         consumer = None
         try:

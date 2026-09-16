@@ -16,6 +16,13 @@ import numpy as np
 from .transport import validate_header
 
 
+def checked_gateway_arm_speed(value):
+    value = float(value)
+    if not np.isfinite(value) or not 0 < value <= 1.2:
+        raise argparse.ArgumentTypeError("Gateway arm speed must be positive, finite and at most 1.2 rad/s")
+    return value
+
+
 class ArmBoundary:
     def __init__(self, gate):
         self.gate = gate
@@ -98,6 +105,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("role", choices=("gateway", "splitter"))
     parser.add_argument("--reference", type=Path, default=Path("/workspace/franka_upper_body_teleop"))
+    parser.add_argument("--arm-speed-rad-s", type=checked_gateway_arm_speed, default=0.7)
     args = parser.parse_args()
     sys.path.insert(0, str(args.reference / "ros_ws/src/teleop_core"))
     import rclpy
@@ -124,12 +132,15 @@ def main():
     if params["max_joint_speed"] != 0.7 or params["max_initial_delta"] != 0.05:
         raise ValueError("Reference gateway limits changed")
 
+    params["max_joint_speed"] = args.arm_speed_rad_s
+
     # Pi05 supervised deployment contact thresholds, Nm for each arm.
     params["contact_torque_thresholds"] = [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
 
     class Gateway(Node):
         def __init__(self):
             super().__init__("pi05_oneshot_gateway")
+            self.get_logger().info(f"Pi05 arm speed limit rad/s: {params['max_joint_speed']}")
             self.get_logger().info("Pi05 contact thresholds Nm: " + str(params["contact_torque_thresholds"]))
             self.boundary = ArmBoundary(
                 CommandSafetyGate(
