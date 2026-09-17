@@ -86,15 +86,19 @@ def test_missing_qualification_fails_before_any_hardware_start(tmp_path, monkeyp
         deploy.main(["--execute", "--output", str(tmp_path / "run")])
 
 
-def test_launch_omits_legacy_reset_writer_and_keeps_reference_cpu_layout(tmp_path):
+def test_launch_omits_legacy_reset_writer_and_isolates_latency_sensitive_helpers(tmp_path):
     args = deploy.parse_args(["--execute", "--qualification", str(tmp_path / "qualification.json")])
     commands = deploy.launch_commands(args, tmp_path, tmp_path / "ipc")
     arm = commands["arms"]
     assert arm[arm.index("--cpuset-cpus") + 1] == "8-9,12-13"
     assert "franka_fr3_arm_controllers.launch.py" in " ".join(arm)
     assert "robot_control.launch.py" not in " ".join(arm)
-    for role in ("gateway", "splitter", "devices"):
-        assert commands[role][commands[role].index("--cpuset-cpus") + 1] == "0-7,16-23"
+    for role, expected in deploy.HELPER_CPUSETS.items():
+        assert commands[role][commands[role].index("--cpuset-cpus") + 1] == expected
+    for role in ("gateway", "splitter"):
+        assert commands[role][commands[role].index("--diagnostics") + 1] == str(
+            tmp_path / (role + "-diagnostics.json")
+        )
 
 
 def test_supervised_trial_explicitly_propagates_without_fake_evidence(tmp_path):

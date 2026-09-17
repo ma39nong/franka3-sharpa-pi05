@@ -12,6 +12,8 @@ class HandTrace:
         self.after = deque(maxlen=capacity)
         self.triggered = False
         self.dropped_before = self.dropped_after = 0
+        self.coalesced_before = {"state": 0, "diagnostics": 0}
+        self.coalesced_after = {"state": 0, "diagnostics": 0}
 
     def add(self, event, **values):
         target = self.after if self.triggered else self.before
@@ -26,6 +28,12 @@ class HandTrace:
         if not self.triggered:
             self.add("fault_trigger", reason=str(reason))
             self.triggered = True
+
+    def coalesce(self, *, states=0, diagnostics=0):
+        """Account for healthy frames represented by the newest frame in a poll."""
+        target = self.coalesced_after if self.triggered else self.coalesced_before
+        target["state"] += int(states)
+        target["diagnostics"] += int(diagnostics)
 
     def frame(self, frame, *, diagnostic=False):
         joints = []
@@ -62,8 +70,14 @@ class HandTrace:
                         "identity": identity,
                         "dropped_before": self.dropped_before,
                         "dropped_after": self.dropped_after,
+                        "coalesced_before": self.coalesced_before,
+                        "coalesced_after": self.coalesced_after,
                         "units": {"position": "rad", "velocity": "rad/s", "effort": "A"},
-                        "capture": "all frames returned by SDK recv; no requested stream rate change",
+                        "capture": (
+                            "newest state and diagnostic frame from each healthy poll; all frames from a "
+                            "faulting poll; coalesced counters record omitted healthy frames; no requested "
+                            "stream rate change"
+                        ),
                     }
                 )
                 + "\n"

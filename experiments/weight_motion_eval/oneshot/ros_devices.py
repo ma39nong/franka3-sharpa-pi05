@@ -5,6 +5,7 @@ import time
 import numpy as np
 
 from .core import ARM
+from .devices import HAND_SLICES
 from .transport import ros_header
 
 
@@ -145,20 +146,25 @@ class RosArms:
         if any(self.node.count_subscribers(c.CONTROLLER_COMMAND_TOPIC.format(side=s)) != 1 for s in ("left", "right")):
             raise RuntimeError("Expected one final arm controller on each side")
 
-    def publish_hands(self, hands):
+    def publish_hands(self, hands, feedback=None):
         now = time.monotonic()
         publish_now = now - self.last_hand_publish >= 0.01
         if not publish_now:
             return
         for side, hand in hands.items():
-            try:
-                q, dq, stamp = hand.poll(time.monotonic(), time.time())
-            except ValueError as error:
-                self.hand_feedback_errors[side] = str(error)
-                continue  # Do not publish missing or stale values with a new stamp.
+            if feedback is None:
+                try:
+                    q, dq, stamp = hand.poll(time.monotonic(), time.time())
+                except ValueError as error:
+                    self.hand_feedback_errors[side] = str(error)
+                    continue  # Do not publish missing or stale values with a new stamp.
+            else:
+                section = HAND_SLICES[side]
+                source_index = 1 if side == "left" else 3
+                q = feedback.positions[section]
+                dq = feedback.velocities[section]
+                stamp = feedback.source_times[source_index]
             self.hand_feedback_errors.pop(side, None)
-            if not publish_now:
-                continue
             message = self.JointState()
             wall_stamp = int((time.time() - (time.monotonic() - stamp)) * 1e9)
             message.header.stamp.sec, message.header.stamp.nanosec = divmod(wall_stamp, 1_000_000_000)

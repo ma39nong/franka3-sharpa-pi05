@@ -6,6 +6,7 @@ splitter must not be running alongside these nodes.
 
 import argparse
 import copy
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import sys
@@ -14,6 +15,8 @@ import time
 import numpy as np
 
 from .transport import validate_header
+from .loop_diagnostics import LoopDiagnostics
+from .motion_gc import MotionGC
 
 
 def checked_gateway_arm_speed(value):
@@ -106,6 +109,7 @@ def main():
     parser.add_argument("role", choices=("gateway", "splitter"))
     parser.add_argument("--reference", type=Path, default=Path("/workspace/franka_upper_body_teleop"))
     parser.add_argument("--arm-speed-rad-s", type=checked_gateway_arm_speed, default=0.7)
+    parser.add_argument("--diagnostics", type=Path)
     args = parser.parse_args()
     sys.path.insert(0, str(args.reference / "ros_ws/src/teleop_core"))
     import rclpy
@@ -136,6 +140,11 @@ def main():
 
     # Pi05 supervised deployment contact thresholds, Nm for each arm.
     params["contact_torque_thresholds"] = [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+
+    diagnostics = LoopDiagnostics() if args.diagnostics is not None else None
+    if diagnostics is not None:
+        diagnostics.start()
+    measure = diagnostics.measure if diagnostics is not None else lambda *args, **kwargs: nullcontext()
 
     class Gateway(Node):
         def __init__(self):
@@ -198,6 +207,19 @@ def main():
                 (self.torques if torque else self.states).pop(side, None)
 
         def command(self, msg):
+            created = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+            receive_ms = (time.time_ns() - created) / 1_000_000
+            if diagnostics is not None and receive_ms >= 5:
+                diagnostics.add({
+                    "event": "late_command_delivery",
+                    "at": time.monotonic(),
+                    "sequence": int(msg.sequence),
+                    "receive_ms": receive_ms,
+                })
+            with measure("gateway_command"):
+                self.process_command(msg)
+
+        def process_command(self, msg):
             status = ArmCommandStatus()
             status.header = copy.deepcopy(msg.header)
             status.source, status.session_id, status.sequence = msg.source, msg.session_id, msg.sequence
@@ -246,6 +268,18 @@ def main():
             self.fault = False
 
         def command(self, msg):
+            created = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+            receive_ms = (time.time_ns() - created) / 1_000_000
+            if diagnostics is not None and receive_ms >= 5:
+                diagnostics.add({
+                    "event": "late_command_delivery",
+                    "at": time.monotonic(),
+                    "receive_ms": receive_ms,
+                })
+            with measure("splitter_command"):
+                self.process_command(msg)
+
+        def process_command(self, msg):
             if self.fault:
                 return
             try:
@@ -274,6 +308,8 @@ def main():
 
     rclpy.init()
     node = Gateway() if args.role == "gateway" else Splitter()
+    motion_gc = MotionGC()
+    motion_gc.begin()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
@@ -283,6 +319,9 @@ def main():
             raise
     finally:
         node.destroy_node()
+        if diagnostics is not None:
+            diagnostics.close(args.diagnostics)
+        motion_gc.end()
         if rclpy.ok():
             rclpy.shutdown()
 

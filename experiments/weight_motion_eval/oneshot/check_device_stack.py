@@ -157,7 +157,10 @@ def container_main(ipc):
             conn, _ = server.accept()
             with conn:
                 serve_connection(
-                    conn, session, stopping=done.is_set, pump=lambda: (arms.spin(), arms.publish_hands(hands))
+                    conn,
+                    session,
+                    stopping=done.is_set,
+                    pump=lambda feedback=None: (arms.spin(), arms.publish_hands(hands, feedback=feedback)),
                 )
     finally:
         if session:

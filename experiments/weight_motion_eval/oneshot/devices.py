@@ -43,6 +43,10 @@ class DeviceSession:
         self.last_health_check = 0.0
         self.cancel_requested = lambda: False
         self.feedback_timings = {}
+        # The bridge may publish the just-validated hand samples after replying
+        # to a submit.  Keep the object, rather than draining the SDK queues a
+        # second time on the same 100 Hz tick.
+        self.latest_feedback = None
 
     def feedback(self):
         now = self.clock()
@@ -85,6 +89,7 @@ class DeviceSession:
             feedback = replace(feedback, hand_targets_reached=False)
         feedback.check(self.clock(), 0)
         self.last_health_check = self.clock()
+        self.latest_feedback = feedback
         return feedback
 
     def prepare(self, run_id, plan_hash, start, finish_policy):

@@ -24,6 +24,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = Path("/home/user/lpy/gello-retarget")
+CAMERA_WARMUP_SECONDS = 18
 IMAGE = "franka-upper-body-teleop:latest"
 
 
@@ -304,7 +305,7 @@ def main(argv=None, *, consumer=None, single_shot=False):
                     raise RuntimeError(f"No synchronized observation within 95s: {dict(rejected)}, {last_invalid}")
                 if measurement_start is not None and now - measurement_start >= args.duration:
                     break
-                if args.start_cameras and now - started < 35:
+                if args.start_cameras and now - started < CAMERA_WARMUP_SECONDS:
                     time.sleep(0.02)
                     continue
                 if consumer is not None and hasattr(consumer, "poll"):

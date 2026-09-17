@@ -87,6 +87,16 @@ class CheckedPolicy:
         return result
 
 
+def full_finetune_model(model):
+    """Return the 64D full-finetune architecture without LoRA branches."""
+    return dataclasses.replace(
+        model,
+        action_dim=64,
+        paligemma_variant='gemma_2b',
+        action_expert_variant='gemma_300m',
+    )
+
+
 def checkpoint_contract(checkpoint):
     checkpoint, stats_file = check_checkpoint(checkpoint)
     def digest_file(path):
@@ -105,13 +115,18 @@ def checkpoint_contract(checkpoint):
     }, stats_file
 
 
-def create_policy(checkpoint, stats_file, prompt):
+def create_policy(checkpoint, stats_file, prompt, *, full_finetune=False):
     from openpi.training import config, checkpoints
     from openpi.policies import policy_config
     base = config.get_config('pi05_fr3_wuji')
+    model = dataclasses.replace(base.model, action_dim=64)
+    if full_finetune:
+        # Full fine-tuning updates the original Gemma matrices, so these
+        # checkpoints do not contain lora_a/lora_b parameter branches.
+        model = full_finetune_model(base.model)
     adapted = dataclasses.replace(
         base, name='pi05_fr3_wuji_30000_64to54',
-        model=dataclasses.replace(base.model, action_dim=64),
+        model=model,
         data=AdaptData(base.data),
     )
     stats = checkpoints.load_norm_stats(
@@ -120,6 +135,11 @@ def create_policy(checkpoint, stats_file, prompt):
         adapted, checkpoint, norm_stats=stats, default_prompt=prompt)
     # Unnormalize 64D absolute positions, reorder to the hardware contract, discard padding.
     metadata, _ = checkpoint_contract(checkpoint)
+    metadata.update(
+        model_finetune_mode='full' if full_finetune else 'lora',
+        paligemma_variant=model.paligemma_variant,
+        action_expert_variant=model.action_expert_variant,
+    )
     return CheckedPolicy(policy, metadata)
 
 
@@ -129,6 +149,10 @@ def main():
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8002)
     parser.add_argument('--prompt', default=PROMPT)
+    parser.add_argument(
+        '--full-finetune', action='store_true',
+        help='Load original Gemma parameter trees without LoRA branches',
+    )
     parser.add_argument('--check-only', action='store_true')
     parser.add_argument('--smoke-only', action='store_true', help='Load and infer fake observations; never serve or connect hardware')
     args = parser.parse_args()
@@ -141,7 +165,7 @@ def main():
     import jax
     if not any(d.platform == 'gpu' for d in jax.devices()):
         raise RuntimeError('CUDA GPU required')
-    policy = create_policy(checkpoint, stats_file, args.prompt)
+    policy = create_policy(checkpoint, stats_file, args.prompt, full_finetune=args.full_finetune)
     obs = {'observation/state': np.zeros(54, np.float32), 'prompt': args.prompt}
     for key in ('observation/image', 'observation/left_wrist_image', 'observation/right_wrist_image'):
         obs[key] = np.zeros((224, 224, 3), np.uint8)

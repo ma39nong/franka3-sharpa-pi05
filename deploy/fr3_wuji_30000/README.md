@@ -2,6 +2,8 @@
 
 默认权重 `checkpoints/30000`，服务地址 `ws://127.0.0.1:8002`。模型维度64、动作块50步，使用 checkpoint 自带 `assets/0909_125/norm_stats.json`。不修改19999服务、训练配置、权重、设备接口或限位。
 
+`checkpoints/30000v2` 是全量微调权重，可通过本目录的独立快速入口运行。`serve_v2.sh` 使用无LoRA分支的 `gemma_2b` 和 `gemma_300m` 参数结构；快速入口只在自身进程内将模型契约替换为64维到54维适配器。原有19999快速入口、30000慢速入口及其LoRA默认结构均不变。
+
 ## 数据约定（adapter_revision=2）
 
 外部状态和动作按：左臂7、左手20、右臂7、右手20，单位弧度。
@@ -37,6 +39,31 @@ bash deploy/fr3_wuji_30000/execute.sh \
 ```
 
 该执行命令会启动真实硬件。执行器复用19999当前的慢速规划及设备下发实现，仅在专用入口进程中替换模型契约；不更改旧部署文件。它仍是慢速模式，不是官方RTG快速部署。已有初始偏差、关节限位、速度、反馈和通信保护仍可能拒绝模型预测。
+
+## 30000v2 正常速度部署
+
+先在终端1启动30000v2模型服务：
+
+```bash
+bash /home/user/lpy/Pi05/deploy/fr3_wuji_30000/serve_v2.sh
+```
+
+看到 `Warmup OK: actions=(50, 54)` 和服务监听提示后，在终端2先执行一轮现场测试：
+
+```bash
+bash /home/user/lpy/Pi05/deploy/fr3_wuji_30000/fast.sh \
+  --execute --supervised-trial --start-cameras \
+  --rounds 1 --finish-policy disable
+```
+
+确认现场行为后，可将 `--rounds 1` 改为需要的轮数，例如 `--rounds 50`。该入口使用现有正常速度链路：模型动作30Hz、控制插值100Hz、双臂目标限速1.0rad/s、网关判定上限1.2rad/s。30000专用的首帧接近准入上限为1.5rad，初始动作仍从实测姿态通过受速度、加速度和jerk约束的接近轨迹完成；19999快速入口继续使用0.3rad。动作仍须通过关节范围、跟踪误差、反馈和通信检查。
+
+只做离线配置检查、不连接模型或真机：
+
+```bash
+bash /home/user/lpy/Pi05/deploy/fr3_wuji_30000/serve_v2.sh --check-only
+bash /home/user/lpy/Pi05/deploy/fr3_wuji_30000/fast.sh --check
+```
 
 ## 验证
 

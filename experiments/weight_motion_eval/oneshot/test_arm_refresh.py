@@ -52,6 +52,45 @@ def test_runtime_feedback_expiry_remains_immediate(monkeypatch):
         arms.feedback(clock.now)
 
 
+def test_hand_publication_reuses_validated_feedback_without_sdk_poll(monkeypatch):
+    arms, clock = owner(monkeypatch)
+    arms.last_hand_publish = 0
+    arms.hand_feedback_errors = {"left": "old transient"}
+    arms.contract = SimpleNamespace(
+        WUJI_LEFT_JOINT_NAMES=tuple("l" + str(i) for i in range(20)),
+        WUJI_RIGHT_JOINT_NAMES=tuple("r" + str(i) for i in range(20)),
+    )
+
+    class JointState:
+        def __init__(self):
+            self.header = SimpleNamespace(stamp=SimpleNamespace(sec=0, nanosec=0))
+            self.name = self.position = self.velocity = None
+
+    published = {"left": [], "right": []}
+    arms.JointState = JointState
+    arms.hand_outputs = {
+        side: SimpleNamespace(publish=lambda message, side=side: published[side].append(message))
+        for side in ("left", "right")
+    }
+    hands = {
+        side: SimpleNamespace(poll=lambda *args: (_ for _ in ()).throw(AssertionError("duplicate SDK poll")))
+        for side in ("left", "right")
+    }
+    feedback = SimpleNamespace(
+        positions=np.arange(54, dtype=float),
+        velocities=np.arange(54, dtype=float) * -1,
+        source_times=(9.8, 9.9, 9.8, 9.95),
+    )
+
+    arms.publish_hands(hands, feedback=feedback)
+
+    assert published["left"][0].position == list(np.arange(7, 27, dtype=float))
+    assert published["right"][0].position == list(np.arange(34, 54, dtype=float))
+    assert published["left"][0].header.stamp.sec == 109
+    assert published["left"][0].header.stamp.nanosec == 900_000_000
+    assert not arms.hand_feedback_errors
+
+
 def test_refresh_cancellation_and_clock_fault_do_not_retry(monkeypatch):
     arms, clock = owner(monkeypatch)
     arms.spin = lambda budget: None

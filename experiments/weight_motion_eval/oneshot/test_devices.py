@@ -209,7 +209,7 @@ def test_real_ipc_disconnect_stops_the_device_owner():
     def server():
         try:
             with right:
-                serve_connection(right, session, stopping=finished.is_set, pump=lambda: None)
+                serve_connection(right, session, stopping=finished.is_set, pump=lambda *_: None)
         finally:
             finished.set()
 
@@ -435,10 +435,82 @@ def test_bridge_keeps_first_watchdog_fault(monkeypatch):
         def sendall(self, data):
             self.sent = json.loads(data)
     conn = Socket()
-    serve_connection(conn, session, stopping=lambda: conn.sent is not None, pump=lambda: None)
+    serve_connection(conn, session, stopping=lambda: conn.sent is not None, pump=lambda *_: None)
     assert session.state == "stopped"
     assert "watchdog" in session.fault
     assert not conn.sent["ok"]
+
+
+@pytest.mark.parametrize(("reply_ms", "queued", "publishes"),
+                         [(3, False, True), (5, False, False), (3, True, False)])
+def test_bridge_publishes_only_after_reply_with_headroom(monkeypatch, reply_ms, queued, publishes):
+    from experiments.weight_motion_eval.oneshot import bridge
+    from .ipc import wire_frame
+    session = make_session()
+    prepare(session)
+    events, receives = [], []
+
+    def receive_request(conn):
+        receives.append(True)
+        if len(receives) == 1:
+            return {"id": 1, "operation": "submit", "frame": wire_frame(frame())}
+        raise TimeoutError()
+
+    def send(data):
+        assert json.loads(data)["ok"]
+        events.append("reply")
+        session.clock.now = 10 + reply_ms / 1000
+
+    conn = SimpleNamespace(settimeout=lambda value: None, sendall=send)
+    monkeypatch.setattr(bridge, "receive", receive_request)
+    monkeypatch.setattr(bridge.select, "select", lambda *args: ([conn] if queued else [], [], []))
+
+    def pump(feedback):
+        assert events == ["reply"]
+        assert feedback is session.latest_feedback
+        events.append("publish")
+        session.clock.now += 0.00523  # Actual slow burst from the failed run.
+
+    serve_connection(conn, session, stopping=lambda: len(receives) == 2, pump=pump)
+    assert events == (["reply", "publish"] if publishes else ["reply"])
+    assert session.state == "armed"
+    assert session.clock() < 10.01
+
+
+@pytest.mark.parametrize("elapsed", [0.008, 0.021])
+def test_armed_idle_timeout_skips_telemetry_but_keeps_watchdog(monkeypatch, elapsed):
+    from experiments.weight_motion_eval.oneshot import bridge
+    session = make_session()
+    prepare(session)
+    session.submit(frame())
+    received, published = [], []
+
+    def timeout(conn):
+        received.append(True)
+        session.clock.now = 10 + elapsed
+        raise TimeoutError()
+
+    monkeypatch.setattr(bridge, "receive", timeout)
+    conn = SimpleNamespace(settimeout=lambda value: None)
+    serve_connection(conn, session, stopping=lambda: bool(received), pump=lambda: published.append(True))
+    if elapsed < 0.02:
+        assert not published
+        assert session.state == "armed"
+    else:
+        assert session.state == "stopped"
+        assert "watchdog" in session.fault
+
+
+def test_readonly_idle_still_publishes_observations(monkeypatch):
+    from experiments.weight_motion_eval.oneshot import bridge
+    session = make_session()
+    published = []
+    def timeout(conn):
+        raise TimeoutError()
+    monkeypatch.setattr(bridge, "receive", timeout)
+    serve_connection(SimpleNamespace(settimeout=lambda value: None), session,
+                     stopping=lambda: bool(published), pump=lambda: published.append(True))
+    assert session.state == "readonly"
 
 
 @pytest.mark.parametrize("joint", [7, 40])

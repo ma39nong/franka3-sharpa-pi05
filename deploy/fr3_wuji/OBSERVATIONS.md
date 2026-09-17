@@ -30,7 +30,7 @@ bash deploy/fr3_wuji/run.sh deploy/fr3_wuji/observe.py \
 
 - `direct` 双臂使用 `libfranka::Robot::read`，以 100 Hz 转发读取结果；不调用 control、错误恢复或参数设置。
 - `sdk` 双手直接连接既有 Conda 环境中的 Wuji SDK，验证左右身份和 20 个在线关节，只读取/订阅，不实例化会使能或禁用电机的遥操后端。
-- `--start-cameras` 只启动原有三相机入口，预热至少 35 秒，之后仍必须通过真实数据检查。
+- `--start-cameras` 只启动原有三相机入口，固定预热 18 秒，之后仍必须通过真实数据检查。
 - 已有遥操控制器、手部 SDK 所有者或 Viewer 时，不要另开直接连接；使用现有只读话题。入口会检查常见占用，但不能识别任意外部程序或防止其他程序在检查后抢占设备。
 - 默认使用本机既有 Humble 镜像、ROS domain 0 和 Cyclone DDS。本机硬件身份来自只读参考配置；这不是跨机器自动发现工具。
 

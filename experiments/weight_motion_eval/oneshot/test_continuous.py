@@ -126,7 +126,7 @@ def test_submission_overrun_still_stops_without_burst():
 
     def slow(frame, now):
         result = original(frame, now)
-        clock.now += 0.011
+        clock.now += 0.013
         return result
 
     devices.submit = slow
@@ -143,6 +143,109 @@ def test_submission_overrun_still_stops_without_burst():
             sleep=clock.sleep,
         )
     assert len(devices.frames) == 1
+
+
+@pytest.mark.parametrize("elapsed", [0.010357, 0.011143, 0.012])
+def test_isolated_acknowledged_overrun_continues_without_catchup_burst(elapsed):
+    clock, events = Clock(), []
+    devices = Devices(clock)
+    original = devices.submit
+
+    def slow_once(frame, now):
+        result = original(frame, now)
+        if frame.sequence == 5:
+            clock.now += elapsed
+        return result
+
+    devices.submit = slow_once
+    control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
+                 lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    warnings = [e for e in events if e["event"] == "control_tick_overrun"]
+    assert len(warnings) == 1
+    assert warnings[0]["overrun_ms"] == pytest.approx((elapsed - 0.01) * 1000)
+    assert devices.finishes == 1
+    assert [f.sequence for f in devices.frames] == list(range(len(devices.frames)))
+    assert np.min(np.diff([f.created for f in devices.frames])) >= 0.01 - 1e-9
+    assert max(f.valid_until - f.created for f in devices.frames) <= 0.02 + 1e-9
+
+
+@pytest.mark.parametrize(("slow_frames", "stop_count", "warning_count"),
+                         [(set(range(3)), 3, 2), (set(range(0, 11, 2)), 11, 5)])
+def test_repeated_small_overruns_stop(slow_frames, stop_count, warning_count):
+    clock, events = Clock(), []
+    devices = Devices(clock)
+    original = devices.submit
+
+    def slow(frame, now):
+        result = original(frame, now)
+        if frame.sequence in slow_frames:
+            clock.now += 0.010357
+        return result
+
+    devices.submit = slow
+    with pytest.raises(RuntimeError, match="Repeated control tick overruns"):
+        control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
+                     lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    assert len(devices.frames) == stop_count
+    assert sum(e["event"] == "control_tick_overrun" for e in events) == warning_count
+    assert devices.finishes == 0
+
+
+def test_overrun_rate_window_expires_and_accounts_for_post_submit_work():
+    clock, events = Clock(), []
+    devices = Devices(clock)
+
+    def delayed_record(frame, feedback):
+        if frame.sequence in {0, 2, 4, 6, 8, 120}:
+            clock.now += 0.010357
+
+    control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
+                 delayed_record, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    warnings = [e for e in events if e["event"] == "control_tick_overrun"]
+    assert len(warnings) == 6
+    assert warnings[-1]["in_last_second"] == 1
+    assert devices.finishes == 1
+
+
+@pytest.mark.parametrize("fault", ["expired", "stale", "timeout", "missing"])
+def test_jitter_grace_never_recovers_expired_unhealthy_or_unconfirmed_submit(fault):
+    clock, events = Clock(), []
+    devices = Devices(clock)
+    original = devices.submit
+
+    def broken(frame, now):
+        result = original(frame, now)
+        clock.now += 0.0201 if fault == "expired" else 0.010357
+        if fault == "timeout":
+            raise TimeoutError("unconfirmed submit")
+        if fault == "missing":
+            return None
+        if fault == "stale":
+            return replace(result, source_times=(now - 0.2,) * 4)
+        return result
+
+    devices.submit = broken
+    with pytest.raises((RuntimeError, ValueError, TimeoutError),
+                       match="frame deadline|stale|unconfirmed submit|lacks submission feedback"):
+        control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
+                     lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    assert len(devices.frames) == 1
+    assert not any(e["event"] == "control_tick_overrun" for e in events)
+
+
+def test_parent_records_and_prints_timing_warning_without_failing(capsys):
+    from types import SimpleNamespace
+    from .continuous import ContinuousConsumer
+    consumer = ContinuousConsumer.__new__(ContinuousConsumer)
+    consumer.status, consumer.report, recorded = queue.Queue(), {}, []
+    consumer.process = None
+    consumer.recorder = SimpleNamespace(event=recorded.append)
+    event = {"event": "control_tick_overrun", "round": 7, "sequence": 5323, "overrun_ms": 0.357}
+    consumer.status.put(event)
+    consumer.poll()
+    assert recorded == [event]
+    assert consumer.report["control_tick_overrun_count"] == 1
+    assert "0.357 ms" in capsys.readouterr().out
 
 
 def test_device_rollover_rejects_stopped_sessions_and_superseded_frames():

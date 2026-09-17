@@ -89,7 +89,7 @@ def test_spawned_rtg_worker_uses_original_device_session_and_releases(tmp_path):
     def bridge():
         try:
             with right:
-                serve_connection(right, session, stopping=done.is_set, pump=lambda: None)
+                serve_connection(right, session, stopping=done.is_set, pump=lambda *_: None)
         finally:
             done.set()
 
@@ -172,7 +172,7 @@ def test_disconnect_after_first_frame_stops_original_session():
 
     def bridge():
         with right:
-            serve_connection(right, session, stopping=done.is_set, pump=lambda: None)
+            serve_connection(right, session, stopping=done.is_set, pump=lambda *_: None)
         done.set()
 
     server = threading.Thread(target=bridge, daemon=True)

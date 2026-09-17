@@ -35,6 +35,15 @@ REFERENCE = Path("/home/user/lpy/gello-retarget")
 SDK = Path("/home/user/miniconda3/envs/gello-upper-body-teleop/lib/python3.10/site-packages")
 OVERLAY = ROOT / ".deployment/oneshot-overlay"
 
+# Keep the three latency-sensitive Python/ROS boundaries off one another and
+# off the host-side control/observation processes. CPUs 8-15 remain reserved
+# for the Franka controller container.
+HELPER_CPUSETS = {
+    "gateway": "2-3",
+    "splitter": "4-5",
+    "devices": "6-7,16-19",
+}
+
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
@@ -133,7 +142,7 @@ def write_runtime(args, output):
     return runtime, limits, names
 
 
-def docker_command(name, output, ipc, command, *, controller=False, sdk=False):
+def docker_command(name, output, ipc, command, *, controller=False, sdk=False, cpuset=None):
     # Match reference compose: DDS only on loopback; keep SDK/ROS helpers off FCI CPUs.
     args = [
         "docker",
@@ -146,7 +155,7 @@ def docker_command(name, output, ipc, command, *, controller=False, sdk=False):
         "--ipc",
         "host",
         "--cpuset-cpus",
-        "8-9,12-13" if controller else "0-7,16-23",
+        cpuset or ("8-9,12-13" if controller else "0-7,16-23"),
         "-v",
         f"{REFERENCE}:/workspace/franka_upper_body_teleop:ro",
         "-v",
@@ -219,7 +228,15 @@ def launch_commands(args, output, ipc):
                 prefix + "-" + role,
                 output,
                 ipc,
-                ["python3", "-m", "experiments.weight_motion_eval.oneshot.ros_boundary", role],
+                [
+                    "python3",
+                    "-m",
+                    "experiments.weight_motion_eval.oneshot.ros_boundary",
+                    role,
+                    "--diagnostics",
+                    str(output / (role + "-diagnostics.json")),
+                ],
+                cpuset=HELPER_CPUSETS[role],
             )
     bridge = [
         "python3",
@@ -235,7 +252,9 @@ def launch_commands(args, output, ipc):
         bridge += (
             ["--supervised-trial"] if args.supervised_trial else ["--qualification", str(args.qualification.resolve())]
         )
-    commands["devices"] = docker_command(prefix + "-devices", output, ipc, bridge, sdk=True)
+    commands["devices"] = docker_command(
+        prefix + "-devices", output, ipc, bridge, sdk=True, cpuset=HELPER_CPUSETS["devices"]
+    )
     if args.execute and not args.supervised_trial:
         index = commands["devices"].index("franka-upper-body-teleop:latest")
         directory = args.qualification.resolve().parent
@@ -463,7 +482,12 @@ def main(argv=None):
                 ]
                 if args.start_cameras:
                     options += ["--start-cameras", "--camera-profile", "rgb"]
-                print("【阶段】启动实时观测" + ("，等待相机稳定 35 秒" if args.start_cameras else ""), flush=True)
+                camera_wait = getattr(observe, "CAMERA_WARMUP_SECONDS", 18)
+                print(
+                    "【阶段】启动实时观测"
+                    + (f"，等待相机稳定 {camera_wait} 秒" if args.start_cameras else ""),
+                    flush=True,
+                )
                 observe.main(options, consumer=consumer, single_shot=True)
                 if consumer.completed != 1:
                     raise RuntimeError("No fresh inference was admitted")

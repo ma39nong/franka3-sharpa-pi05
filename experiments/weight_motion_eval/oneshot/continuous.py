@@ -5,6 +5,7 @@ Model inference, spline planning and artifact writes stay in the parent. The
 motion process keeps the same gateway session/sequence across all chunks.
 """
 
+from collections import deque
 from dataclasses import asdict
 from dataclasses import replace
 import json
@@ -23,6 +24,12 @@ from .core import OneShot
 from .ipc import RemoteDevices
 from .ipc import wire_feedback
 from .live import LiveConsumer
+
+CONTROL_TICK_SECONDS = 0.01
+CONTROL_OVERRUN_GRACE_SECONDS = 0.002
+CONTROL_OVERRUN_CONSECUTIVE_LIMIT = 3
+CONTROL_OVERRUN_WINDOW_SECONDS = 1.0
+CONTROL_OVERRUN_WINDOW_LIMIT = 5
 
 
 class StopFlag:
@@ -73,6 +80,7 @@ def control_loop(
     player.start(fb, clock())
     notify({"event": "stage", "stage": "第 1 轮归位：慢速移到模型第一帧"})
     due, last, waiting_since, last_status = clock(), None, None, 0.0
+    recent_overruns, consecutive_overruns = deque(), 0
     while not stopping():
         now = clock()
         if now < due:
@@ -165,9 +173,35 @@ def control_loop(
                 }
             )
             last_status = now
-        due += 0.01
-        if clock() > due:
-            raise RuntimeError(f"Control submission exceeded 100 Hz tick: overrun_ms={(clock() - due) * 1000:.3f}")
+        due += CONTROL_TICK_SECONDS
+        finished = clock()
+        overrun = finished - due
+        if overrun > 1e-9:
+            # submit must have returned successfully. Never turn an expired
+            # command or unhealthy feedback into a scheduling-only warning.
+            if finished >= frame.valid_until:
+                raise RuntimeError("Control submission exceeded frame deadline")
+            fb.check(finished, fb.epoch)
+            if overrun > CONTROL_OVERRUN_GRACE_SECONDS + 1e-9:
+                raise RuntimeError(f"Control submission exceeded 100 Hz tick: overrun_ms={overrun * 1000:.3f}; "
+                                   f"grace_ms={CONTROL_OVERRUN_GRACE_SECONDS * 1000:.3f}")
+            consecutive_overruns += 1
+            while recent_overruns and finished - recent_overruns[0] >= CONTROL_OVERRUN_WINDOW_SECONDS:
+                recent_overruns.popleft()
+            recent_overruns.append(finished)
+            if (consecutive_overruns >= CONTROL_OVERRUN_CONSECUTIVE_LIMIT
+                    or len(recent_overruns) > CONTROL_OVERRUN_WINDOW_LIMIT):
+                raise RuntimeError("Repeated control tick overruns: "
+                                   f"consecutive={consecutive_overruns}, in_last_second={len(recent_overruns)}")
+            # Rebase the schedule: do not replay missed ticks or shorten the
+            # next start-to-start interval to catch up. Frame expiry is unchanged.
+            due = max(finished, frame.created + CONTROL_TICK_SECONDS)
+            notify({"event": "control_tick_overrun", "round": round_number,
+                    "sequence": frame.sequence, "overrun_ms": overrun * 1000,
+                    "consecutive": consecutive_overruns, "in_last_second": len(recent_overruns),
+                    "next_due": due})
+        else:
+            consecutive_overruns = 0
     raise RuntimeError("Continuous execution cancelled")
 
 
@@ -250,6 +284,12 @@ class ContinuousConsumer(LiveConsumer):
             except queue.Empty:
                 break
             kind = event["event"]
+            if kind == "control_tick_overrun":
+                self.recorder.event(event)
+                self.report["control_tick_overrun_count"] = self.report.get("control_tick_overrun_count", 0) + 1
+                print(f"【阶段】【周期警告】第 {event['round']} 轮，帧 {event['sequence']}："
+                      f"已确认提交，周期超时 {event['overrun_ms']:.3f} ms，调整调度后继续", flush=True)
+                continue
             if kind == "stage":
                 self.report["stage"] = event["stage"]
                 print("【阶段】" + event["stage"], flush=True)

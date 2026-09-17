@@ -198,7 +198,7 @@ bash experiments/weight_motion_eval/oneshot/run.sh --execute \
 
 正常部署启动命令不变。退出时新增 `hand-raw-left.jsonl`、`hand-raw-right.jsonl`：在 SDK `recv()` 边界记录所有读到的状态帧，而非只保留最后一帧。每帧保留设备微秒时间戳、序号、主机接收时间、nid、位置、速度、电流；诊断帧保留故障码、状态和位置/速度/电流限位标志。指令区分尝试发送与 SDK send 返回，并保存请求目标、限幅后目标及 velocity/effort 字段；send 返回不代表电机已经执行。元数据保存固件身份、MIT 参数与电流上限。
 
-采集不改设备推送频率，也不滤除实测超速。内存环形缓冲保留最近 20000 条事件/手；触发停机后冻结前段，继续只读采集 2 秒。计数上限导致的丢弃会写入元数据。这是 SDK 返回帧的原始记录，不是总线抓包；SDK 内部丢帧仍可能存在。运动期间不做文件写入，正常清理阶段落盘，SIGKILL/断电可能丢失缓冲；`device-exit.json.trace_errors` 记录写入失败。
+采集不改设备推送频率，也不滤除实测超速。为避免原始帧逐条转字典挤占 100 Hz 控制预算，健康 poll 记录该批最新 state/diagnostics，并在元数据 `coalesced_before/after` 统计同批省略帧；每个 diagnostics 帧仍同步执行固件故障检查，发生异常的 poll 会完整保留该批全部帧。内存环形缓冲保留最近 20000 条事件/手；触发停机后冻结前段，继续只读采集 2 秒。计数上限导致的丢弃会写入元数据。这是 SDK 返回帧的采样记录，不是总线抓包；SDK 内部丢帧仍可能存在。运动期间不做文件写入，正常清理阶段落盘，SIGKILL/断电可能丢失缓冲；`device-exit.json.trace_errors` 记录写入失败。
 
 独立单关节入口不需要模型服务、相机或机械臂控制器。先停止占用手 SDK 的遥操/部署进程。默认只读采集所选手 3 秒，不改变使能、增益或故障状态：
 
@@ -307,6 +307,18 @@ GC 次数/耗时。GC 耗时包含在所在阶段中，不能重复相加；不�
 提示 GC 值得排查，但不能证明真机 38ms 卡顿就是 GC。145 项离线测试通过，3 项 socket/进程测试
 本次未运行；未启动真机，下一次运行用上述分段数据确定瓶颈。
 
+2026-09-17 100 Hz 通讯路径减负：成功 submit 后的 ROS 手部观测直接复用该 submit 内刚通过新鲜度、
+限位与固件诊断检查的反馈，不再对左右手 SDK 队列做第二次 poll。健康 poll 仍逐帧检查全部 diagnostics，
+但飞行记录仅将该批最新 state/diagnostics 转成 Python 事件；同批省略量写入 coalesced 元数据，发生异常
+的 poll 仍完整记录该批全部帧。10 ms 周期、2 ms 单次宽限、连续/窗口超限停机和设备 watchdog 不变。
+
+2026-09-17 ROS 回执路径隔离：deployment-bd96b71d92 的 1969 个成功帧回执 P50/P99/最大值为
+2.66/4.18/5.51ms，随后 sequence=1969 在 2.17ms 发布臂指令、2.38ms 发送双手后直到原 20ms 截止
+仍没有 gateway status。为消除 Python 边界进程的偶发调度暂停，gateway、splitter、devices 和宿主
+控制/观测进程使用互不重叠的 CPU 组；gateway/splitter 在进入 ROS spin 前完成一次 GC 并在有限运动
+会话内关闭自动循环 GC。新增 gateway-diagnostics.json/splitter-diagnostics.json，记录超过 5ms 的消息
+到达延迟和超过 2ms 的回调。20ms 帧寿命、10ms 周期以及所有拒绝/停机条件不变。
+
 2026-09-12：针对 left_arm 首帧偏差 0.200486 rad 的规划拒绝，机械臂 raw initial delta 准入阈值及配置校验上限由 0.2 调整为 0.21 rad。慢速接近、关节硬限位、速度、电流、跟踪和过期检查不变；这是规划准入调整，不是通信超时修复。离线验证 0.200486/0.21 可规划，0.210001 拒绝。
 
 2026-09-12 全循环诊断与 CPU 采样：保留已有手部细分计时；loop-diagnostics.json 新增 IPC 收发、
@@ -371,6 +383,12 @@ soft_limited_indices 和 soft_limits，手部原始记录新增 stall_soft_limit
 
 原始预测保留在 `inference.npz`；`plan.npz` 的 `raw_actions` 是投影后的执行前缀，`plan/report.json` 的 `hand_prediction_projection` 记录调整数量、最大幅度和示例，事件记录增加 `hand_prediction_projected`。不修改实测/起始姿态、不投影机械臂、不改关节范围、SDK限速或设备故障处理。单轮与strict模式默认不启用。
 
+
+## 控制周期中的观测发布
+
+连续部署对已经成功提交并返回有效反馈的偶发周期超时，允许最多2ms余量（10ms周期的截止时刻之后）。警告写入`events.jsonl`的`control_tick_overrun`，报告累计`control_tick_overrun_count`。连续第3次或滚动1秒内第6次超时停止；超过2ms立即停止。超时后重新安排下一周期，不补发遗漏周期，不通过缩短下一次帧创建间隔来追赶。仍检查原20ms指令有效期及反馈健康/时效；通信超时、拒绝提交、缺失反馈和设备故障均不能进入容忍路径。此规则只针对连续控制循环。
+
+设备进程在armed状态仅于成功回复submit后、距该帧创建后10ms的时刻至少剩余6ms且无排队请求时发布手部观测。运行中socket空闲超时仍检查反馈和看门狗，但不启动观测发布，避免下一帧到来前的后台工作阻塞指令。只读和holding状态保留空闲发布。6ms是后台任务调度余量，不改变100Hz循环、20ms指令有效期或反馈时效检查；系统严重调度延迟仍会停机。持续忙碌导致观测不足时不会伪造时间戳或放宽新鲜度条件。
 
 ## 当前终点角度容差
 

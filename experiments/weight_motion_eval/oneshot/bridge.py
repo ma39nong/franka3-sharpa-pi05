@@ -38,15 +38,17 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
         if diagnostics is not None:
             diagnostics.loop()
         # Give an already queued command priority over telemetry publication.
-        # Idle work still runs at least every socket timeout, with its watchdog.
+        # During motion, publish only just after a successful submit reply;
+        # a socket timeout can occur immediately before the next 100 Hz frame.
         try:
             with measure("ipc_receive", 5):
                 request = receive(conn)
         except TimeoutError:
-            with measure("idle_pump"):
-                pump()
             with measure("idle_health_watchdog"):
                 session.service()
+            if session.state != "armed":
+                with measure("idle_pump"):
+                    pump()
             continue
         except EOFError:
             session.stop()
@@ -115,6 +117,17 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
         except (BrokenPipeError, ConnectionResetError):
             session.stop()
             return
+        if (request.get("operation") == "submit" and reply["ok"] and session.state == "armed"
+                and not stopping()):
+            # The observed telemetry burst took 5.23 ms. Reserve at least 6 ms
+            # before the next nominal frame, and never delay a queued stop/RPC.
+            # This is background-work admission, not an extended motion deadline.
+            headroom = request["frame"]["created"] + 0.01 - session.clock()
+            if headroom >= 0.006 and not select.select([conn], [], [], 0)[0]:
+                with measure("post_submit_pump"):
+                    pump(session.latest_feedback)
+                with measure("post_submit_watchdog"):
+                    session.service(check_feedback=False)
 
 
 def main():
@@ -166,11 +179,11 @@ def main():
     diagnostics.start()
     cpu_sampler = None
 
-    def pump():
+    def pump(feedback=None):
         with diagnostics.measure("ros_spin"):
             arms.spin()
         with diagnostics.measure("hand_telemetry_publish"):
-            arms.publish_hands(hands)
+            arms.publish_hands(hands, feedback=feedback)
     try:
         cpu_sampler = subprocess.Popen([
             sys.executable, "-m", "experiments.weight_motion_eval.oneshot.loop_diagnostics",

@@ -79,6 +79,50 @@ def test_all_drained_states_are_saved_before_validation_raises():
     assert owner.poll_timings["diagnostic_check_ms"] >= 0
 
 
+def test_healthy_sdk_burst_checks_every_diagnostic_but_traces_only_newest():
+    owner = HandOwner.__new__(HandOwner)
+    owner.trace = HandTrace()
+    owner.latest = owner.diagnostics = None
+    owner.owns_enable = owner.faulted = False
+    checks = []
+    owner.fault_status = SimpleNamespace(check=lambda joints, now: checks.append(joints))
+
+    def state(stamp, q):
+        return SimpleNamespace(
+            header=SimpleNamespace(timestamp_us=stamp),
+            num_joints=20,
+            joints=[SimpleNamespace(nid=nid, position=q, velocity=0) for nid in NIDS],
+        )
+
+    def diagnostic(stamp):
+        return SimpleNamespace(
+            header=SimpleNamespace(timestamp_us=stamp),
+            num_joints=20,
+            joints=[
+                SimpleNamespace(
+                    nid=nid,
+                    error_code_current=0,
+                    status_word=SimpleNamespace(ext_state=2),
+                )
+                for nid in NIDS
+            ],
+        )
+
+    states = iter([state(900_000, 0), state(1_000_000, 0.01), None])
+    diagnostics = iter([diagnostic(900_000), diagnostic(1_000_000), None])
+    owner.state_sub = SimpleNamespace(recv=lambda: next(states))
+    owner.diagnostic_sub = SimpleNamespace(recv=lambda: next(diagnostics))
+
+    position, _, _ = owner.poll(1, 1)
+
+    assert np.all(position == 0.01)
+    assert len(checks) == 2
+    assert [event["event"] for event in owner.trace.before] == ["state", "diagnostics"]
+    assert owner.trace.before[0]["device_timestamp_us"] == 1_000_000
+    assert owner.trace.before[1]["device_timestamp_us"] == 1_000_000
+    assert owner.trace.coalesced_before == {"state": 1, "diagnostics": 1}
+
+
 def test_analyzer_distinguishes_velocity_spike_from_position_motion():
     events = [
         {

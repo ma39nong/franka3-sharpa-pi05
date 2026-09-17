@@ -152,56 +152,77 @@ class HandOwner:
         # Bound draining work so a producer cannot starve stop processing.
         started = time.monotonic()
         newest_state = newest_diagnostics = None
-        for _ in range(256):
-            timing.mark("state_recv_ms")
-            frame = self.state_sub.recv()
-            timing.mark("other_ms")
-            if frame is None:
-                break
-            if getattr(self, "trace", None) is not None:
-                timing.mark("trace_ms")
-                self.trace.frame(frame)
+        state_frames, diagnostic_frames = [], []
+        try:
+            for _ in range(256):
+                timing.mark("state_recv_ms")
+                frame = self.state_sub.recv()
                 timing.mark("other_ms")
-            timing.counts["state_frames"] += 1
-            newest_state = frame
-        for _ in range(64):
-            timing.mark("diagnostic_recv_ms")
-            frame = self.diagnostic_sub.recv()
-            timing.mark("other_ms")
-            if frame is None:
-                break
+                if frame is None:
+                    break
+                timing.counts["state_frames"] += 1
+                state_frames.append(frame)
+                newest_state = frame
+            for _ in range(64):
+                timing.mark("diagnostic_recv_ms")
+                frame = self.diagnostic_sub.recv()
+                timing.mark("diagnostic_check_ms")
+                if frame is None:
+                    break
+                timing.counts["diagnostic_frames"] += 1
+                diagnostic_frames.append(frame)
+                by_id = {int(j.nid): j for j in frame.joints}
+                if len(frame.joints) != 20 or by_id.keys() != NID_SET:
+                    raise ValueError("Missing or duplicate hand diagnostic joint")
+                if not hasattr(self, "fault_status"):
+                    self.fault_status = HandFaults(getattr(self, "sdk", None), getattr(self, "side", "unknown"))
+                # Every diagnostic frame is still checked synchronously.  Only
+                # healthy trace serialization is coalesced below.
+                self.fault_status.check(frame.joints, started)
+                newest_diagnostics = (by_id, int(frame.header.timestamp_us) / 1e6)
+            # A frame can arrive while draining. Compare it to the post-read clock,
+            # not the earlier timestamp at function entry. Only the newest complete
+            # state is decoded, while firmware errors in any drained diagnostic latch.
+            timing.mark("decode_ms")
+            elapsed = time.monotonic() - started
+            now_mono, now_wall = now_mono + elapsed, now_wall + elapsed
+            if newest_state is not None:
+                self.latest = decode_state(newest_state, now_wall, now_mono)
+                self.latest_received = now_mono
+            if newest_diagnostics is not None:
+                by_id, stamp = newest_diagnostics
+                age = now_wall - stamp
+                check_feedback_age(age, "hand diagnostics")
+                self.diagnostics = (by_id, now_mono - max(0.0, age))
+            if self.latest is None or now_mono - self.latest[2] > 0.15:
+                raise HandFeedbackUnavailable("No fresh measured hand state")
+            if self.diagnostics is None or now_mono - self.diagnostics[1] > 0.15:
+                raise HandFeedbackUnavailable("No fresh hand diagnostics")
+            if getattr(self, "hand_control", "strict") == "slider" and self.owns_enable and not self.faulted:
+                self.contact_grasp.check_time(now_mono)
+        except BaseException:
+            # A faulting poll is rare and retains every frame for diagnosis.
             if getattr(self, "trace", None) is not None:
                 timing.mark("trace_ms")
-                self.trace.frame(frame, diagnostic=True)
-            timing.mark("diagnostic_check_ms")
-            timing.counts["diagnostic_frames"] += 1
-            by_id = {int(j.nid): j for j in frame.joints}
-            if len(frame.joints) != 20 or by_id.keys() != NID_SET:
-                raise ValueError("Missing or duplicate hand diagnostic joint")
-            if not hasattr(self, "fault_status"):
-                self.fault_status = HandFaults(getattr(self, "sdk", None), getattr(self, "side", "unknown"))
-            self.fault_status.check(frame.joints, started)
-            newest_diagnostics = (by_id, int(frame.header.timestamp_us) / 1e6)
-        # A frame can arrive while draining. Compare it to the post-read clock,
-        # not the earlier timestamp at function entry. Only the newest complete
-        # state is decoded, while firmware errors in any drained diagnostic latch.
-        timing.mark("decode_ms")
-        elapsed = time.monotonic() - started
-        now_mono, now_wall = now_mono + elapsed, now_wall + elapsed
-        if newest_state is not None:
-            self.latest = decode_state(newest_state, now_wall, now_mono)
-            self.latest_received = now_mono
-        if newest_diagnostics is not None:
-            by_id, stamp = newest_diagnostics
-            age = now_wall - stamp
-            check_feedback_age(age, "hand diagnostics")
-            self.diagnostics = (by_id, now_mono - max(0.0, age))
-        if self.latest is None or now_mono - self.latest[2] > 0.15:
-            raise HandFeedbackUnavailable("No fresh measured hand state")
-        if self.diagnostics is None or now_mono - self.diagnostics[1] > 0.15:
-            raise HandFeedbackUnavailable("No fresh hand diagnostics")
-        if getattr(self, "hand_control", "strict") == "slider" and self.owns_enable and not self.faulted:
-            self.contact_grasp.check_time(now_mono)
+                for frame in state_frames:
+                    self.trace.frame(frame)
+                for frame in diagnostic_frames:
+                    self.trace.frame(frame, diagnostic=True)
+                timing.mark("other_ms")
+            raise
+        if getattr(self, "trace", None) is not None:
+            # Healthy SDK bursts are represented by their newest frames. This
+            # removes per-frame Python object conversion from the 100 Hz path.
+            timing.mark("trace_ms")
+            if state_frames:
+                self.trace.frame(state_frames[-1])
+            if diagnostic_frames:
+                self.trace.frame(diagnostic_frames[-1], diagnostic=True)
+            self.trace.coalesce(
+                states=max(0, len(state_frames) - 1),
+                diagnostics=max(0, len(diagnostic_frames) - 1),
+            )
+            timing.mark("other_ms")
         return self.latest
 
     def identity(self):
