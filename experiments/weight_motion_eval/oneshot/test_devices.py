@@ -1,7 +1,7 @@
 """Ownership, IPC, commissioning and acquisition-clock regression tests."""
 
-import json
 from collections import deque
+import json
 from pathlib import Path
 import socket
 import threading
@@ -17,11 +17,11 @@ from experiments.weight_motion_eval.oneshot.core import Frame
 from experiments.weight_motion_eval.oneshot.core import OneShot
 from experiments.weight_motion_eval.oneshot.deploy import parse_args
 from experiments.weight_motion_eval.oneshot.devices import DeviceSession
+from experiments.weight_motion_eval.oneshot.hand import HandOwner
 from experiments.weight_motion_eval.oneshot.ipc import MAX_PACKET
 from experiments.weight_motion_eval.oneshot.ipc import RemoteDevices
 from experiments.weight_motion_eval.oneshot.ipc import encode
 from experiments.weight_motion_eval.oneshot.ipc import receive
-from experiments.weight_motion_eval.oneshot.hand import HandOwner
 from experiments.weight_motion_eval.oneshot.qualification import Qualification
 from experiments.weight_motion_eval.oneshot.qualification import digest
 from experiments.weight_motion_eval.oneshot.runner import run_live
@@ -166,8 +166,9 @@ def test_device_submission_reports_60_degree_hand_warning_without_stopping():
     hand = session.hands["right"]
     hand.side = "right"
     hand.fault_status = SimpleNamespace(pending=deque())
-    hand.fault_status.drain = lambda: [hand.fault_status.pending.popleft()
-                                      for _ in range(len(hand.fault_status.pending))]
+    hand.fault_status.drain = lambda: [
+        hand.fault_status.pending.popleft() for _ in range(len(hand.fault_status.pending))
+    ]
     hand.record_speed_warnings = HandOwner.record_speed_warnings.__get__(hand, type(hand))
     hand.poll = lambda now, wall: (np.zeros(20), np.full(20, np.deg2rad(61)), now)
     result = session.submit(frame())
@@ -178,9 +179,7 @@ def test_device_submission_reports_60_degree_hand_warning_without_stopping():
 def test_device_submission_stops_both_hands_above_75_degrees_per_second():
     session = make_session()
     prepare(session)
-    session.hands["left"].poll = lambda now, wall: (
-        np.zeros(20), np.full(20, np.deg2rad(75.1)), now
-    )
+    session.hands["left"].poll = lambda now, wall: (np.zeros(20), np.full(20, np.deg2rad(75.1)), now)
     with pytest.raises(RuntimeError, match="left_hand"):
         session.submit(frame())
     assert session.state == "stopped"
@@ -356,14 +355,19 @@ def test_ipc_timeout_disconnects_before_any_stop_rpc():
         def __init__(self):
             self.closed = False
             self.sends = 0
+
         def settimeout(self, timeout):
             pass
+
         def sendall(self, packet):
             self.sends += 1
+
         def recvmsg(self, size):
             raise TimeoutError("simulated late reply")
+
         def close(self):
             self.closed = True
+
     sock = Socket()
     client = RemoteDevices(None, execute=True, sock=sock)
     with pytest.raises(TimeoutError, match="late reply"):
@@ -378,15 +382,18 @@ def test_hand_submission_precedes_arm_ack_and_ack_failure_stops_all(reject):
     session = make_session()
     prepare(session)
     order = []
+
     def begin(command):
         order.append("arm published")
         return command
+
     def confirm(command, pending):
         assert pending is command
         assert all(hand.sent for hand in session.hands.values())
         order.append("arm ack")
         if reject:
             raise RuntimeError("Injected gateway rejection")
+
     session.arms.begin_submit = begin
     session.arms.confirm_submit = confirm
     if reject:
@@ -406,8 +413,10 @@ def test_submit_feedback_satisfies_health_check_but_watchdog_still_stops():
     session = make_session()
     prepare(session)
     session.submit(frame())
+
     def unexpected_read():
         raise AssertionError("duplicate feedback read")
+
     session.feedback = unexpected_read
     session.clock.now += 0.002
     session.service()
@@ -422,9 +431,11 @@ def test_slow_feedback_reports_component_and_never_sends_expired_frame():
     session = make_session()
     prepare(session)
     original = session.hands["left"].poll
+
     def delayed(now, wall):
         session.clock.now += 0.025
         return original(session.clock(), wall)
+
     session.hands["left"].poll = delayed
     with pytest.raises(RuntimeError, match="Expired or future command"):
         session.submit(frame())
@@ -437,20 +448,28 @@ def test_slow_feedback_reports_component_and_never_sends_expired_frame():
 
 def test_bridge_prioritizes_queued_submit_over_idle_telemetry(monkeypatch):
     from experiments.weight_motion_eval.oneshot import bridge
+
     session = make_session()
     prepare(session)
     from .ipc import wire_frame
+
     packet = {"id": 1, "operation": "submit", "frame": wire_frame(frame())}
     monkeypatch.setattr(bridge, "receive", lambda conn: packet)
+
     class Socket:
         sent = None
+
         def settimeout(self, timeout):
             pass
+
         def sendall(self, data):
             self.sent = json.loads(data)
+
     conn = Socket()
+
     def idle():
         raise AssertionError("telemetry delayed queued command")
+
     serve_connection(conn, session, stopping=lambda: conn.sent is not None, pump=idle)
     assert conn.sent["ok"]
     assert session.last.sequence == 0
@@ -459,18 +478,23 @@ def test_bridge_prioritizes_queued_submit_over_idle_telemetry(monkeypatch):
 def test_bridge_keeps_first_watchdog_fault(monkeypatch):
     from experiments.weight_motion_eval.oneshot import bridge
     from experiments.weight_motion_eval.oneshot.ipc import wire_frame
+
     session = make_session()
     prepare(session)
     session.submit(frame())
     session.clock.now += 0.04
     request = {"id": 1, "operation": "submit", "frame": wire_frame(frame(session.clock(), sequence=1))}
     monkeypatch.setattr(bridge, "receive", lambda conn: request)
+
     class Socket:
         sent = None
+
         def settimeout(self, timeout):
             pass
+
         def sendall(self, data):
             self.sent = json.loads(data)
+
     conn = Socket()
     serve_connection(conn, session, stopping=lambda: conn.sent is not None, pump=lambda *_: None)
     assert session.state == "stopped"
@@ -478,11 +502,12 @@ def test_bridge_keeps_first_watchdog_fault(monkeypatch):
     assert not conn.sent["ok"]
 
 
-@pytest.mark.parametrize(("reply_ms", "queued", "publishes"),
-                         [(3, False, True), (5, False, False), (3, True, False)])
+@pytest.mark.parametrize(("reply_ms", "queued", "publishes"), [(3, False, True), (5, False, False), (3, True, False)])
 def test_bridge_publishes_only_after_reply_with_headroom(monkeypatch, reply_ms, queued, publishes):
     from experiments.weight_motion_eval.oneshot import bridge
+
     from .ipc import wire_frame
+
     session = make_session()
     prepare(session)
     events, receives = [], []
@@ -517,6 +542,7 @@ def test_bridge_publishes_only_after_reply_with_headroom(monkeypatch, reply_ms, 
 @pytest.mark.parametrize("elapsed", [0.008, 0.021])
 def test_armed_idle_timeout_skips_telemetry_but_keeps_watchdog(monkeypatch, elapsed):
     from experiments.weight_motion_eval.oneshot import bridge
+
     session = make_session()
     prepare(session)
     session.submit(frame())
@@ -540,13 +566,20 @@ def test_armed_idle_timeout_skips_telemetry_but_keeps_watchdog(monkeypatch, elap
 
 def test_readonly_idle_still_publishes_observations(monkeypatch):
     from experiments.weight_motion_eval.oneshot import bridge
+
     session = make_session()
     published = []
+
     def timeout(conn):
         raise TimeoutError()
+
     monkeypatch.setattr(bridge, "receive", timeout)
-    serve_connection(SimpleNamespace(settimeout=lambda value: None), session,
-                     stopping=lambda: bool(published), pump=lambda: published.append(True))
+    serve_connection(
+        SimpleNamespace(settimeout=lambda value: None),
+        session,
+        stopping=lambda: bool(published),
+        pump=lambda: published.append(True),
+    )
     assert session.state == "readonly"
 
 
@@ -554,6 +587,7 @@ def test_readonly_idle_still_publishes_observations(monkeypatch):
 @pytest.mark.parametrize(("error", "accepted"), [(0.1000503406, True), (0.25, True), (0.25001, False)])
 def test_hand_endpoint_tolerance_consistent_for_next_plan_and_finish(joint, error, accepted):
     from dataclasses import replace
+
     session = make_session()
     prepare(session, "disable")
     session.submit(frame(phase="settle_end"))

@@ -87,8 +87,7 @@ def test_sdk_slider_clamps_real_sent_positions_despite_velocity_spike(monkeypatc
         )
     np.testing.assert_allclose(result["positions"], 30 * 0.01 * np.deg2rad(45), atol=1e-8)
     assert all(
-        np.max(np.abs(np.array(b)[:, 0] - np.array(a)[:, 0])) <= 0.01 * np.deg2rad(45) + 1e-9
-        for a, b in pairwise(sent)
+        np.max(np.abs(np.array(b)[:, 0] - np.array(a)[:, 0])) <= 0.01 * np.deg2rad(45) + 1e-9 for a, b in pairwise(sent)
     )
     clock.now += 0.01
     owner.diagnostics[0][0].status_word.ext_state = 1
@@ -150,12 +149,15 @@ def test_checked_hand_feedback_avoids_duplicate_drain_but_still_expires(monkeypa
         owner.submit(np.zeros(20), checked_feedback=(np.zeros(20), np.zeros(20), 9.8), **kwargs)
 
 
-@pytest.mark.parametrize(("phase", "error", "accepted"), [
-    ("settle_start", 0.09, False),
-    ("settle_end", 0.09, True),
-    ("settle_end", 0.1, True),
-    ("settle_end", 0.10001, False),
-])
+@pytest.mark.parametrize(
+    ("phase", "error", "accepted"),
+    [
+        ("settle_start", 0.09, False),
+        ("settle_end", 0.09, True),
+        ("settle_end", 0.1, True),
+        ("settle_end", 0.10001, False),
+    ],
+)
 def test_only_final_hand_settling_uses_one_tenth_rad(phase, error, accepted):
     config = read_config(Path(__file__).parents[1] / "config.yaml")
     config["hand_control"] = "slider"

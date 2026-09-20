@@ -33,10 +33,10 @@ def container_main(ipc):
     from teleop_core import contract
 
     from .bridge import serve_connection
+    from .controller_status import STATUS_TOPIC
     from .devices import DeviceSession
     from .ros_devices import RosArms
     from .transport import validate_header
-    from .controller_status import STATUS_TOPIC
 
     data = json.loads((ipc / "fixture.json").read_text())
     start = np.array(data["start"])
@@ -76,8 +76,9 @@ def container_main(ipc):
         now = time.monotonic()
         dt, last = now - last, now
         for side, current in q.items():
-            status_pubs[side].publish(String(data=json.dumps({"version": 1, "stamp_ns": time.time_ns(),
-                                                           "faulted": False, "reason": "none"})))
+            status_pubs[side].publish(
+                String(data=json.dumps({"version": 1, "stamp_ns": time.time_ns(), "faulted": False, "reason": "none"}))
+            )
             if expiry[side] and time.time_ns() >= expiry[side]:
                 targets[side] = current.copy()
             before = current.copy()

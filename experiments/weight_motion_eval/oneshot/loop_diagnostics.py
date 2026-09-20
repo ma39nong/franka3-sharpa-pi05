@@ -32,7 +32,9 @@ class LoopDiagnostics:
             self.gc_counts[generation] += 1
             self.gc_max_ms[generation] = max(self.gc_max_ms[generation], elapsed)
             if elapsed >= 1:
-                self.add({"event": "gc", "at": now, "stage": self.stage, "generation": generation, "elapsed_ms": elapsed})
+                self.add(
+                    {"event": "gc", "at": now, "stage": self.stage, "generation": generation, "elapsed_ms": elapsed}
+                )
             self.gc_start = None
 
     def loop(self):
@@ -55,19 +57,37 @@ class LoopDiagnostics:
             now = time.monotonic()
             elapsed = (now - began) * 1000
             if elapsed >= threshold_ms:
-                self.add({"event": "slow_stage", "at": now, "stage": stage, "elapsed_ms": elapsed,
-                              "cpu_ms": (time.thread_time() - cpu) * 1000})
+                self.add(
+                    {
+                        "event": "slow_stage",
+                        "at": now,
+                        "stage": stage,
+                        "elapsed_ms": elapsed,
+                        "cpu_ms": (time.thread_time() - cpu) * 1000,
+                    }
+                )
             self.stage = previous
 
     def close(self, path):
         gc.callbacks.remove(self.collection)
-        Path(path).write_text(json.dumps({"events": list(self.events), "dropped": self.dropped,
-                                             "gc_counts": self.gc_counts, "gc_max_ms": self.gc_max_ms}, indent=2) + "\n")
+        Path(path).write_text(
+            json.dumps(
+                {
+                    "events": list(self.events),
+                    "dropped": self.dropped,
+                    "gc_counts": self.gc_counts,
+                    "gc_max_ms": self.gc_max_ms,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
 
 def sample_cpu(pid, output):
     """Separate process: 1 Hz /proc reads and disk writes never run on owner thread."""
     import os
+
     previous = None
     with Path(output).open("x") as stream:
         while Path(f"/proc/{pid}").exists():
@@ -91,13 +111,21 @@ def sample_cpu(pid, output):
                         memory[key + "_kb"] = int(value.split()[0])
             except FileNotFoundError:
                 break
-            event = {"at": began, "loadavg": os.getloadavg(), "cpu_percent": {}, "process_cpu_percent": None, "memory": memory}
+            event = {
+                "at": began,
+                "loadavg": os.getloadavg(),
+                "cpu_percent": {},
+                "process_cpu_percent": None,
+                "memory": memory,
+            }
             if previous:
                 old_time, old_cpus, old_process = previous
                 for cpu, (total, idle) in cpus.items():
                     if cpu in old_cpus and total > old_cpus[cpu][0]:
                         event["cpu_percent"][cpu] = 100 * (1 - (idle - old_cpus[cpu][1]) / (total - old_cpus[cpu][0]))
-                event["process_cpu_percent"] = 100 * (process_ticks - old_process) / os.sysconf("SC_CLK_TCK") / (began - old_time)
+                event["process_cpu_percent"] = (
+                    100 * (process_ticks - old_process) / os.sysconf("SC_CLK_TCK") / (began - old_time)
+                )
             event["sample_ms"] = (time.monotonic() - began) * 1000
             stream.write(json.dumps(event) + "\n")
             stream.flush()
@@ -107,4 +135,5 @@ def sample_cpu(pid, output):
 
 if __name__ == "__main__":
     import sys
+
     sample_cpu(int(sys.argv[1]), sys.argv[2])

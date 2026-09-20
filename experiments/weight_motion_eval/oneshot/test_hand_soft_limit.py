@@ -59,6 +59,7 @@ def test_ambiguous_loading_direction_does_not_guess():
 
 def test_sdk_boundary_continues_bounded_contact_and_retreat_obeys_rate_limit(monkeypatch):
     from . import hand as module
+
     clock = S(now=10.0)
     monkeypatch.setattr(module.time, "monotonic", lambda: clock.now)
     owner = HandOwner.__new__(HandOwner)
@@ -73,9 +74,17 @@ def test_sdk_boundary_continues_bounded_contact_and_retreat_obeys_rate_limit(mon
     owner.trace = HandTrace()
     sent = []
     owner.publisher = S(send=sent.append)
+
     def submit(target):
-        return owner.submit(target, created=clock.now, valid_until=clock.now + 0.02, now=clock.now,
-                            lower=np.full(20, -2), upper=np.full(20, 2))
+        return owner.submit(
+            target,
+            created=clock.now,
+            valid_until=clock.now + 0.02,
+            now=clock.now,
+            lower=np.full(20, -2),
+            upper=np.full(20, 2),
+        )
+
     q[17] = 0.7
     report = submit(q)
     assert report["positions"][17] == pytest.approx(0.1 + 0.01 * np.deg2rad(45))
@@ -93,7 +102,10 @@ def test_sdk_boundary_continues_bounded_contact_and_retreat_obeys_rate_limit(mon
     assert report["soft_limited_indices"] == []
 
 
-@pytest.mark.parametrize(("measured_error", "reached", "accepted"), [(0.1000503406, True, True), (0.25001, True, False), (0.05, False, False)])
+@pytest.mark.parametrize(
+    ("measured_error", "reached", "accepted"),
+    [(0.1000503406, True, True), (0.25001, True, False), (0.05, False, False)],
+)
 def test_player_uses_clamped_target_but_requires_real_settling(measured_error, reached, accepted):
     config = read_config(Path(__file__).parents[1] / "config.yaml")
     config["hand_control"] = "slider"
@@ -109,8 +121,14 @@ def test_player_uses_clamped_target_but_requires_real_settling(measured_error, r
     measured[7] = 0.3 - measured_error
     for tick in range(61):
         now = 10 + tick * 0.01
-        current = replace(fb, positions=measured, source_times=(now,) * 4, receipt_times=(now,) * 4,
-                          hand_soft_limits=((7, 1, 0.3),), hand_targets_reached=reached)
+        current = replace(
+            fb,
+            positions=measured,
+            source_times=(now,) * 4,
+            receipt_times=(now,) * 4,
+            hand_soft_limits=((7, 1, 0.3),),
+            hand_targets_reached=reached,
+        )
         # The IPC projection must not replace the actual measured position.
         current = Feedback(**wire_feedback(current))
         assert current.positions[7] == measured[7]
@@ -146,8 +164,9 @@ def test_device_exports_limits_and_checks_effective_target_for_next_round_and_fi
     assert session.finish()["state"] == "released"
 
 
-@pytest.mark.parametrize("limits", [((0, 1, 0.3),), ((7.0, 1, 0.3),), ((7, 0, 0.3),), ((7, 1, float("nan")),), ((7, 1, 0.3), (7, -1, 0.2))])
+@pytest.mark.parametrize(
+    "limits", [((0, 1, 0.3),), ((7.0, 1, 0.3),), ((7, 0, 0.3),), ((7, 1, float("nan")),), ((7, 1, 0.3), (7, -1, 0.2))]
+)
 def test_feedback_rejects_invalid_or_arm_soft_limits(limits):
     with pytest.raises(ValueError, match="soft limit"):
-        Feedback(np.zeros(54), np.zeros(54), (10,) * 4, (10,) * 4,
-                 hand_control="slider", hand_soft_limits=limits)
+        Feedback(np.zeros(54), np.zeros(54), (10,) * 4, (10,) * 4, hand_control="slider", hand_soft_limits=limits)

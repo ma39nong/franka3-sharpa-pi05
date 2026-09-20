@@ -6,9 +6,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from experiments.weight_motion_eval.planner import build_plan, read_config
+from experiments.weight_motion_eval.planner import build_plan
+from experiments.weight_motion_eval.planner import read_config
 
-from .core import ARM, Admission, ConsumerGuard, Feedback, Frame, OneShot
+from .core import ARM
+from .core import Admission
+from .core import ConsumerGuard
+from .core import Feedback
+from .core import Frame
+from .core import OneShot
 from .hand_contact import BoundedContactGrasp
 from .ipc import wire_feedback
 from .test_devices import make_session
@@ -45,8 +51,7 @@ def feedback(now=10, *, contacts=((51, -1, -0.07984551226775644, 10.0),)):
     measured = np.zeros(54)
     # Last measured error from deployment-f5bb94d876 / Round 8.
     measured[51] = 0.13072693347930908
-    return Feedback(measured, np.zeros(54), (now,) * 4, (now,) * 4,
-                    hand_control="slider", hand_contacts=contacts)
+    return Feedback(measured, np.zeros(54), (now,) * 4, (now,) * 4, hand_control="slider", hand_contacts=contacts)
 
 
 def target():
@@ -119,7 +124,7 @@ def test_contact_evidence_and_duration_reach_device_next_plan_finish_and_idle_wa
     session.prepare("run", "hash", np.zeros(54), "disable")
     for side, hand in session.hands.items():
         offset = 7 if side == "left" else 34
-        hand.last = (target()[offset:offset+20].copy(), 10)
+        hand.last = (target()[offset : offset + 20].copy(), 10)
     hand = session.hands["right"]
     hand.contact_grasp = BoundedContactGrasp()
     measured = feedback().positions[34:54].copy()
@@ -141,9 +146,16 @@ def test_contact_evidence_and_duration_reach_device_next_plan_finish_and_idle_wa
     assert "contact duration" in session.fault
 
 
-@pytest.mark.parametrize("contacts", [((0, 1, 0, 10),), ((7, 0, 0, 10),),
-                                      ((7, 1, float("nan"), 10),), ((7, 1, 0, float("inf")),),
-                                      ((7, 1, 0, 10), (7, -1, 0, 10))])
+@pytest.mark.parametrize(
+    "contacts",
+    [
+        ((0, 1, 0, 10),),
+        ((7, 0, 0, 10),),
+        ((7, 1, float("nan"), 10),),
+        ((7, 1, 0, float("inf")),),
+        ((7, 1, 0, 10), (7, -1, 0, 10)),
+    ],
+)
 def test_invalid_contact_metadata_is_rejected(contacts):
     with pytest.raises(ValueError, match="contact"):
         feedback(contacts=contacts)
@@ -159,6 +171,7 @@ def test_strict_and_future_contact_metadata_are_rejected():
 def test_sdk_checks_contact_deadline_with_cached_feedback_and_can_confirm_stop(monkeypatch):
     from collections import deque
     from types import SimpleNamespace as S
+
     from . import hand as module
     from .hand import HandOwner
     from .hand_trace import HandTrace
@@ -179,8 +192,9 @@ def test_sdk_checks_contact_deadline_with_cached_feedback_and_can_confirm_stop(m
     owner.publisher = S(send=sent.append)
     owner.hand = S(disable=lambda: disabled.append(True))
     args = dict(lower=np.full(20, -2), upper=np.full(20, 2))
-    result = owner.submit(np.full(20, 0.7), created=10, valid_until=10.02, now=10,
-                          checked_feedback=owner.latest, **args)
+    result = owner.submit(
+        np.full(20, 0.7), created=10, valid_until=10.02, now=10, checked_feedback=owner.latest, **args
+    )
     assert result["positions"][17] == pytest.approx(0.1 + 0.01 * np.deg2rad(45))
     # Twenty seconds of the same contact remains valid at the SDK boundary.
     clock.now = 30
@@ -192,8 +206,7 @@ def test_sdk_checks_contact_deadline_with_cached_feedback_and_can_confirm_stop(m
     owner.latest = (np.zeros(20), np.zeros(20), 310)
     owner.diagnostics = (owner.diagnostics[0], 310)
     with pytest.raises(ValueError, match="contact duration"):
-        owner.submit(np.full(20, 0.7), created=310, valid_until=310.02, now=310,
-                     checked_feedback=owner.latest, **args)
+        owner.submit(np.full(20, 0.7), created=310, valid_until=310.02, now=310, checked_feedback=owner.latest, **args)
     assert len(sent) == 1
     with pytest.raises(ValueError, match="contact duration"):
         owner.poll(310, 310)

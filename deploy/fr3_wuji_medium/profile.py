@@ -1,22 +1,23 @@
 """Medium-only settings and model contracts; no global mutation of slow modules."""
-from pathlib import Path
+
 import copy
+from pathlib import Path
+
 import numpy as np
-from .planner import read_config, validate_config
+
+from .planner import read_config
+from .planner import validate_config
 
 ARM_SPEED_RAD_S = 2.0
 
 
 def planning_config(model="30000", *, minimum_time_scale=0.625):
-    if model not in {"19999", "30000", "30000v2", "25000", "25000-single"}:
-        raise ValueError("Unknown model profile")
+    from deploy.fr3_wuji_models.registry import profile
+
+    model_spec = profile(model)
     config = read_config(Path(__file__).with_name("config.yaml"))
-    config.update(model_profile=model, minimum_time_scale=minimum_time_scale,
-                  final_settle_seconds=0.5)
-    if model in {"25000", "25000-single"}:
-        # Both checkpoints have 15hz normalization assets. Keep their
-        # action timebase separate from the older 30 Hz model profiles.
-        config["source_hz"] = 15
+    config.update(model_profile=model, minimum_time_scale=minimum_time_scale, final_settle_seconds=0.5)
+    config["source_hz"] = model_spec.source_hz
     if model != "19999":
         config["arm_raw_initial_delta_rad"] = 1.5
         config["max_smoothing_delta_rad"]["arm"] = 0.2
@@ -50,16 +51,6 @@ def session_limits(reference):
 
 
 def checkpoint_contract(model, checkpoint):
-    if model == "19999":
-        from experiments.weight_motion_eval.oneshot.policy_server import checkpoint_contract as contract
-    elif model == "30000":
-        from deploy.fr3_wuji_30000.serve import checkpoint_contract as contract
-    elif model == "30000v2":
-        from deploy.fr3_wuji_30000v2.contract import checkpoint_contract as contract
-    elif model == "25000":
-        from deploy.fr3_wuji_25000.contract import checkpoint_contract as contract
-    elif model == "25000-single":
-        from deploy.fr3_wuji_25000_single.contract import checkpoint_contract as contract
-    else:
-        raise ValueError("Unknown model profile")
-    return contract(checkpoint)
+    from deploy.fr3_wuji_models.registry import profile
+
+    return profile(model).contract(checkpoint)

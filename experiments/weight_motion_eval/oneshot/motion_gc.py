@@ -19,8 +19,12 @@ class MotionGC:
         began = time.monotonic()
         try:
             collected = gc.collect()
-            self.report = {"policy": "defer_automatic_cyclic_gc_until_stop", "preflight_collected": collected,
-                           "preflight_ms": (time.monotonic() - began) * 1000, "active": True}
+            self.report = {
+                "policy": "defer_automatic_cyclic_gc_until_stop",
+                "preflight_collected": collected,
+                "preflight_ms": (time.monotonic() - began) * 1000,
+                "active": True,
+            }
         except BaseException:
             self.end()
             raise

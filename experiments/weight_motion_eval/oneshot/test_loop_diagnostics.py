@@ -16,10 +16,12 @@ def test_process_gc_and_failed_stage_are_retained_and_bounded(tmp_path):
     diagnostics = LoopDiagnostics()
     previous = list(gc.callbacks)
     diagnostics.start()
+
     def fail():
         with diagnostics.measure("ros_spin", threshold_ms=0):
             gc.collect(2)
             raise ValueError("injected")
+
     with pytest.raises(ValueError, match="injected"):
         fail()
     assert diagnostics.gc_counts[2] >= 1
@@ -36,9 +38,9 @@ def test_process_gc_and_failed_stage_are_retained_and_bounded(tmp_path):
 
 def test_cpu_sampler_records_host_and_process_load(tmp_path):
     path = tmp_path / "cpu.jsonl"
-    process = subprocess.Popen([
-        sys.executable, "-m", "experiments.weight_motion_eval.oneshot.loop_diagnostics", str(os.getpid()), str(path)
-    ])
+    process = subprocess.Popen(
+        [sys.executable, "-m", "experiments.weight_motion_eval.oneshot.loop_diagnostics", str(os.getpid()), str(path)]
+    )
     try:
         deadline = time.monotonic() + 5
         rows = []

@@ -366,19 +366,27 @@ def test_small_device_clock_lead_is_bounded_and_does_not_future_date_feedback(mo
 
 
 def test_startup_drains_old_feedback_on_both_hands_then_admits_fresh():
-    from .hand import HandFeedbackUnavailable, wait_initial_feedback
+    from .hand import HandFeedbackUnavailable
+    from .hand import wait_initial_feedback
 
     clock = SimpleNamespace(now=0.0)
     calls = []
     attempts = {"left": 0, "right": 0}
+
     def poll(side):
         calls.append(side)
         attempts[side] += 1
         if attempts[side] < 3:
             raise HandFeedbackUnavailable("stale: age=0.2s")
+
     hands = {side: SimpleNamespace(poll=lambda *args, side=side: poll(side)) for side in attempts}
-    wait_initial_feedback(hands, clock=lambda: clock.now, wall_clock=lambda: 10.0,
-                          sleep=lambda dt: setattr(clock, "now", clock.now + dt), report=lambda text: None)
+    wait_initial_feedback(
+        hands,
+        clock=lambda: clock.now,
+        wall_clock=lambda: 10.0,
+        sleep=lambda dt: setattr(clock, "now", clock.now + dt),
+        report=lambda text: None,
+    )
     assert calls == ["left", "right"] * 3
 
 
@@ -387,28 +395,39 @@ def test_startup_does_not_retry_faults(reason):
     from .hand import wait_initial_feedback
 
     calls = []
+
     def poll(*args):
         calls.append(1)
         raise ValueError(reason)
+
     with pytest.raises(ValueError, match=reason):
         wait_initial_feedback({"left": SimpleNamespace(poll=poll)}, report=lambda text: None)
     assert calls == [1]
 
 
 def test_startup_timeout_reports_last_feedback_age():
-    from .hand import HandFeedbackUnavailable, wait_initial_feedback
+    from .hand import HandFeedbackUnavailable
+    from .hand import wait_initial_feedback
 
     clock = SimpleNamespace(now=0.0)
+
     def poll(*args):
         raise HandFeedbackUnavailable("hand state: age=0.234000000s")
+
     with pytest.raises(RuntimeError, match="left: .*age=0.234000000s"):
-        wait_initial_feedback({"left": SimpleNamespace(poll=poll)}, timeout=0.01,
-                              clock=lambda: clock.now, wall_clock=lambda: 10.0,
-                              sleep=lambda dt: setattr(clock, "now", clock.now + dt), report=lambda text: None)
+        wait_initial_feedback(
+            {"left": SimpleNamespace(poll=poll)},
+            timeout=0.01,
+            clock=lambda: clock.now,
+            wall_clock=lambda: 10.0,
+            sleep=lambda dt: setattr(clock, "now", clock.now + dt),
+            report=lambda text: None,
+        )
 
 
 def test_future_clock_is_not_startup_retryable():
-    from .hand import HandFeedbackUnavailable, check_feedback_age
+    from .hand import HandFeedbackUnavailable
+    from .hand import check_feedback_age
 
     with pytest.raises(ValueError, match="age=-1.000000000s") as caught:
         check_feedback_age(-1.0, "hand state")

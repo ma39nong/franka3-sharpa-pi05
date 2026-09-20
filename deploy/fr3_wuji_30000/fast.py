@@ -3,7 +3,6 @@
 from pathlib import Path
 import sys
 
-
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINT = ROOT / "checkpoints/30000v2"
 DEFAULT_URI = "ws://127.0.0.1:8002"

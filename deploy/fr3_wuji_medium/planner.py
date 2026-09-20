@@ -9,6 +9,7 @@ import numpy as np
 from scipy.interpolate import PPoly
 from scipy.interpolate import make_interp_spline
 import yaml
+
 from .runtime.limits import SLIDER_SPEED_RAD_S
 
 GROUPS = {"left_arm": slice(0, 7), "left_hand": slice(7, 27), "right_arm": slice(27, 34), "right_hand": slice(34, 54)}
@@ -44,7 +45,9 @@ def validate_config(config):
             raise ValueError(f"Invalid positive configuration: {key}")
     if not 10 <= config["sample_hz"] <= 200 or not 0.5 <= config["minimum_time_scale"] <= 100:
         raise ValueError("Sampling or time scale out of supported range")
-    if config["max_total_seconds"] > 120 or config["arm_raw_initial_delta_rad"] > (1.5 if config.get("model_profile") in {"30000", "30000v2", "25000", "25000-single"} else 0.3):
+    if config["max_total_seconds"] > 120 or config["arm_raw_initial_delta_rad"] > (
+        1.5 if config.get("model_profile") in {"30000", "30000v2", "25000", "25000-single"} else 0.3
+    ):
         raise ValueError("Plan duration or model-specific raw arm acquisition limit exceeded")
     passes = config.get("smoothing_passes")
     if type(passes) is not int or not 0 <= passes <= 10:
@@ -181,16 +184,25 @@ def build_plan(raw, start, config, limits, names):
         "steps": 50 - steps,
         "violation_count": len(discarded_violations),
         "examples": [
-            {"step": int(row) + steps + 1, "joint_name": names[int(joint)],
-             "action_index": int(joint), "position_rad": float(discarded[row, joint]),
-             "lower_rad": float(limits["lower"][joint]), "upper_rad": float(limits["upper"][joint])}
+            {
+                "step": int(row) + steps + 1,
+                "joint_name": names[int(joint)],
+                "action_index": int(joint),
+                "position_rad": float(discarded[row, joint]),
+                "lower_rad": float(limits["lower"][joint]),
+                "upper_rad": float(limits["upper"][joint]),
+            }
             for row, joint in discarded_violations[:16]
         ],
     }
     # The tail never participates in smoothing, interpolation or dispatch.
     raw = raw[:steps].copy()
-    hand_projection = {"enabled": config.get("project_hand_predictions", False),
-                       "adjustment_count": 0, "max_adjustment_rad": 0.0, "examples": []}
+    hand_projection = {
+        "enabled": config.get("project_hand_predictions", False),
+        "adjustment_count": 0,
+        "max_adjustment_rad": 0.0,
+        "examples": [],
+    }
     if hand_projection["enabled"]:
         hands = np.r_[7:27, 34:54]
         proposed = raw[:, hands].copy()
@@ -199,11 +211,16 @@ def build_plan(raw, start, config, limits, names):
         hand_projection.update(
             adjustment_count=len(changed),
             max_adjustment_rad=float(np.max(np.abs(proposed - bounded))),
-            examples=[{"step": int(row) + 1, "action_index": int(hands[col]),
-                       "joint_name": names[int(hands[col])],
-                       "predicted_rad": float(proposed[row, col]),
-                       "target_rad": float(bounded[row, col])}
-                      for row, col in changed[:16]],
+            examples=[
+                {
+                    "step": int(row) + 1,
+                    "action_index": int(hands[col]),
+                    "joint_name": names[int(hands[col])],
+                    "predicted_rad": float(proposed[row, col]),
+                    "target_rad": float(bounded[row, col]),
+                }
+                for row, col in changed[:16]
+            ],
         )
         # Only model hand targets are projected; measured/start poses and arms
         # still pass through the hard limit checks below unchanged.
@@ -212,14 +229,21 @@ def build_plan(raw, start, config, limits, names):
         violations = np.argwhere((value < limits["lower"]) | (value > limits["upper"]))
         if len(violations):
             details = [
-                {"source": label, "step": int(row) + 1 if label == "executed action" else None,
-                 "joint_name": names[int(joint)], "action_index": int(joint),
-                 "position_rad": float(value[row, joint]),
-                 "lower_rad": float(limits["lower"][joint]), "upper_rad": float(limits["upper"][joint])}
+                {
+                    "source": label,
+                    "step": int(row) + 1 if label == "executed action" else None,
+                    "joint_name": names[int(joint)],
+                    "action_index": int(joint),
+                    "position_rad": float(value[row, joint]),
+                    "lower_rad": float(limits["lower"][joint]),
+                    "upper_rad": float(limits["upper"][joint]),
+                }
                 for row, joint in violations[:16]
             ]
-            raise ValueError("Raw actions or recorded start exceed reference joint limits; "
-                             + json.dumps({"violation_count": len(violations), "examples": details}))
+            raise ValueError(
+                "Raw actions or recorded start exceed reference joint limits; "
+                + json.dumps({"violation_count": len(violations), "examples": details})
+            )
     delta, knots = np.abs(raw[0] - start), smooth_knots(raw, config["smoothing_passes"])
     if config.get("hand_control") == "slider":
         knots[:, np.r_[7:27, 34:54]] = raw[:, np.r_[7:27, 34:54]]
@@ -238,21 +262,41 @@ def build_plan(raw, start, config, limits, names):
             "raw_acquisition_limit_rad": threshold,
             "max_knot_modification_rad": modification,
             "raw_velocity_max_rad_s": float(np.abs(np.diff(raw[:, section], axis=0)).max() * config["source_hz"]),
-            "raw_acceleration_max_rad_s2": float(np.abs(np.diff(raw[:, section], n=2, axis=0)).max() * config["source_hz"] ** 2) if len(raw) > 2 else 0.0,
+            "raw_acceleration_max_rad_s2": float(
+                np.abs(np.diff(raw[:, section], n=2, axis=0)).max() * config["source_hz"] ** 2
+            )
+            if len(raw) > 2
+            else 0.0,
         }
     # Two knots plus rest velocity/acceleration boundary conditions define the
     # quintic approach; all 54 joints share its duration.
     approach = make_phase(
-        "approach", np.array([0.0, 1.0]), np.stack([start, raw[0]]), config, limits,
-        minimum_scale=(config.get("continuation_min_approach_seconds", 0.025)
-                       if config.get("continuation") else config.get("initial_min_approach_seconds", 0.5)),
+        "approach",
+        np.array([0.0, 1.0]),
+        np.stack([start, raw[0]]),
+        config,
+        limits,
+        minimum_scale=(
+            config.get("continuation_min_approach_seconds", 0.025)
+            if config.get("continuation")
+            else config.get("initial_min_approach_seconds", 0.5)
+        ),
     )
     if config.get("hand_control") == "slider":
         # Give the slider command time to traverse the initial hand distance.
-        approach.scale = max(approach.scale, float(delta[np.r_[7:27, 34:54]].max())
-                             / config.get("slider_speed_rad_s", SLIDER_SPEED_RAD_S))
-    playback = make_phase("playback", np.arange(len(raw)) / config["source_hz"], knots, config, limits, config["minimum_time_scale"])
-    total = approach.duration + playback.duration + config["settle_seconds"] + (config.get("final_settle_seconds", 0.5) if config.get("final_chunk", True) else config["settle_seconds"])
+        approach.scale = max(
+            approach.scale,
+            float(delta[np.r_[7:27, 34:54]].max()) / config.get("slider_speed_rad_s", SLIDER_SPEED_RAD_S),
+        )
+    playback = make_phase(
+        "playback", np.arange(len(raw)) / config["source_hz"], knots, config, limits, config["minimum_time_scale"]
+    )
+    total = (
+        approach.duration
+        + playback.duration
+        + config["settle_seconds"]
+        + (config.get("final_settle_seconds", 0.5) if config.get("final_chunk", True) else config["settle_seconds"])
+    )
     if total > config["max_total_seconds"]:
         raise ValueError(f"Required plan duration {total:.3f}s exceeds experiment limit; do not truncate")
     for phase in (approach, playback):

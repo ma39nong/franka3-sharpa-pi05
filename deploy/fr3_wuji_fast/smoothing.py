@@ -10,7 +10,8 @@ import math
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.core import ARM, vector
+from deploy.fr3_wuji_slow.core import ARM
+from deploy.fr3_wuji_slow.core import vector
 
 from . import limits as fast_limits
 
@@ -105,7 +106,8 @@ class ArmSmoother:
         if not all(np.isfinite(x).all() for x in (position, velocity, acceleration)):
             raise RuntimeError("Nonfinite fast smoothing result")
         if (
-            np.any(position < self.lower) or np.any(position > self.upper)
+            np.any(position < self.lower)
+            or np.any(position > self.upper)
             or np.max(np.abs(velocity)) > self.speed + 1e-8
             or np.max(np.abs(acceleration)) > self.settings["acceleration_rad_s2"] + 1e-8
             or np.max(np.abs(acceleration - self.acceleration)) > self.settings["jerk_rad_s3"] * dt + 1e-8

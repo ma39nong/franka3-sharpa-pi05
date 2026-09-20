@@ -45,8 +45,11 @@ class HandFaults:
                 del self.active[nid]
 
     def stalled_nids(self):
-        return {nid for nid, (code, _) in self.active.items()
-                if self.cache[code].get("severity") == "Warning" and self.cache[code].get("name") == "Stall"}
+        return {
+            nid
+            for nid, (code, _) in self.active.items()
+            if self.cache[code].get("severity") == "Warning" and self.cache[code].get("name") == "Stall"
+        }
 
     def drain(self):
         result = list(self.pending)

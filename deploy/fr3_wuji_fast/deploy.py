@@ -13,26 +13,29 @@ import time
 import uuid
 
 from experiments.weight_motion_eval.cli import safe_output
-from experiments.weight_motion_eval.oneshot import deploy as hardware
-from experiments.weight_motion_eval.oneshot.ipc import RemoteDevices
-from experiments.weight_motion_eval.oneshot.core import checked_arm_tracking_tolerance
-from experiments.weight_motion_eval.oneshot.limits import HAND_KD
-from experiments.weight_motion_eval.oneshot.limits import HAND_KP
-from experiments.weight_motion_eval.oneshot.limits import SLIDER_CURRENT_A
-from experiments.weight_motion_eval.oneshot.limits import SLIDER_SPEED_RAD_S
+from deploy.fr3_wuji_runtime import hardware
+from deploy.fr3_wuji_slow.core import checked_arm_tracking_tolerance
+from deploy.fr3_wuji_slow.limits import HAND_KD
+from deploy.fr3_wuji_slow.limits import HAND_KP
+from deploy.fr3_wuji_slow.limits import SLIDER_CURRENT_A
+from deploy.fr3_wuji_slow.limits import SLIDER_SPEED_RAD_S
 from experiments.weight_motion_eval.oneshot.qualification import Qualification
 from experiments.weight_motion_eval.oneshot.qualification import SupervisedTrial
+from deploy.fr3_wuji_models.model_19999.serve import checkpoint_contract
 from experiments.weight_motion_eval.reference import deployment_module
 
 from .consumer import FastConsumer
+from .ipc import RemoteDevices
 from .limits import ARM_TRACKING_TOLERANCE_RAD
+from .smoothing import checked_backend
+from .smoothing import smoothing_settings
 from .timeline import ARM_SPEED_RAD_S
 from .timeline import Timeline
-from .smoothing import checked_backend, smoothing_settings
 
 ROOT = hardware.ROOT
 GATEWAY_ARM_SPEED_RAD_S = 1.2
 DEFAULT_CHECKPOINT = ROOT / "checkpoints/19999_269/19999"
+
 
 
 def parse_args(argv=None):
@@ -116,7 +119,7 @@ def main(argv=None):
     arm_tracking = checked_arm_tracking_tolerance(ARM_TRACKING_TOLERANCE_RAD)
     output = safe_output(args.output)
     output.mkdir(parents=True)
-    runtime, limits, _ = hardware.write_runtime(args, output)
+    runtime, limits, _ = hardware.write_runtime(args, output, checkpoint_contract)
     runtime["arm_speed_rad_s"] = ARM_SPEED_RAD_S
     runtime["arm_tracking_rad"] = arm_tracking
     (output / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")

@@ -11,6 +11,8 @@ import numpy as np
 from experiments.weight_motion_eval.oneshot.hand_contact import BoundedContactGrasp
 from experiments.weight_motion_eval.oneshot.hand_faults import HandFaults
 from experiments.weight_motion_eval.oneshot.hand_trace import HandTrace
+from experiments.weight_motion_eval.oneshot.poll_timing import PollTiming
+
 from .limits import HAND_CLOCK_LEAD_SECONDS
 from .limits import HAND_CONTACT_SECONDS
 from .limits import HAND_CURRENT_A
@@ -20,7 +22,6 @@ from .limits import HAND_SPEED_RAD_S
 from .limits import SLIDER_CURRENT_A
 from .limits import SLIDER_SPEED_RAD_S
 from .limits import check_hand_control
-from experiments.weight_motion_eval.oneshot.poll_timing import PollTiming
 
 NIDS = tuple(finger * 5 + joint + 1 for finger in range(5) for joint in range(4))
 NID_SET = frozenset(NIDS)
@@ -38,8 +39,16 @@ def check_feedback_age(age, label):
         raise HandFeedbackUnavailable("Hand feedback is stale or from a future clock; " + detail)
 
 
-def wait_initial_feedback(hands, *, cancelled=lambda: False, clock=time.monotonic,
-                          wall_clock=time.time, sleep=time.sleep, timeout=3.0, report=print):
+def wait_initial_feedback(
+    hands,
+    *,
+    cancelled=lambda: False,
+    clock=time.monotonic,
+    wall_clock=time.time,
+    sleep=time.sleep,
+    timeout=3.0,
+    report=print,
+):
     """Drain connection backlog while disabled; never retry firmware/clock faults."""
     deadline = clock() + timeout
     pending = dict(hands)
@@ -60,8 +69,9 @@ def wait_initial_feedback(hands, *, cancelled=lambda: False, clock=time.monotoni
                 del pending[side]
         if pending:
             if clock() >= deadline:
-                raise RuntimeError("Initial hand feedback timed out: " + "; ".join(
-                    f"{side}: {errors[side]}" for side in pending))
+                raise RuntimeError(
+                    "Initial hand feedback timed out: " + "; ".join(f"{side}: {errors[side]}" for side in pending)
+                )
             sleep(0.005)
 
 
@@ -95,7 +105,12 @@ def decode_state(frame, now_wall, now_mono):
 class HandOwner:
     def __init__(self, sdk, side, address, *, hand_control="strict", deployment_kp=HAND_KP):
         self.hand_control = check_hand_control(hand_control)
-        if not isinstance(deployment_kp, int | float) or isinstance(deployment_kp, bool) or not np.isfinite(deployment_kp) or not 0 < deployment_kp <= HAND_KP:
+        if (
+            not isinstance(deployment_kp, int | float)
+            or isinstance(deployment_kp, bool)
+            or not np.isfinite(deployment_kp)
+            or not 0 < deployment_kp <= HAND_KP
+        ):
             raise ValueError("Deployment hand Kp must be positive and at most 8")
         if side not in {"left", "right"} or not address:
             raise ValueError("Explicit hand identity required")
@@ -375,7 +390,11 @@ class HandOwner:
             # submission. Recheck age at send; do not drain the same queues twice.
             measured, velocity, stamp = checked_feedback
             current = time.monotonic()
-            if not 0 <= current - stamp <= 0.15 or self.diagnostics is None or not 0 <= current - self.diagnostics[1] <= 0.15:
+            if (
+                not 0 <= current - stamp <= 0.15
+                or self.diagnostics is None
+                or not 0 <= current - self.diagnostics[1] <= 0.15
+            ):
                 raise ValueError("Checked hand feedback expired before submission")
 
         if getattr(self, "hand_control", "strict") == "strict" and (
@@ -407,13 +426,22 @@ class HandOwner:
                     self.trace.add("bounded_contact", nid=nid, **event)
                 if faults is not None:
                     side = "左手" if getattr(self, "side", "unknown") == "left" else "右手"
-                    action = f"开始（电流上限{SLIDER_CURRENT_A:g}A，最长{HAND_CONTACT_SECONDS:g}s）" if event["action"] == "engaged" else "退回后释放"
-                    faults.pending.append(f"{side} NID={nid} 接触抓取{action}; "
-                                          f"方向={event['direction']}, 触发实测={event['measured_at_trigger']:.5f}rad, "
-                                          f"触发指令={event['bound']:.5f}rad")
+                    action = (
+                        f"开始（电流上限{SLIDER_CURRENT_A:g}A，最长{HAND_CONTACT_SECONDS:g}s）"
+                        if event["action"] == "engaged"
+                        else "退回后释放"
+                    )
+                    faults.pending.append(
+                        f"{side} NID={nid} 接触抓取{action}; "
+                        f"方向={event['direction']}, 触发实测={event['measured_at_trigger']:.5f}rad, "
+                        f"触发指令={event['bound']:.5f}rad"
+                    )
         delta = effective - self.last[0]
-        speed = (getattr(self, "slider_speed_rad_s", SLIDER_SPEED_RAD_S)
-                 if getattr(self, "hand_control", "strict") == "slider" else HAND_SPEED_RAD_S)
+        speed = (
+            getattr(self, "slider_speed_rad_s", SLIDER_SPEED_RAD_S)
+            if getattr(self, "hand_control", "strict") == "slider"
+            else HAND_SPEED_RAD_S
+        )
         allowed = speed * dt
         limited = self.last[0] + np.clip(delta, -allowed, allowed)
         # Do not accidentally use this field as a velocity limiter: MIT velocity

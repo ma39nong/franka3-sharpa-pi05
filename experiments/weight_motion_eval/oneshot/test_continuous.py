@@ -158,8 +158,17 @@ def test_isolated_acknowledged_overrun_continues_without_catchup_burst(elapsed):
         return result
 
     devices.submit = slow_once
-    control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
-                 lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    control_loop(
+        devices,
+        make_player(np.zeros(54)),
+        queue.Queue(),
+        events.append,
+        lambda *args: None,
+        lambda: False,
+        1,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     warnings = [e for e in events if e["event"] == "control_tick_overrun"]
     assert len(warnings) == 1
     assert warnings[0]["overrun_ms"] == pytest.approx((elapsed - 0.01) * 1000)
@@ -169,8 +178,9 @@ def test_isolated_acknowledged_overrun_continues_without_catchup_burst(elapsed):
     assert max(f.valid_until - f.created for f in devices.frames) <= 0.02 + 1e-9
 
 
-@pytest.mark.parametrize(("slow_frames", "stop_count", "warning_count"),
-                         [(set(range(3)), 3, 2), (set(range(0, 11, 2)), 11, 5)])
+@pytest.mark.parametrize(
+    ("slow_frames", "stop_count", "warning_count"), [(set(range(3)), 3, 2), (set(range(0, 11, 2)), 11, 5)]
+)
 def test_repeated_small_overruns_stop(slow_frames, stop_count, warning_count):
     clock, events = Clock(), []
     devices = Devices(clock)
@@ -184,8 +194,17 @@ def test_repeated_small_overruns_stop(slow_frames, stop_count, warning_count):
 
     devices.submit = slow
     with pytest.raises(RuntimeError, match="Repeated control tick overruns"):
-        control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
-                     lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+        control_loop(
+            devices,
+            make_player(np.zeros(54)),
+            queue.Queue(),
+            events.append,
+            lambda *args: None,
+            lambda: False,
+            1,
+            clock=clock,
+            sleep=clock.sleep,
+        )
     assert len(devices.frames) == stop_count
     assert sum(e["event"] == "control_tick_overrun" for e in events) == warning_count
     assert devices.finishes == 0
@@ -199,8 +218,17 @@ def test_overrun_rate_window_expires_and_accounts_for_post_submit_work():
         if frame.sequence in {0, 2, 4, 6, 8, 120}:
             clock.now += 0.010357
 
-    control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
-                 delayed_record, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    control_loop(
+        devices,
+        make_player(np.zeros(54)),
+        queue.Queue(),
+        events.append,
+        delayed_record,
+        lambda: False,
+        1,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     warnings = [e for e in events if e["event"] == "control_tick_overrun"]
     assert len(warnings) == 6
     assert warnings[-1]["in_last_second"] == 1
@@ -225,17 +253,30 @@ def test_jitter_grace_never_recovers_expired_unhealthy_or_unconfirmed_submit(fau
         return result
 
     devices.submit = broken
-    with pytest.raises((RuntimeError, ValueError, TimeoutError),
-                       match="frame deadline|stale|unconfirmed submit|lacks submission feedback"):
-        control_loop(devices, make_player(np.zeros(54)), queue.Queue(), events.append,
-                     lambda *args: None, lambda: False, 1, clock=clock, sleep=clock.sleep)
+    with pytest.raises(
+        (RuntimeError, ValueError, TimeoutError),
+        match="frame deadline|stale|unconfirmed submit|lacks submission feedback",
+    ):
+        control_loop(
+            devices,
+            make_player(np.zeros(54)),
+            queue.Queue(),
+            events.append,
+            lambda *args: None,
+            lambda: False,
+            1,
+            clock=clock,
+            sleep=clock.sleep,
+        )
     assert len(devices.frames) == 1
     assert not any(e["event"] == "control_tick_overrun" for e in events)
 
 
 def test_parent_records_and_prints_timing_warning_without_failing(capsys):
     from types import SimpleNamespace
+
     from .continuous import ContinuousConsumer
+
     consumer = ContinuousConsumer.__new__(ContinuousConsumer)
     consumer.status, consumer.report, recorded = queue.Queue(), {}, []
     consumer.process = None
@@ -366,6 +407,7 @@ def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path, 
     devices = Devices(time.monotonic)
     devices.sock = SimpleNamespace(close=lambda: None)
     devices.counter, devices.finish_policy = 0, "disable"
+
     def prediction(**kwargs):
         actions = np.full((50, 54), 0.01 * len(requests))
         if hand_over_limit:
@@ -426,6 +468,7 @@ def test_consumer_requests_new_observation_after_default_twenty_steps(tmp_path, 
 def test_planning_failure_preserves_prediction_start_and_joint_error(tmp_path, monkeypatch):
     import json
     from types import SimpleNamespace as S
+
     from . import continuous as module
     from .continuous import ContinuousConsumer
 
@@ -446,9 +489,11 @@ def test_planning_failure_preserves_prediction_start_and_joint_error(tmp_path, m
     actions = np.zeros((50, 54))
     actions[29, 51] = 2.1
     consumer.codec = S(packb=lambda obs: b"request", unpackb=lambda result: {"actions": actions})
+
     def receive(**kwargs):
         clock.now += 0.01
         return b"response"
+
     consumer.ws = S(send=lambda packet: None, recv=receive)
     consumer.devices = S(feedback=lambda now: S(positions=np.zeros(54)))
     obs = {"observation/state": np.zeros(54)}

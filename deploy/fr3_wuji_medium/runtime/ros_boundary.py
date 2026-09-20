@@ -5,8 +5,8 @@ splitter must not be running alongside these nodes.
 """
 
 import argparse
-import copy
 from contextlib import nullcontext
+import copy
 import json
 from pathlib import Path
 import sys
@@ -14,9 +14,9 @@ import time
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.transport import validate_header
 from experiments.weight_motion_eval.oneshot.loop_diagnostics import LoopDiagnostics
 from experiments.weight_motion_eval.oneshot.motion_gc import MotionGC
+from experiments.weight_motion_eval.oneshot.transport import validate_header
 
 
 def checked_gateway_arm_speed(value):
@@ -70,10 +70,14 @@ class ArmBoundary:
                     offset = side_index * 7
                     previous = self.gate.last_output[side]
                     last_time = self.gate.last_time[side]
-                    dt = (min(0.1, max(candidate.nominal_dt, now_mono - last_time))
-                          if last_time is not None else candidate.nominal_dt)
-                    previous = (np.asarray(previous) if previous is not None
-                                else np.asarray(measured)[offset:offset + 7])
+                    dt = (
+                        min(0.1, max(candidate.nominal_dt, now_mono - last_time))
+                        if last_time is not None
+                        else candidate.nominal_dt
+                    )
+                    previous = (
+                        np.asarray(previous) if previous is not None else np.asarray(measured)[offset : offset + 7]
+                    )
                     for joint in range(7):
                         index = offset + joint
                         if abs(output[index] - target[index]) <= 1e-9:
@@ -83,20 +87,27 @@ class ArmBoundary:
                         max_step = candidate.max_joint_speed * dt
                         slew = abs(delta) > max_step + 1e-9
                         causes = (["接触力矩保护"] if contact else []) + (["变化率限制"] if slew else [])
-                        details.append({
-                            "arm": "左臂" if side == "left" else "右臂",
-                            "joint": joint + 1, "joint_name": message.joint_names[index],
-                            "causes": causes or ["其他目标修改"],
-                            "planned_rad": float(target[index]), "output_rad": float(output[index]),
-                            "previous_rad": float(previous[joint]),
-                            "measured_rad": float(np.asarray(measured)[index]),
-                            "requested_step_rad": delta, "max_step_rad": float(max_step),
-                            "dt_ms": float(dt * 1000),
-                            "external_torque_nm": float(torques[side][joint]),
-                            "contact_threshold_nm": float(candidate.contact_torque_thresholds[joint]),
-                        })
-                raise ValueError("Gateway contact/slew protection changed the planned target; 网关拒绝详情="
-                                 + json.dumps({"sequence": sequence, "joints": details}, ensure_ascii=False))
+                        details.append(
+                            {
+                                "arm": "左臂" if side == "left" else "右臂",
+                                "joint": joint + 1,
+                                "joint_name": message.joint_names[index],
+                                "causes": causes or ["其他目标修改"],
+                                "planned_rad": float(target[index]),
+                                "output_rad": float(output[index]),
+                                "previous_rad": float(previous[joint]),
+                                "measured_rad": float(np.asarray(measured)[index]),
+                                "requested_step_rad": delta,
+                                "max_step_rad": float(max_step),
+                                "dt_ms": float(dt * 1000),
+                                "external_torque_nm": float(torques[side][joint]),
+                                "contact_threshold_nm": float(candidate.contact_torque_thresholds[joint]),
+                            }
+                        )
+                raise ValueError(
+                    "Gateway contact/slew protection changed the planned target; 网关拒绝详情="
+                    + json.dumps({"sequence": sequence, "joints": details}, ensure_ascii=False)
+                )
             self.gate, self.session, self.sequence = candidate, run, sequence
             return result
         except ValueError as error:
@@ -210,12 +221,14 @@ def main():
             created = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
             receive_ms = (time.time_ns() - created) / 1_000_000
             if diagnostics is not None and receive_ms >= 5:
-                diagnostics.add({
-                    "event": "late_command_delivery",
-                    "at": time.monotonic(),
-                    "sequence": int(msg.sequence),
-                    "receive_ms": receive_ms,
-                })
+                diagnostics.add(
+                    {
+                        "event": "late_command_delivery",
+                        "at": time.monotonic(),
+                        "sequence": int(msg.sequence),
+                        "receive_ms": receive_ms,
+                    }
+                )
             with measure("gateway_command"):
                 self.process_command(msg)
 
@@ -271,11 +284,13 @@ def main():
             created = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
             receive_ms = (time.time_ns() - created) / 1_000_000
             if diagnostics is not None and receive_ms >= 5:
-                diagnostics.add({
-                    "event": "late_command_delivery",
-                    "at": time.monotonic(),
-                    "receive_ms": receive_ms,
-                })
+                diagnostics.add(
+                    {
+                        "event": "late_command_delivery",
+                        "at": time.monotonic(),
+                        "receive_ms": receive_ms,
+                    }
+                )
             with measure("splitter_command"):
                 self.process_command(msg)
 

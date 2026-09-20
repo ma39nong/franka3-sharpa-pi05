@@ -8,14 +8,24 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from .controller_status import ControllerStatus, ControllerStatusUnavailable
+from .controller_status import ControllerStatus
+from .controller_status import ControllerStatusUnavailable
 from .ros_devices import RosArms
-from .test_devices import make_session, prepare, frame
+from .test_devices import frame
+from .test_devices import make_session
+from .test_devices import prepare
 
 
 def status(fault=False, reason=None, stamp=110_000_000_000, **fields):
-    return json.dumps({"version": 1, "stamp_ns": stamp, "faulted": fault,
-                       "reason": reason or ("previous_command_expired" if fault else "none"), **fields})
+    return json.dumps(
+        {
+            "version": 1,
+            "stamp_ns": stamp,
+            "faulted": fault,
+            "reason": reason or ("previous_command_expired" if fault else "none"),
+            **fields,
+        }
+    )
 
 
 def monitor():
@@ -28,8 +38,22 @@ def monitor():
 def test_native_first_fault_and_expiry_replay(tmp_path):
     folder = Path(__file__).parent
     binary = tmp_path / "controller_fault"
-    subprocess.run(["g++", "-std=c++17", "-pthread", "-Wall", "-Wextra", "-Werror",
-                    "-I", str(folder), str(folder / "test_controller_fault.cpp"), "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            "g++",
+            "-std=c++17",
+            "-pthread",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(folder),
+            str(folder / "test_controller_fault.cpp"),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     value = json.loads(subprocess.check_output([str(binary)], text=True))
     assert value["reason"] == "previous_command_expired"
     assert value["received_sequence"] == 503 and value["expected_sequence"] == 504
@@ -72,9 +96,11 @@ def test_controller_fault_stops_hands_and_arms_without_waiting_for_tracking(side
     prepare(session)
     m = monitor()
     old = session.arms.feedback
+
     def feedback(now):
         m.check(now)
         return old(now)
+
     session.arms.feedback = feedback
     m.receive(side, status(True), 10, 110)
     if path == "submit":
@@ -91,6 +117,7 @@ def test_controller_fault_stops_hands_and_arms_without_waiting_for_tracking(side
 
 def test_stop_confirmation_still_reads_measured_feedback(monkeypatch):
     from . import ros_devices as module
+
     monkeypatch.setattr(module.time, "monotonic", lambda: 10)
     monkeypatch.setattr(module.time, "time", lambda: 110)
     arms = RosArms.__new__(RosArms)
@@ -109,6 +136,7 @@ def test_stop_confirmation_still_reads_measured_feedback(monkeypatch):
 
 def test_fault_is_checked_before_gateway_ack_can_mask_it(monkeypatch):
     from . import ros_devices as module
+
     monkeypatch.setattr(module.time, "monotonic", lambda: 10)
     arms = RosArms.__new__(RosArms)
     arms.output, arms.stopped = object(), False
@@ -124,16 +152,20 @@ def test_fault_is_checked_before_gateway_ack_can_mask_it(monkeypatch):
 def test_post_ack_fault_is_preserved_in_next_ipc_reply(monkeypatch):
     from . import bridge
     from .ipc import wire_frame
+
     session = make_session()
     prepare(session)
-    requests = iter([{"id": 1, "operation": "submit", "frame": wire_frame(frame())},
-                     {"id": 2, "operation": "feedback"}])
+    requests = iter(
+        [{"id": 1, "operation": "submit", "frame": wire_frame(frame())}, {"id": 2, "operation": "feedback"}]
+    )
     replies = []
     conn = SimpleNamespace(settimeout=lambda *_: None, sendall=lambda data: replies.append(json.loads(data)))
     monkeypatch.setattr(bridge, "receive", lambda _: next(requests))
     monkeypatch.setattr(bridge.select, "select", lambda *args: ([], [], []))
+
     def pump(*args):
         raise RuntimeError("Final arm controller fault: previous_command_expired")
+
     bridge.serve_connection(conn, session, stopping=lambda: len(replies) == 2, pump=pump)
     assert replies[0]["ok"] and not replies[1]["ok"]
     assert "previous_command_expired" in replies[1]["error"]

@@ -1,3 +1,5 @@
+> 目录迁移说明：慢速规划与执行的维护位置现为 `deploy/fr3_wuji_slow/`；共用启动和 IPC 在 `deploy/fr3_wuji_runtime/`；模型服务在 `deploy/fr3_wuji_models/`。本目录的旧路径保持兼容。参数总表见 `deploy/FR3_WUJI_ARCHITECTURE.md`。
+
 # 单次 50 步播放器：开发状态
 
 ## 当前双手速度保护（2026-09-18）

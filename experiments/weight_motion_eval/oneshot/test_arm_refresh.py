@@ -1,11 +1,13 @@
 """Setup may drain queues, but must never relabel old feedback as fresh."""
+
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from . import ros_devices as module
-from .ros_devices import ArmFeedbackUnavailable, RosArms
+from .ros_devices import ArmFeedbackUnavailable
+from .ros_devices import RosArms
 
 
 def owner(monkeypatch):
@@ -23,12 +25,14 @@ def owner(monkeypatch):
 def test_refresh_requires_new_receipts_on_both_arms(monkeypatch):
     arms, clock = owner(monkeypatch)
     calls = []
+
     def spin(budget):
         if budget == 0.005:
             calls.append(1)
             clock.now += 0.001
             side = "left" if len(calls) == 1 else "right"
             arms.samples[side] = (np.zeros(7), np.zeros(7), clock.now - 0.01, clock.now)
+
     arms.spin = spin
     feedback = arms.refresh_feedback()
     assert len(calls) == 2
@@ -103,16 +107,19 @@ def test_refresh_cancellation_and_clock_fault_do_not_retry(monkeypatch):
 
 
 def test_preparation_refreshes_after_blocking_enable_before_arming():
-    from .test_devices import make_session, prepare
+    from .test_devices import make_session
+    from .test_devices import prepare
 
     session = make_session()
     events = []
     session.arms.refresh_feedback = lambda **kwargs: events.append("refresh")
     for side, hand in session.hands.items():
         original = hand.enable
+
         def enable(*, side=side, original=original, **kwargs):
             original(**kwargs)
             events.append(side + " enabled")
+
         hand.enable = enable
     prepare(session)
     assert session.state == "armed"
@@ -120,12 +127,15 @@ def test_preparation_refreshes_after_blocking_enable_before_arming():
 
 
 def test_refresh_failure_after_enable_stops_acquired_devices():
-    from .test_devices import make_session, prepare
+    from .test_devices import make_session
+    from .test_devices import prepare
 
     session = make_session()
+
     def refresh(**kwargs):
         if session.hands["left"].owns_enable:
             raise RuntimeError("Arm feedback refresh timed out")
+
     session.arms.refresh_feedback = refresh
     with pytest.raises(RuntimeError, match="refresh timed out"):
         prepare(session)

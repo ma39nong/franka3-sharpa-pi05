@@ -7,9 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.core import ARM
-from experiments.weight_motion_eval.oneshot.core import HAND
-from experiments.weight_motion_eval.oneshot.core import Admission
+from deploy.fr3_wuji_slow.core import ARM
+from deploy.fr3_wuji_slow.core import HAND
+from deploy.fr3_wuji_slow.core import Admission
 from experiments.weight_motion_eval.reference import reference_limits
 
 from .timeline import check_arm_speed

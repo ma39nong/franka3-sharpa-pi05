@@ -13,6 +13,8 @@ import subprocess
 import sys
 import time
 
+from experiments.weight_motion_eval.oneshot.loop_diagnostics import LoopDiagnostics
+
 from .core import checked_arm_speed
 from .core import checked_arm_tracking_tolerance
 from .devices import DeviceSession
@@ -22,7 +24,6 @@ from .ipc import encode
 from .ipc import receive
 from .ipc import unpack_frame
 from .ipc import wire_feedback
-from experiments.weight_motion_eval.oneshot.loop_diagnostics import LoopDiagnostics
 from .limits import ARM_TRACKING_TOLERANCE_RAD
 from .limits import HAND_KP
 from .qualification import Qualification
@@ -43,6 +44,7 @@ def configured_hand_kp(config):
 
 def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
     measure = diagnostics.measure if diagnostics else lambda *args: nullcontext()
+
     def checked_pump(*args):
         try:
             pump(*args)
@@ -50,6 +52,7 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
             if not session.fault:
                 session.fault = str(error)
             session.stop()
+
     conn.settimeout(0.002)
     last_request = 0
     # The client allows one in-flight RPC. EOF or another packet while enable
@@ -109,8 +112,9 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
                 session.prepare(request["run_id"], request["plan_hash"], request["start"], request["finish_policy"])
                 result = {"state": session.state}
             elif operation == "next_plan":
-                result = session.next_plan(request["run_id"], request["plan_hash"], request["start"],
-                                           request.get("slider_speed_rad_s", 2.0))
+                result = session.next_plan(
+                    request["run_id"], request["plan_hash"], request["start"], request.get("slider_speed_rad_s", 2.0)
+                )
             elif operation == "submit":
                 with measure("submit"):
                     result = session.submit(unpack_frame(request["frame"]))
@@ -141,8 +145,7 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
         except (BrokenPipeError, ConnectionResetError):
             session.stop()
             return
-        if (request.get("operation") == "submit" and reply["ok"] and session.state == "armed"
-                and not stopping()):
+        if request.get("operation") == "submit" and reply["ok"] and session.state == "armed" and not stopping():
             # The observed telemetry burst took 5.23 ms. Reserve at least 6 ms
             # before the next nominal frame, and never delay a queued stop/RPC.
             # This is background-work admission, not an extended motion deadline.
@@ -210,16 +213,28 @@ def main():
             arms.spin()
         with diagnostics.measure("hand_telemetry_publish"):
             arms.publish_hands(hands, feedback=feedback)
+
     try:
-        cpu_sampler = subprocess.Popen([
-            sys.executable, "-m", "experiments.weight_motion_eval.oneshot.loop_diagnostics",
-            str(os.getpid()), str(args.runtime.parent / "cpu-load.jsonl")
-        ])
-        arms = RosArms(publish_reset_idle=args.execute, output_enabled=args.execute,
-                       status_output=args.runtime.parent / "controller-status.json")
+        cpu_sampler = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "experiments.weight_motion_eval.oneshot.loop_diagnostics",
+                str(os.getpid()),
+                str(args.runtime.parent / "cpu-load.jsonl"),
+            ]
+        )
+        arms = RosArms(
+            publish_reset_idle=args.execute,
+            output_enabled=args.execute,
+            status_output=args.runtime.parent / "controller-status.json",
+        )
         for side in ("left", "right"):
             hands[side] = HandOwner(
-                wuji_sdk, side, config["hands"][side], hand_control=config.get("hand_control", "strict"),
+                wuji_sdk,
+                side,
+                config["hands"][side],
+                hand_control=config.get("hand_control", "strict"),
                 deployment_kp=hand_kp[side],
             )
         if args.execute:
@@ -267,9 +282,7 @@ def main():
                     _, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                     if uid != os.getuid():
                         raise PermissionError("IPC peer is not the deployment owner")
-                    serve_connection(
-                        conn, session, stopping=lambda: stopping, pump=pump, diagnostics=diagnostics
-                    )
+                    serve_connection(conn, session, stopping=lambda: stopping, pump=pump, diagnostics=diagnostics)
                 break  # One connection/plan only; no reconnect or automatic re-enable.
     finally:
         # Issue stop before post-fault capture. Raw draining must survive

@@ -36,14 +36,20 @@ class ControllerStatus:
                 raise ValueError(f"stale/future controller status: age={age:.6f}s")
             record = {"side": side, "received_mono": now, "source_mono": now - age, "status": value}
             self.latest[side] = record
-            pending = (self.first_fault is not None and self.first_fault["side"] == side
-                       and self.first_fault["status"]["reason"] == "fault_pending")
+            pending = (
+                self.first_fault is not None
+                and self.first_fault["side"] == side
+                and self.first_fault["status"]["reason"] == "fault_pending"
+            )
             if value["faulted"] and (self.first_fault is None or pending):
                 self.first_fault = record
         except (ValueError, TypeError, AttributeError) as error:
             if self.first_fault is None:
-                self.first_fault = {"side": side, "received_mono": now,
-                                    "status": {"faulted": True, "reason": "invalid_status", "detail": str(error)}}
+                self.first_fault = {
+                    "side": side,
+                    "received_mono": now,
+                    "status": {"faulted": True, "reason": "invalid_status", "detail": str(error)},
+                }
 
     def raise_fault(self):
         if self.first_fault is not None:
@@ -54,9 +60,12 @@ class ControllerStatus:
         for side in ("left", "right"):
             record = self.latest.get(side)
             if record is None:
-                raise ControllerStatusUnavailable(f"Missing {side} controller status; rebuild/start the diagnostic overlay")
-            if any(not -0.002 <= now - record[key] <= STATUS_MAX_AGE_SECONDS
-                   for key in ("received_mono", "source_mono")):
+                raise ControllerStatusUnavailable(
+                    f"Missing {side} controller status; rebuild/start the diagnostic overlay"
+                )
+            if any(
+                not -0.002 <= now - record[key] <= STATUS_MAX_AGE_SECONDS for key in ("received_mono", "source_mono")
+            ):
                 raise ControllerStatusUnavailable(f"Stale {side} controller status heartbeat")
 
     def report(self):

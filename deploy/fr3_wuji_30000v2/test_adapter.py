@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
@@ -26,24 +25,34 @@ def test_checkpoint_is_full_finetune_and_64d():
     assert metadata["action_representation"] == "absolute_joint_positions"
     stats = json.loads(stats_file.read_text())["norm_stats"]
     assert all(len(stats[key][field]) == 64 for key in ("state", "actions") for field in stats[key])
-    assert all(all(value == 0 for value in stats[key][field][54:])
-               for key in ("state", "actions") for field in stats[key])
+    assert all(
+        all(value == 0 for value in stats[key][field][54:]) for key in ("state", "actions") for field in stats[key]
+    )
 
 
 def test_server_defaults_are_isolated():
     assert serve.with_defaults(["--check-only"]) == [
-        "--check-only", "--checkpoint", str(ROOT / "checkpoints/30000v2"),
-        "--port", "8003", "--full-finetune",
+        "--check-only",
+        "--checkpoint",
+        str(ROOT / "checkpoints/30000v2"),
+        "--port",
+        "8003",
+        "--full-finetune",
     ]
     assert serve.with_defaults(["--port=9000", "--checkpoint=/tmp/x"]) == [
-        "--port=9000", "--checkpoint=/tmp/x", "--full-finetune",
+        "--port=9000",
+        "--checkpoint=/tmp/x",
+        "--full-finetune",
     ]
 
 
 def test_slow_executor_defaults_are_isolated():
     assert execute.with_defaults(["--check"]) == [
-        "--check", "--checkpoint", str(ROOT / "checkpoints/30000v2"),
-        "--uri", "ws://127.0.0.1:8003",
+        "--check",
+        "--checkpoint",
+        str(ROOT / "checkpoints/30000v2"),
+        "--uri",
+        "ws://127.0.0.1:8003",
     ]
     old, _ = lora_serve.checkpoint_contract(ROOT / "checkpoints/30000")
     new, _ = checkpoint_contract(ROOT / "checkpoints/30000v2")

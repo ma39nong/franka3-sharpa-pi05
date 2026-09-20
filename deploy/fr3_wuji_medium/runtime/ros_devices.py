@@ -5,10 +5,13 @@ import time
 
 import numpy as np
 
+from experiments.weight_motion_eval.oneshot.controller_status import STATUS_TOPIC
+from experiments.weight_motion_eval.oneshot.controller_status import ControllerStatus
+from experiments.weight_motion_eval.oneshot.controller_status import ControllerStatusUnavailable
+from experiments.weight_motion_eval.oneshot.transport import ros_header
+
 from .core import ARM
 from .devices import HAND_SLICES
-from experiments.weight_motion_eval.oneshot.transport import ros_header
-from experiments.weight_motion_eval.oneshot.controller_status import ControllerStatus, ControllerStatusUnavailable, STATUS_TOPIC
 
 
 class ArmFeedbackUnavailable(ValueError):
@@ -53,8 +56,10 @@ class RosArms:
         }
         for side in ("left", "right"):
             self.node.create_subscription(
-                String, STATUS_TOPIC.format(side=side),
-                lambda msg, side=side: self.controller_status.receive(side, msg.data, time.monotonic(), time.time()), 1,
+                String,
+                STATUS_TOPIC.format(side=side),
+                lambda msg, side=side: self.controller_status.receive(side, msg.data, time.monotonic(), time.time()),
+                1,
             )
             self.node.create_subscription(
                 JointState,
@@ -129,9 +134,9 @@ class RosArms:
 
     def feedback_ages(self, now):
         return "; ".join(
-            f"{side}: source_age={now - self.samples[side][2]:.6f}s, "
-            f"receipt_age={now - self.samples[side][3]:.6f}s"
-            if side in self.samples else f"{side}: missing"
+            f"{side}: source_age={now - self.samples[side][2]:.6f}s, " f"receipt_age={now - self.samples[side][3]:.6f}s"
+            if side in self.samples
+            else f"{side}: missing"
             for side in ("left", "right")
         )
 
@@ -152,8 +157,9 @@ class RosArms:
                     print("Fresh arm feedback after preparation: " + self.feedback_ages(time.monotonic()), flush=True)
                     return feedback
             time.sleep(0.002)
-        raise RuntimeError("Arm feedback refresh timed out after " + str(timeout) + "s; "
-                           + self.feedback_ages(time.monotonic()))
+        raise RuntimeError(
+            "Arm feedback refresh timed out after " + str(timeout) + "s; " + self.feedback_ages(time.monotonic())
+        )
 
     def check_ownership(self):
         if self.output is None:

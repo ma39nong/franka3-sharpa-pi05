@@ -295,8 +295,7 @@ def test_unexecuted_tail_limits_are_reported_without_changing_prefix(inputs, tai
     assert ignored["examples"][0]["joint_name"] == names[51]
 
 
-@pytest.mark.parametrize(("source", "position"), [("prefix", -2.1), ("prefix", 2.1),
-                                                  ("start", -2.1), ("start", 2.1)])
+@pytest.mark.parametrize(("source", "position"), [("prefix", -2.1), ("prefix", 2.1), ("start", -2.1), ("start", 2.1)])
 def test_prefix_and_start_still_reject_limits_with_joint_details(inputs, source, position):
     raw, start, config, limits, names = inputs
     config["execution_steps"] = 30

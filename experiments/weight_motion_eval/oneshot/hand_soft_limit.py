@@ -43,13 +43,17 @@ class StallSoftLimit:
             events.append({"action": "engaged", "index": index, **contact.__dict__})
         for index, contact in list(self.contacts.items()):
             # Warning clearing alone never reopens the blocked direction.
-            if (index not in stalled
-                    and contact.direction * (target[index] - contact.bound) <= -RETREAT_RELEASE_RAD
-                    and contact.direction * (last_command[index] - contact.bound) <= -RETREAT_RELEASE_RAD
-                    and contact.direction * (measured[index] - contact.measured_at_trigger) <= -RETREAT_RELEASE_RAD):
+            if (
+                index not in stalled
+                and contact.direction * (target[index] - contact.bound) <= -RETREAT_RELEASE_RAD
+                and contact.direction * (last_command[index] - contact.bound) <= -RETREAT_RELEASE_RAD
+                and contact.direction * (measured[index] - contact.measured_at_trigger) <= -RETREAT_RELEASE_RAD
+            ):
                 del self.contacts[index]
                 events.append({"action": "released", "index": index, **contact.__dict__})
         return self.project(target), events
 
     def snapshot(self, offset):
-        return tuple((offset + index, contact.direction, contact.bound) for index, contact in sorted(self.contacts.items()))
+        return tuple(
+            (offset + index, contact.direction, contact.bound) for index, contact in sorted(self.contacts.items())
+        )

@@ -12,21 +12,21 @@ import uuid
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.core import ARM
-from experiments.weight_motion_eval.oneshot.core import HAND
-from experiments.weight_motion_eval.oneshot.core import Frame
-from experiments.weight_motion_eval.oneshot.core import check_tracking
-from experiments.weight_motion_eval.oneshot.ipc import RemoteDevices
-from experiments.weight_motion_eval.oneshot.limits import ARM_ENDPOINT_TOLERANCE_RAD
-from experiments.weight_motion_eval.oneshot.limits import HAND_CONTACT_SETTLE_SECONDS
-from experiments.weight_motion_eval.oneshot.limits import HAND_ENDPOINT_TOLERANCE_RAD
-from experiments.weight_motion_eval.oneshot.live import LiveConsumer
+from deploy.fr3_wuji_slow.core import ARM
+from deploy.fr3_wuji_slow.core import HAND
+from deploy.fr3_wuji_slow.core import Frame
+from deploy.fr3_wuji_slow.core import check_tracking
+from .ipc import RemoteDevices
+from deploy.fr3_wuji_slow.limits import ARM_ENDPOINT_TOLERANCE_RAD
+from deploy.fr3_wuji_slow.limits import HAND_CONTACT_SETTLE_SECONDS
+from deploy.fr3_wuji_slow.limits import HAND_ENDPOINT_TOLERANCE_RAD
+from deploy.fr3_wuji_slow.live import LiveConsumer
 from experiments.weight_motion_eval.reference import deployment_module
 
-from .timeline import ARM_SPEED_RAD_S
-from .timeline import Timeline
 from .limits import ARM_TRACKING_TOLERANCE_RAD
 from .smoothing import ArmSmoother
+from .timeline import ARM_SPEED_RAD_S
+from .timeline import Timeline
 
 
 def settled(feedback, target):
@@ -145,12 +145,15 @@ def run_control(
         raw_arm_target = q[ARM].copy()
         q, dq = smoother.step(q, dq, now)
         if sequence % 10 == 0:
-            notify({
-                "event": "arm_smoothing_sample", "at": now,
-                "target": raw_arm_target.tolist(),
-                "acceleration": smoother.acceleration.tolist(),
-                "deviation_rad": float(np.max(np.abs(raw_arm_target - q[ARM]))),
-            })
+            notify(
+                {
+                    "event": "arm_smoothing_sample",
+                    "at": now,
+                    "target": raw_arm_target.tolist(),
+                    "acceleration": smoother.acceleration.tolist(),
+                    "deviation_rad": float(np.max(np.abs(raw_arm_target - q[ARM]))),
+                }
+            )
         check_tracking(q, fb, ARM, "Normal-speed tracking", arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD)
         frame = Frame(run_id, first.digest, sequence, now, now + 0.02, now - began, q, dq, phase)
         fresh = devices.submit(frame, clock())

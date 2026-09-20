@@ -6,12 +6,18 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from experiments.weight_motion_eval.oneshot.core import ARM, HAND
+from experiments.weight_motion_eval.oneshot.core import ARM
+from experiments.weight_motion_eval.oneshot.core import HAND
 
 from . import limits as fast_limits
 from .control import run_control
-from .smoothing import ArmSmoother, smoothing_settings
-from .test_fast import Clock, Devices, LIMITS, chunk, initial
+from .smoothing import ArmSmoother
+from .smoothing import smoothing_settings
+from .test_fast import LIMITS
+from .test_fast import Clock
+from .test_fast import Devices
+from .test_fast import chunk
+from .test_fast import initial
 
 
 def smoother():
@@ -86,8 +92,7 @@ def test_full_braking_trajectory_checked_before_next_tick():
 
 def test_backend_failure_never_falls_back_to_raw_target():
     s = smoother()
-    s.generator = SimpleNamespace(validate_input=lambda *a: True,
-                                  calculate=lambda *a: s.backend.Result.Error)
+    s.generator = SimpleNamespace(validate_input=lambda *a: True, calculate=lambda *a: s.backend.Result.Error)
     with pytest.raises(RuntimeError, match="calculation failed"):
         s.step(np.full(54, 0.2), np.zeros(54), 0.01)
     np.testing.assert_array_equal(s.position, 0)
@@ -108,9 +113,18 @@ def test_end_to_end_no_endpoint_snap_and_settle_waits_for_generator():
     raw[15:, ARM] = 0.15
     raw[35:, ARM] = -0.1
     events = []
-    run_control(devices, initial(chunk(raw=raw)), LIMITS, {"rounds": 1},
-                queue.Queue(), events.append, lambda *args: None, lambda: False,
-                clock=clock, sleep=clock.sleep)
+    run_control(
+        devices,
+        initial(chunk(raw=raw)),
+        LIMITS,
+        {"rounds": 1},
+        queue.Queue(),
+        events.append,
+        lambda *args: None,
+        lambda: False,
+        clock=clock,
+        sleep=clock.sleep,
+    )
     q = np.array([frame.positions[ARM] for frame in devices.frames])
     assert np.max(np.abs(np.diff(q, n=2, axis=0))) / 0.01**2 <= 3 + 1e-6
     assert np.max(np.abs(np.diff(q, n=3, axis=0))) / 0.01**3 <= 30 + 1e-5
@@ -123,18 +137,21 @@ def test_end_to_end_no_endpoint_snap_and_settle_waits_for_generator():
 def test_fast_smoothing_does_not_modify_medium_or_slow_settings(monkeypatch):
     from deploy.fr3_wuji_medium import profile as medium
     from experiments.weight_motion_eval.oneshot import limits as slow
+
     before = (medium.ARM_SPEED_RAD_S, slow.ARM_TRACKING_TOLERANCE_RAD)
     config = medium.planning_config()
     monkeypatch.setattr(fast_limits, "ARM_ACCELERATION_RAD_S2", 2.0)
     s = smoother()
     s.step(np.full(54, 0.2), np.zeros(54), 0.01)
-    assert (medium.ARM_SPEED_RAD_S, slow.ARM_TRACKING_TOLERANCE_RAD) == before
+    assert before == (medium.ARM_SPEED_RAD_S, slow.ARM_TRACKING_TOLERANCE_RAD)
     assert medium.planning_config() == config
 
 
 def test_preview_records_smoothing_and_keeps_existing_guidance(tmp_path, monkeypatch):
     import json
+
     from . import deploy
+
     monkeypatch.setattr(deploy, "safe_output", lambda _: tmp_path / "preview")
     deploy.main(["--check"])
     config = json.loads((tmp_path / "preview/fast-config.json").read_text())

@@ -96,9 +96,7 @@ def test_launch_omits_legacy_reset_writer_and_isolates_latency_sensitive_helpers
     for role, expected in deploy.HELPER_CPUSETS.items():
         assert commands[role][commands[role].index("--cpuset-cpus") + 1] == expected
     for role in ("gateway", "splitter"):
-        assert commands[role][commands[role].index("--diagnostics") + 1] == str(
-            tmp_path / (role + "-diagnostics.json")
-        )
+        assert commands[role][commands[role].index("--diagnostics") + 1] == str(tmp_path / (role + "-diagnostics.json"))
 
 
 def test_supervised_trial_explicitly_propagates_without_fake_evidence(tmp_path):

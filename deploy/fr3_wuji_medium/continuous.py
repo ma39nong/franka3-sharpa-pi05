@@ -20,14 +20,15 @@ import traceback
 
 import numpy as np
 
+from .live import LiveConsumer
 from .player import Admission
 from .player import OneShot
+from .prefetch import accept_prefetch
+from .prefetch import endpoint_ready
+from .profile import ARM_SPEED_RAD_S
+from .profile import slow_motion_config
 from .runtime.ipc import RemoteDevices
 from .runtime.ipc import wire_feedback
-from .live import LiveConsumer
-from .profile import ARM_SPEED_RAD_S
-from .prefetch import endpoint_ready, accept_prefetch
-from .profile import slow_motion_config
 
 CONTROL_TICK_SECONDS = 0.01
 CONTROL_OVERRUN_GRACE_SECONDS = 0.005
@@ -129,7 +130,9 @@ def control_loop(
                 candidate.run_id = player.run_id
                 candidate.check_start(fb, now)
                 result = devices.call(
-                    "next_plan", run_id=player.run_id, plan_hash=candidate.digest,
+                    "next_plan",
+                    run_id=player.run_id,
+                    plan_hash=candidate.digest,
                     start=candidate.plan.start.tolist(),
                     slider_speed_rad_s=candidate.plan.config.get("slider_speed_rad_s", 2.0),
                 )
@@ -138,16 +141,28 @@ def control_loop(
                 selected_profile = candidate.plan.config.get("speed_profile", "medium")
                 if selected_profile == "slow" and not slow_active:
                     slow_active = True
-                    notify({"event": "speed_profile_changed", "round": round_number + 1,
-                            "elapsed_seconds": now - first.started, "profile": "slow",
-                            "plan_hash": candidate.digest})
+                    notify(
+                        {
+                            "event": "speed_profile_changed",
+                            "round": round_number + 1,
+                            "elapsed_seconds": now - first.started,
+                            "profile": "slow",
+                            "plan_hash": candidate.digest,
+                        }
+                    )
                 player = candidate
                 player.sequence = sequence
                 player.start(fb, clock())
                 waiting_since = None
                 round_number += 1
-                notify({"event": "round_started", "round": round_number,
-                        "profile": selected_profile, "plan_hash": player.digest})
+                notify(
+                    {
+                        "event": "round_started",
+                        "round": round_number,
+                        "profile": selected_profile,
+                        "plan_hash": player.digest,
+                    }
+                )
                 notify({"event": "stage", "stage": f"第 {round_number} 轮：平滑衔接新动作段"})
                 now = clock()
         if waiting_since is None:
@@ -202,10 +217,20 @@ def control_loop(
         # Ask for a fresh observation as soon as the endpoint is measured ready.
         # Inference/planning overlap the remaining settle dwell in the parent;
         # the child cannot activate the queued plan before round_complete.
-        if (round_number < rounds and prefetched_round != round_number
-                and player.state == "settle_end" and endpoint_ready(player, fb)):
-            notify({"event": "prefetch", "round": round_number,
-                    "target": last.positions.tolist(), "feedback": wire_feedback(fb)})
+        if (
+            round_number < rounds
+            and prefetched_round != round_number
+            and player.state == "settle_end"
+            and endpoint_ready(player, fb)
+        ):
+            notify(
+                {
+                    "event": "prefetch",
+                    "round": round_number,
+                    "target": last.positions.tolist(),
+                    "feedback": wire_feedback(fb),
+                }
+            )
             prefetched_round = round_number
         if waiting_since is not None and now - last_status >= 0.05:
             notify(
@@ -227,30 +252,42 @@ def control_loop(
                 raise RuntimeError("Control submission exceeded frame deadline")
             fb.check(finished, fb.epoch)
             if overrun > CONTROL_OVERRUN_GRACE_SECONDS + 1e-9:
-                raise RuntimeError(f"Control submission exceeded 100 Hz tick: overrun_ms={overrun * 1000:.3f}; "
-                                   f"grace_ms={CONTROL_OVERRUN_GRACE_SECONDS * 1000:.3f}")
+                raise RuntimeError(
+                    f"Control submission exceeded 100 Hz tick: overrun_ms={overrun * 1000:.3f}; "
+                    f"grace_ms={CONTROL_OVERRUN_GRACE_SECONDS * 1000:.3f}"
+                )
             consecutive_overruns += 1
             while recent_overruns and finished - recent_overruns[0] >= CONTROL_OVERRUN_WINDOW_SECONDS:
                 recent_overruns.popleft()
             recent_overruns.append(finished)
-            if (consecutive_overruns >= CONTROL_OVERRUN_CONSECUTIVE_LIMIT
-                    or len(recent_overruns) > CONTROL_OVERRUN_WINDOW_LIMIT):
-                raise RuntimeError("Repeated control tick overruns: "
-                                   f"consecutive={consecutive_overruns}, in_last_second={len(recent_overruns)}")
+            if (
+                consecutive_overruns >= CONTROL_OVERRUN_CONSECUTIVE_LIMIT
+                or len(recent_overruns) > CONTROL_OVERRUN_WINDOW_LIMIT
+            ):
+                raise RuntimeError(
+                    "Repeated control tick overruns: "
+                    f"consecutive={consecutive_overruns}, in_last_second={len(recent_overruns)}"
+                )
             # Rebase the schedule: do not replay missed ticks or shorten the
             # next start-to-start interval to catch up. Frame expiry is unchanged.
             due = max(finished, frame.created + CONTROL_TICK_SECONDS)
-            notify({"event": "control_tick_overrun", "round": round_number,
-                    "sequence": frame.sequence, "overrun_ms": overrun * 1000,
-                    "consecutive": consecutive_overruns, "in_last_second": len(recent_overruns),
-                    "next_due": due})
+            notify(
+                {
+                    "event": "control_tick_overrun",
+                    "round": round_number,
+                    "sequence": frame.sequence,
+                    "overrun_ms": overrun * 1000,
+                    "consecutive": consecutive_overruns,
+                    "in_last_second": len(recent_overruns),
+                    "next_due": due,
+                }
+            )
         else:
             consecutive_overruns = 0
     raise RuntimeError("Continuous execution cancelled")
 
 
-def _worker(sock, counter, finish_policy, first, incoming, status, stop_event, output, rounds,
-            slow_after_seconds=None):
+def _worker(sock, counter, finish_policy, first, incoming, status, stop_event, output, rounds, slow_after_seconds=None):
     devices = RemoteDevices(None, execute=True, finish_policy=finish_policy, sock=sock, arm_speed_rad_s=ARM_SPEED_RAD_S)
     devices.counter = counter
     recorder = None
@@ -286,8 +323,16 @@ def _worker(sock, counter, finish_policy, first, incoming, status, stop_event, o
         emitter.devices, emitter.recorder = devices, recorder
         threading.Thread(target=load_plans, daemon=True).start()
         threading.Thread(target=watch_parent, daemon=True).start()
-        control_loop(devices, first, local, notify, emitter.emit, stop_event.is_set, rounds,
-                     slow_after_seconds=slow_after_seconds)
+        control_loop(
+            devices,
+            first,
+            local,
+            notify,
+            emitter.emit,
+            stop_event.is_set,
+            rounds,
+            slow_after_seconds=slow_after_seconds,
+        )
         while finish_policy == "hold" and not stop_event.wait(0.05):
             if devices.hold_error:
                 raise RuntimeError(devices.hold_error)
@@ -327,8 +372,9 @@ class ContinuousConsumer(LiveConsumer):
         self.incoming = self.context.Queue(1)
         self.status = self.context.Queue(256)
         self.stop_event = StopFlag(self.context)
-        self.report.update(mode="medium_continuous", rounds=rounds, replan_steps=replan_steps,
-                           slow_after_seconds=slow_after_seconds)
+        self.report.update(
+            mode="medium_continuous", rounds=rounds, replan_steps=replan_steps, slow_after_seconds=slow_after_seconds
+        )
 
     def poll(self, store=None, output=None):
         while True:
@@ -340,8 +386,11 @@ class ContinuousConsumer(LiveConsumer):
             if kind == "control_tick_overrun":
                 self.recorder.event(event)
                 self.report["control_tick_overrun_count"] = self.report.get("control_tick_overrun_count", 0) + 1
-                print(f"【阶段】【周期警告】第 {event['round']} 轮，帧 {event['sequence']}："
-                      f"已确认提交，周期超时 {event['overrun_ms']:.3f} ms，调整调度后继续", flush=True)
+                print(
+                    f"【阶段】【周期警告】第 {event['round']} 轮，帧 {event['sequence']}："
+                    f"已确认提交，周期超时 {event['overrun_ms']:.3f} ms，调整调度后继续",
+                    flush=True,
+                )
                 continue
             if kind == "stage":
                 self.report["stage"] = event["stage"]
@@ -360,8 +409,10 @@ class ContinuousConsumer(LiveConsumer):
                 self.slow_active = True
                 self.report["speed_profile_change"] = event
                 self.recorder.event(event)
-                print(f"【阶段】第 {event['round']} 轮起切换慢速；动作开始后 "
-                      f"{event['elapsed_seconds']:.3f} 秒", flush=True)
+                print(
+                    f"【阶段】第 {event['round']} 轮起切换慢速；动作开始后 " f"{event['elapsed_seconds']:.3f} 秒",
+                    flush=True,
+                )
             elif kind in {"prefetch", "between"} and event["round"] == self.rounds_submitted:
                 self.between = event
                 self.pending = False
@@ -389,7 +440,12 @@ class ContinuousConsumer(LiveConsumer):
 
     def consume(self, store, obs, metadata, directory):
         self.poll()
-        if self.completed or self.pending or self.rounds_submitted >= self.rounds or (self.process is not None and self.between is None):
+        if (
+            self.completed
+            or self.pending
+            or self.rounds_submitted >= self.rounds
+            or (self.process is not None and self.between is None)
+        ):
             return
         round_number = self.rounds_submitted + 1
         start_target = None if self.process is None else np.asarray(self.between["target"])
@@ -422,14 +478,19 @@ class ContinuousConsumer(LiveConsumer):
             start = self.devices.feedback(time.monotonic()).positions
         else:
             start = start_target
-        config = dict(self.config, continuation=self.process is not None, inference_request_id=admission.request_id,
-                      final_chunk=round_number == self.rounds)
+        config = dict(
+            self.config,
+            continuation=self.process is not None,
+            inference_request_id=admission.request_id,
+            final_chunk=round_number == self.rounds,
+        )
         print("【阶段】推理返回，规划动作段", flush=True)
         round_dir = self.output / f"round-{round_number:04d}"
         round_dir.mkdir()
         # Preserve the full prediction even when planning rejects its prefix.
-        np.savez_compressed(round_dir / "inference.npz", actions=actions,
-                            state=obs["observation/state"], recorded_start=start)
+        np.savez_compressed(
+            round_dir / "inference.npz", actions=actions, state=obs["observation/state"], recorded_start=start
+        )
         (round_dir / "admission.json").write_text(json.dumps(asdict(admission), indent=2) + "\n")
         try:
             if self.slow_active:
@@ -453,10 +514,12 @@ class ContinuousConsumer(LiveConsumer):
             save_plan(slow_player.plan, round_dir / "plan-slow")
         projection = plan.report["hand_prediction_projection"]
         if projection["adjustment_count"]:
-            print(f"【阶段】【手部预测警告】{projection['adjustment_count']} 个预测角度超出关节范围，"
-                  f"已限制到合法边界；最大调整 {projection['max_adjustment_rad']:.4f} rad，继续执行", flush=True)
-            self.recorder.event({"event": "hand_prediction_projected",
-                                 "round": round_number, **projection})
+            print(
+                f"【阶段】【手部预测警告】{projection['adjustment_count']} 个预测角度超出关节范围，"
+                f"已限制到合法边界；最大调整 {projection['max_adjustment_rad']:.4f} rad，继续执行",
+                flush=True,
+            )
+            self.recorder.event({"event": "hand_prediction_projected", "round": round_number, **projection})
         self.recorder.event(
             {
                 "event": "round_admitted",

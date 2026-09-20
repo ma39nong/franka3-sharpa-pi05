@@ -32,13 +32,17 @@ def test_owner_stops_before_restoring_gc(enable_failure):
     session.motion_gc = MotionGC()
     stop_states = []
     original_stop = session.arms.stop
+
     def stop():
         stop_states.append(gc.isenabled())
         original_stop()
+
     session.arms.stop = stop
     if enable_failure:
+
         def fail(**kwargs):
             raise RuntimeError("injected enable failure")
+
         session.hands["right"].enable = fail
     try:
         gc.enable()
@@ -62,10 +66,14 @@ def test_trace_allocation_stress_has_no_automatic_collections():
     from types import SimpleNamespace
 
     from experiments.weight_motion_eval.oneshot.hand_trace import HandTrace
+
     policy = MotionGC()
     trace = HandTrace(capacity=100)
-    sdk_frame = SimpleNamespace(header=SimpleNamespace(timestamp_us=1), num_joints=20,
-                                joints=[SimpleNamespace(nid=i, position=0, velocity=0) for i in range(20)])
+    sdk_frame = SimpleNamespace(
+        header=SimpleNamespace(timestamp_us=1),
+        num_joints=20,
+        joints=[SimpleNamespace(nid=i, position=0, velocity=0) for i in range(20)],
+    )
     try:
         policy.begin()
         before = [row["collections"] for row in gc.get_stats()]

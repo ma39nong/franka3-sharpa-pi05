@@ -1,4 +1,5 @@
 """Independent medium-speed deployment. Default --check never starts devices."""
+
 import argparse
 from contextlib import ExitStack
 import copy
@@ -10,16 +11,27 @@ from pathlib import Path
 import tempfile
 import time
 import uuid
+
 import yaml
-from experiments.weight_motion_eval.oneshot import deploy as hardware
+
+from deploy.fr3_wuji_runtime import hardware
+from deploy.fr3_wuji_models.registry import MODELS, profile
+
+from .profile import ARM_SPEED_RAD_S
+from .profile import checkpoint_contract
+from .profile import planning_config
+from .profile import session_limits
 from .runtime.ipc import RemoteDevices
-from .runtime.limits import (
-    HAND_SPEED_RAD_S, HAND_CURRENT_A, HAND_CONTACT_SECONDS, ARM_TRACKING_TOLERANCE_RAD,
-    SLIDER_CURRENT_A, SLIDER_SPEED_RAD_S,
-    HAND_KP,
-)
-from .runtime.qualification import Qualification, SupervisedTrial
-from .profile import ARM_SPEED_RAD_S, checkpoint_contract, planning_config, session_limits
+from .runtime.limits import ARM_TRACKING_TOLERANCE_RAD
+from .runtime.limits import HAND_CONTACT_SECONDS
+from .runtime.limits import HAND_CURRENT_A
+from .runtime.limits import HAND_KP
+from .runtime.limits import HAND_SPEED_RAD_S
+from .runtime.limits import SLIDER_CURRENT_A
+from .runtime.limits import SLIDER_SPEED_RAD_S
+from .runtime.qualification import Qualification
+from .runtime.qualification import SupervisedTrial
+
 ROOT, REFERENCE = hardware.ROOT, hardware.REFERENCE
 verify_overlay, preflight_owners, Children = hardware.verify_overlay, hardware.preflight_owners, hardware.Children
 
@@ -30,8 +42,8 @@ def launch_commands(args, output, ipc):
         commands["gateway"] += ["--arm-speed-rad-s", str(ARM_SPEED_RAD_S)]
     # Route every speed-sensitive boundary to the medium-owned runtime.
     modules = {
-        "experiments.weight_motion_eval.oneshot.ros_boundary": "deploy.fr3_wuji_medium.runtime.ros_boundary",
-        "experiments.weight_motion_eval.oneshot.bridge": "deploy.fr3_wuji_medium.runtime.bridge",
+        "deploy.fr3_wuji_runtime.ros_boundary": "deploy.fr3_wuji_medium.runtime.ros_boundary",
+        "deploy.fr3_wuji_runtime.bridge": "deploy.fr3_wuji_medium.runtime.bridge",
     }
     return {role: [modules.get(arg, arg) for arg in command] for role, command in commands.items()}
 
@@ -47,18 +59,24 @@ def parse_args(argv=None):
     parser.add_argument("--wuji-sides", choices=("both",), default="both")
     parser.add_argument("--wuji-left-address", default="192.168.1.110:7447")
     parser.add_argument("--wuji-right-address", default="192.168.2.111:7447")
-    parser.add_argument("--model", choices=("19999", "30000", "30000v2", "25000", "25000-single"), default="30000")
+    parser.add_argument("--model", choices=tuple(MODELS), default="30000")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--uri")
     parser.add_argument("--start-cameras", action="store_true")
     parser.add_argument("--finish-policy", choices=("hold", "disable"), default="hold")
     parser.add_argument("--hand-control", choices=("slider", "strict"), default="slider")
-    parser.add_argument("--continuous", action="store_true", help="Execute fresh prediction prefixes in one held session")
+    parser.add_argument(
+        "--continuous", action="store_true", help="Execute fresh prediction prefixes in one held session"
+    )
     parser.add_argument("--rounds", type=int, default=50)
     parser.add_argument("--replan-steps", type=int, default=20)
     parser.add_argument("--minimum-time-scale", type=float, default=0.625)
-    parser.add_argument("--slow-after-seconds", type=float, default=25.0,
-                        help="Switch to slow motion at the first new prediction segment after this many motion seconds; 0 disables")
+    parser.add_argument(
+        "--slow-after-seconds",
+        type=float,
+        default=25.0,
+        help="Switch to slow motion at the first new prediction segment after this many motion seconds; 0 disables",
+    )
     parser.add_argument("--qualification", type=Path)
     parser.add_argument(
         "--supervised-trial",
@@ -69,8 +87,8 @@ def parse_args(argv=None):
         "--output", type=Path, default=ROOT / "logs/weight_motion_eval" / ("medium-" + uuid.uuid4().hex[:10])
     )
     args = parser.parse_args(argv)
-    args.checkpoint = args.checkpoint or ROOT / "checkpoints" / args.model
-    args.uri = args.uri or "ws://127.0.0.1:" + {"19999": "8001", "30000": "8002", "30000v2": "8003", "25000": "8004", "25000-single": "8005"}[args.model]
+    args.checkpoint = args.checkpoint or ROOT / profile(args.model).checkpoint
+    args.uri = args.uri or profile(args.model).uri
     if args.rounds < 1 or not 2 <= args.replan_steps <= 50:
         parser.error("rounds must be positive; replan-steps must be between 2 and 50")
     if not 0.5 <= args.minimum_time_scale <= 100:
@@ -224,7 +242,12 @@ def main(argv=None):
             if time.monotonic() > deadline:
                 raise RuntimeError("Device bridge startup timed out")
             time.sleep(0.1)
-        devices = RemoteDevices(ipc / "devices.sock", execute=args.execute, finish_policy=args.finish_policy, arm_speed_rad_s=ARM_SPEED_RAD_S)
+        devices = RemoteDevices(
+            ipc / "devices.sock",
+            execute=args.execute,
+            finish_policy=args.finish_policy,
+            arm_speed_rad_s=ARM_SPEED_RAD_S,
+        )
         stack.callback(devices.close)
         try:
             inventory = devices.call("inventory", timeout=3)
@@ -268,9 +291,20 @@ def main(argv=None):
                 config["hand_raw_initial_delta_rad"] = qualification.data["hand_raw_initial_delta_rad"]
                 if args.continuous:
                     from .continuous import ContinuousConsumer
-                    consumer = ContinuousConsumer(devices, ws, model, config, limits, names, output, recorder,
-                                                  rounds=args.rounds, replan_steps=args.replan_steps,
-                                                  slow_after_seconds=args.slow_after_seconds or None)
+
+                    consumer = ContinuousConsumer(
+                        devices,
+                        ws,
+                        model,
+                        config,
+                        limits,
+                        names,
+                        output,
+                        recorder,
+                        rounds=args.rounds,
+                        replan_steps=args.replan_steps,
+                        slow_after_seconds=args.slow_after_seconds or None,
+                    )
                     stack.callback(consumer.close)
                 else:
                     consumer = LiveConsumer(devices, ws, model, config, limits, names, output, recorder)
@@ -291,15 +325,18 @@ def main(argv=None):
                     options += ["--start-cameras", "--camera-profile", "rgb"]
                 camera_wait = getattr(observe, "CAMERA_WARMUP_SECONDS", 18)
                 print(
-                    "【阶段】启动实时观测"
-                    + (f"，等待相机稳定 {camera_wait} 秒" if args.start_cameras else ""),
+                    "【阶段】启动实时观测" + (f"，等待相机稳定 {camera_wait} 秒" if args.start_cameras else ""),
                     flush=True,
                 )
                 observe.main(options, consumer=consumer, single_shot=True)
                 if consumer.completed != 1:
                     raise RuntimeError("No fresh inference was admitted")
                 print(
-                    (f"{args.rounds} prediction rounds completed. " if args.continuous else "One 50-step trajectory completed. ")
+                    (
+                        f"{args.rounds} prediction rounds completed. "
+                        if args.continuous
+                        else "One 50-step trajectory completed. "
+                    )
                     + (
                         "Hands holding; Ctrl-C stops and releases after feedback confirmation."
                         if args.finish_policy == "hold"

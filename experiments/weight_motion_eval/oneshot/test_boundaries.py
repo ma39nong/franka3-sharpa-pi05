@@ -381,6 +381,7 @@ def test_hand_failed_clamped_send_does_not_advance_limiter(monkeypatch):
 @pytest.mark.parametrize("contact", [False, True])
 def test_gateway_rejection_reports_contact_or_slew_details(contact):
     import json
+
     gate, names = reference_gate()
     boundary = ArmBoundary(gate)
     measured = np.tile([0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0], 2)

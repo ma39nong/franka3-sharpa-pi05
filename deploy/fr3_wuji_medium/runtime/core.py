@@ -26,7 +26,12 @@ SPEED.flags.writeable = False
 
 def checked_arm_speed(value):
     """Medium-only per-session arm limit, at most 2.0 rad/s."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 2.0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 < value <= 2.0
+    ):
         raise ValueError("Arm speed must be positive, finite and at most 2.0 rad/s")
     return float(value)
 
@@ -77,7 +82,14 @@ class Feedback:
             if len(item) != 3:
                 raise ValueError("Invalid hand soft limit")
             index, direction, bound = item
-            if type(index) is not int or index not in HAND or index in indices or type(direction) is not int or direction not in (-1, 1) or not math.isfinite(bound):
+            if (
+                type(index) is not int
+                or index not in HAND
+                or index in indices
+                or type(direction) is not int
+                or direction not in (-1, 1)
+                or not math.isfinite(bound)
+            ):
                 raise ValueError("Invalid hand soft limit")
             indices.add(index)
         if limits and self.hand_control != "slider":
@@ -89,9 +101,15 @@ class Feedback:
             if len(item) != 4:
                 raise ValueError("Invalid hand contact")
             index, direction, bound, started = item
-            if (type(index) is not int or index not in HAND or index in indices
-                    or type(direction) is not int or direction not in (-1, 1)
-                    or not math.isfinite(bound) or not math.isfinite(started)):
+            if (
+                type(index) is not int
+                or index not in HAND
+                or index in indices
+                or type(direction) is not int
+                or direction not in (-1, 1)
+                or not math.isfinite(bound)
+                or not math.isfinite(started)
+            ):
                 raise ValueError("Invalid hand contact")
             indices.add(index)
         if contacts and (self.hand_control != "slider" or limits):
@@ -115,9 +133,11 @@ class Feedback:
     def contact_indices(self, target):
         # Only the diagnosed loading direction can count as contact. An opening
         # target must still be physically reached; a latched warning is not enough.
-        return tuple(index for index, direction, bound, _ in self.hand_contacts
-                     if direction * (target[index] - bound) >= 0
-                     and direction * (target[index] - self.positions[index]) > 0.005)
+        return tuple(
+            index
+            for index, direction, bound, _ in self.hand_contacts
+            if direction * (target[index] - bound) >= 0 and direction * (target[index] - self.positions[index]) > 0.005
+        )
 
     def hands_settled(self, target, tolerance):
         errors = np.abs(self.positions - self.effective_target(target))
@@ -225,12 +245,21 @@ def check_tracking(target, feedback, indices, label, *, arm_tracking_rad=ARM_TRA
     if bad.size:
         j = bad[np.argmax(errors[bad])]
         index = int(indices[j])
-        group, offset = next((name, start) for name, start, end in (
-            ("left_arm", 0, 7), ("left_hand", 7, 27),
-            ("right_arm", 27, 34), ("right_hand", 34, 54)) if start <= index < end)
-        raise ValueError(f"{label} error exceeds {limits[j]:.2f} rad: {group}[{index-offset}], "
-                         f"target={target[index]:.6f}, measured={feedback.positions[index]:.6f}, "
-                         f"error={errors[j]:.6f} rad")
+        group, offset = next(
+            (name, start)
+            for name, start, end in (
+                ("left_arm", 0, 7),
+                ("left_hand", 7, 27),
+                ("right_arm", 27, 34),
+                ("right_hand", 34, 54),
+            )
+            if start <= index < end
+        )
+        raise ValueError(
+            f"{label} error exceeds {limits[j]:.2f} rad: {group}[{index-offset}], "
+            f"target={target[index]:.6f}, measured={feedback.positions[index]:.6f}, "
+            f"error={errors[j]:.6f} rad"
+        )
 
 
 class ConsumerGuard:
@@ -240,8 +269,9 @@ class ConsumerGuard:
     A guard may arm once and may not be reused after stop/failure.
     """
 
-    def __init__(self, lower, upper, *, hand_control="strict", arm_speed_rad_s=2.0,
-                 arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD):
+    def __init__(
+        self, lower, upper, *, hand_control="strict", arm_speed_rad_s=2.0, arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD
+    ):
         self.arm_tracking_rad = checked_arm_tracking_tolerance(arm_tracking_rad)
         self.hand_control = check_hand_control(hand_control)
         self.checked = ARM if hand_control == "slider" else np.arange(54)
@@ -307,5 +337,3 @@ class ConsumerGuard:
 
     def stop(self):
         self.state = "stopped"
-
-

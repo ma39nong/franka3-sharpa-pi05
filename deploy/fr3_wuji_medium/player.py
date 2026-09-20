@@ -1,16 +1,28 @@
 """Medium trajectory lifecycle, independently maintained from slow OneShot."""
-from dataclasses import dataclass, field
+
+from dataclasses import dataclass
+from dataclasses import field
 import uuid
+
 import numpy as np
-from .runtime.core import (
-    ARM, HAND, Admission, Frame, check_tracking, finite, plan_digest, speed_caps,
-)
-from .runtime.limits import (
-    ARM_ENDPOINT_TOLERANCE_RAD, HAND_ENDPOINT_TOLERANCE_RAD,
-    HAND_CONTACT_SETTLE_SECONDS, SLIDER_POSITION_TOLERANCE_RAD, check_hand_control,
-)
+
 from .profile import ARM_SPEED_RAD_S
+from .runtime.core import ARM
+from .runtime.core import HAND
+from .runtime.core import Admission
+from .runtime.core import Frame
+from .runtime.core import check_tracking
+from .runtime.core import finite
+from .runtime.core import plan_digest
+from .runtime.core import speed_caps
+from .runtime.limits import ARM_ENDPOINT_TOLERANCE_RAD
+from .runtime.limits import HAND_CONTACT_SETTLE_SECONDS
+from .runtime.limits import HAND_ENDPOINT_TOLERANCE_RAD
+from .runtime.limits import SLIDER_POSITION_TOLERANCE_RAD
+from .runtime.limits import check_hand_control
+
 SPEED = speed_caps(ARM_SPEED_RAD_S)
+
 
 @dataclass
 class OneShot:
@@ -58,7 +70,9 @@ class OneShot:
             raise ValueError("Player and device hand control mismatch")
         if not self.prepared_at <= now <= self.prepared_at + 30:
             raise ValueError("Reviewed one-shot plan must start within 30 seconds of preparation")
-        if np.max(np.abs(feedback.positions[self.checked] - self.plan.start[self.checked])) > (ARM_ENDPOINT_TOLERANCE_RAD if self.plan.config.get("continuation") else 0.005):
+        if np.max(np.abs(feedback.positions[self.checked] - self.plan.start[self.checked])) > (
+            ARM_ENDPOINT_TOLERANCE_RAD if self.plan.config.get("continuation") else 0.005
+        ):
             raise ValueError("Start pose changed; rebuild from fresh feedback")
         if np.max(np.abs(feedback.velocities[self.checked])) > 0.02:
             raise ValueError("Start requires stationary feedback")
@@ -68,7 +82,11 @@ class OneShot:
         self.started = now
         # The finite committed plan is distinct from a streaming policy.
         # 1 s still governed admission above, and is never re-stamped.
-        self.deadline = now + self.plan.report["total_seconds"] + (2 * HAND_CONTACT_SETTLE_SECONDS if self.hand_control == "slider" else 10)
+        self.deadline = (
+            now
+            + self.plan.report["total_seconds"]
+            + (2 * HAND_CONTACT_SETTLE_SECONDS if self.hand_control == "slider" else 10)
+        )
         self.transition("approach", now, "single_plan_started")
 
     def _check_plan(self):
@@ -118,12 +136,19 @@ class OneShot:
                 elapsed = min(now - self.phase_started, phase.duration)
                 q, dq = phase.sample(elapsed), phase.sample(elapsed, 1)
                 if self.hand_control == "slider":
-                    index = 0 if self.state == "approach" else min(len(self.plan.raw) - 1, int(elapsed / phase.duration * (len(self.plan.raw) - 1)))
+                    index = (
+                        0
+                        if self.state == "approach"
+                        else min(len(self.plan.raw) - 1, int(elapsed / phase.duration * (len(self.plan.raw) - 1)))
+                    )
                     q[HAND], dq[HAND] = self.plan.raw[index, HAND], 0.0
                 if elapsed >= phase.duration:
                     self.transition(
                         ("playback" if self.plan.config.get("continuation") else "settle_start")
-                        if self.state == "approach" else "settle_end", now, "endpoint"
+                        if self.state == "approach"
+                        else "settle_end",
+                        now,
+                        "endpoint",
                     )
             else:
                 q = self.plan.raw[0] if self.state == "settle_start" else self.plan.raw[-1]
@@ -132,22 +157,31 @@ class OneShot:
                     np.max(np.abs(feedback.positions[ARM] - q[ARM])) <= ARM_ENDPOINT_TOLERANCE_RAD
                     and np.max(np.abs(feedback.velocities[self.checked])) <= 0.02
                 )
-                hand_tolerance = (HAND_ENDPOINT_TOLERANCE_RAD if self.state == "settle_end"
-                                  else SLIDER_POSITION_TOLERANCE_RAD if self.hand_control == "slider" else HAND_ENDPOINT_TOLERANCE_RAD)
+                hand_tolerance = (
+                    HAND_ENDPOINT_TOLERANCE_RAD
+                    if self.state == "settle_end"
+                    else SLIDER_POSITION_TOLERANCE_RAD
+                    if self.hand_control == "slider"
+                    else HAND_ENDPOINT_TOLERANCE_RAD
+                )
                 if self.hand_control == "strict":
                     settled = settled and feedback.hands_settled(q, hand_tolerance)
                 if self.hand_control == "slider":
-                    settled = (
-                        settled
-                        and feedback.hand_targets_reached
-                        and feedback.hands_settled(q, hand_tolerance)
-                    )
+                    settled = settled and feedback.hand_targets_reached and feedback.hands_settled(q, hand_tolerance)
                 if settled:
                     if self.settled_since is None:
                         self.settled_since = now
-                    if now - self.settled_since >= (self.plan.config.get("final_settle_seconds", 0.5) if self.state == "settle_end" and self.plan.config.get("final_chunk", True) else self.plan.config["settle_seconds"]):
+                    if now - self.settled_since >= (
+                        self.plan.config.get("final_settle_seconds", 0.5)
+                        if self.state == "settle_end" and self.plan.config.get("final_chunk", True)
+                        else self.plan.config["settle_seconds"]
+                    ):
                         if self.state == "settle_end":
-                            self.transition("complete", now, "final_contact_settle" if feedback.contact_indices(q) else "final_measured_settle")
+                            self.transition(
+                                "complete",
+                                now,
+                                "final_contact_settle" if feedback.contact_indices(q) else "final_measured_settle",
+                            )
                             return None
                         self.transition("playback", now, "initial_measured_settle")
                 else:

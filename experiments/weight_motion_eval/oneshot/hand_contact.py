@@ -31,5 +31,6 @@ class BoundedContactGrasp(StallSoftLimit):
         return super().update(target, measured, last_command, stalled, now)
 
     def snapshot(self, offset=0):
-        return tuple((offset + index, c.direction, c.bound, c.triggered_at)
-                     for index, c in sorted(self.contacts.items()))
+        return tuple(
+            (offset + index, c.direction, c.bound, c.triggered_at) for index, c in sorted(self.contacts.items())
+        )

@@ -1,22 +1,6 @@
-"""Run the 25000 transformation with 25000-single's distinct identity."""
-
-from pathlib import Path
-import sys
-
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-
-from deploy.fr3_wuji_25000 import serve as base
-from deploy.fr3_wuji_25000_single.contract import DEFAULT_CHECKPOINT, checkpoint_contract
-
-
-def main(argv=None):
-    return base.main(
-        argv, contract=checkpoint_contract,
-        default_checkpoint=DEFAULT_CHECKPOINT, default_port=8005,
-    )
-
-
+"""Compatibility import for the model adapter in deploy.fr3_wuji_models."""
+import sys as _sys
+from deploy.fr3_wuji_models.model_25000_single import serve as _implementation
+_sys.modules[__name__] = _implementation
 if __name__ == "__main__":
-    main()
+    _implementation.main()

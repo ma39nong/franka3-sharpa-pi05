@@ -12,8 +12,8 @@ import uuid
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.continuous import StopFlag
-from experiments.weight_motion_eval.oneshot.core import Admission
+from deploy.fr3_wuji_slow.continuous import StopFlag
+from deploy.fr3_wuji_slow.core import Admission
 
 from .control import worker
 from .timeline import checked_chunk

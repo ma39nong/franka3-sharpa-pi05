@@ -13,12 +13,13 @@ import math
 
 import numpy as np
 
-from experiments.weight_motion_eval.oneshot.core import ARM
-from experiments.weight_motion_eval.oneshot.core import HAND
-from experiments.weight_motion_eval.oneshot.core import Admission
-from experiments.weight_motion_eval.oneshot.core import vector
-from experiments.weight_motion_eval.planner import make_phase
-from experiments.weight_motion_eval.planner import read_config
+from deploy.fr3_wuji_slow.core import ARM
+from deploy.fr3_wuji_slow.core import HAND
+from deploy.fr3_wuji_slow.core import Admission
+from deploy.fr3_wuji_slow.core import vector
+from deploy.fr3_wuji_slow.planner import make_phase
+from deploy.fr3_wuji_slow.planner import read_config
+
 from .smoothing import smoothing_settings
 
 SOURCE_HZ = 30

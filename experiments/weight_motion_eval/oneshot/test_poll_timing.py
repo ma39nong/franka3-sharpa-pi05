@@ -10,11 +10,13 @@ from .poll_timing import PollTiming
 def test_gc_is_attributed_and_callback_removed_on_exception():
     before = list(gc.callbacks)
     timing = PollTiming()
+
     def failing_poll():
         with timing:
             timing.mark("trace_ms")
             gc.collect(2)
             raise RuntimeError("injected")
+
     with pytest.raises(RuntimeError, match="injected"):
         failing_poll()
     assert gc.callbacks == before
@@ -25,6 +27,7 @@ def test_gc_is_attributed_and_callback_removed_on_exception():
 
 def test_stage_intervals_accumulate_without_double_counting(monkeypatch):
     from . import poll_timing
+
     now = [10.0]
     monkeypatch.setattr(poll_timing.time, "perf_counter", lambda: now[0])
     with PollTiming() as timing:

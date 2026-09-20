@@ -8,9 +8,10 @@ import uuid
 
 import numpy as np
 
+from deploy.fr3_wuji_slow.runner import run_live
+
 from .player import Admission
 from .player import OneShot
-from experiments.weight_motion_eval.oneshot.runner import run_live
 
 
 class LiveConsumer:

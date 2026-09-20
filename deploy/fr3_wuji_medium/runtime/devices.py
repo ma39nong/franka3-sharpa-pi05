@@ -5,6 +5,8 @@ import time
 
 import numpy as np
 
+from experiments.weight_motion_eval.oneshot.motion_gc import MotionGC
+
 from .core import ARM
 from .core import HAND
 from .core import ConsumerGuard
@@ -12,18 +14,28 @@ from .core import Feedback
 from .core import vector
 from .hand import stabilize_hands
 from .hand import wait_initial_feedback
-from .limits import HAND_ENDPOINT_TOLERANCE_RAD
 from .limits import ARM_ENDPOINT_TOLERANCE_RAD
 from .limits import ARM_TRACKING_TOLERANCE_RAD
+from .limits import HAND_ENDPOINT_TOLERANCE_RAD
 from .limits import check_hand_control
-from experiments.weight_motion_eval.oneshot.motion_gc import MotionGC
 
 HAND_SLICES = {"left": slice(7, 27), "right": slice(34, 54)}
 
 
 class DeviceSession:
     def __init__(
-        self, arms, hands, limits, *, execute=False, qualification=None, clock=time.monotonic, hand_control="strict", continuous=False, defer_motion_gc=False, arm_speed_rad_s=2.0,
+        self,
+        arms,
+        hands,
+        limits,
+        *,
+        execute=False,
+        qualification=None,
+        clock=time.monotonic,
+        hand_control="strict",
+        continuous=False,
+        defer_motion_gc=False,
+        arm_speed_rad_s=2.0,
         arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD,
     ):
         self.motion_gc = MotionGC() if defer_motion_gc else None
@@ -32,8 +44,13 @@ class DeviceSession:
         self.checked = ARM if hand_control == "slider" else np.arange(54)
         self.arms, self.hands, self.limits = arms, hands, limits
         self.execute, self.qualification, self.clock = execute, qualification, clock
-        self.guard = ConsumerGuard(limits["lower"], limits["upper"], hand_control=hand_control,
-                                   arm_speed_rad_s=arm_speed_rad_s, arm_tracking_rad=arm_tracking_rad)
+        self.guard = ConsumerGuard(
+            limits["lower"],
+            limits["upper"],
+            hand_control=hand_control,
+            arm_speed_rad_s=arm_speed_rad_s,
+            arm_tracking_rad=arm_tracking_rad,
+        )
         self.state = "readonly"
         self.fault = None
         self.plan_hashes = set()
@@ -76,14 +93,28 @@ class DeviceSession:
                 self.hands[side].record_speed_warnings(velocity)
             sources.extend((arm_source[index], stamp))
             receipts.extend((arm_receive[index], self.hands[side].latest_received))
-        soft_limits = tuple(item for side, hand in self.hands.items()
-                            if self.hand_control == "slider" and hasattr(hand, "soft_limit")
-                            for item in hand.soft_limit.snapshot(HAND_SLICES[side].start))
-        contacts = tuple(item for side, hand in self.hands.items()
-                         if self.hand_control == "slider" and hasattr(hand, "contact_grasp")
-                         for item in hand.contact_grasp.snapshot(HAND_SLICES[side].start))
-        feedback = Feedback(q, dq, tuple(sources), tuple(receipts), hand_control=self.hand_control,
-                            hand_soft_limits=soft_limits, hand_contacts=contacts, arm_speed_rad_s=self.guard.arm_speed_rad_s)
+        soft_limits = tuple(
+            item
+            for side, hand in self.hands.items()
+            if self.hand_control == "slider" and hasattr(hand, "soft_limit")
+            for item in hand.soft_limit.snapshot(HAND_SLICES[side].start)
+        )
+        contacts = tuple(
+            item
+            for side, hand in self.hands.items()
+            if self.hand_control == "slider" and hasattr(hand, "contact_grasp")
+            for item in hand.contact_grasp.snapshot(HAND_SLICES[side].start)
+        )
+        feedback = Feedback(
+            q,
+            dq,
+            tuple(sources),
+            tuple(receipts),
+            hand_control=self.hand_control,
+            hand_soft_limits=soft_limits,
+            hand_contacts=contacts,
+            arm_speed_rad_s=self.guard.arm_speed_rad_s,
+        )
         target = feedback.effective_target(self.last.positions) if self.last is not None else None
         reached = self.last is None or all(
             hand.last is not None and np.max(np.abs(hand.last[0] - target[HAND_SLICES[side]])) <= 1e-6
@@ -180,8 +211,11 @@ class DeviceSession:
                     created=frame.created,
                     valid_until=frame.valid_until,
                     now=self.clock(),
-                    checked_feedback=(feedback.positions[section], feedback.velocities[section],
-                                      feedback.source_times[1 if side == "left" else 3]),
+                    checked_feedback=(
+                        feedback.positions[section],
+                        feedback.velocities[section],
+                        feedback.source_times[1 if side == "left" else 3],
+                    ),
                     lower=self.guard.lower[section],
                     upper=self.guard.upper[section],
                 )
@@ -194,12 +228,18 @@ class DeviceSession:
             self.guard.commit(frame)
             self.last, self.last_activity = frame, self.clock()
             from .ipc import wire_feedback
+
             warnings = []
             for hand in self.hands.values():
                 if hasattr(hand, "fault_status"):
                     warnings.extend(hand.fault_status.drain())
-            return {"sequence": frame.sequence, "hands": hand_outputs, "feedback": wire_feedback(feedback),
-                    "timings_ms": timings, "warnings": warnings}
+            return {
+                "sequence": frame.sequence,
+                "hands": hand_outputs,
+                "feedback": wire_feedback(feedback),
+                "timings_ms": timings,
+                "warnings": warnings,
+            }
         except BaseException as error:
             timings["failed_ms"] = (self.clock() - frame.created) * 1000
             timings["feedback_parts"] = self.feedback_timings.copy()
@@ -252,7 +292,13 @@ class DeviceSession:
 
     def next_plan(self, run_id, plan_hash, start, slider_speed_rad_s=2.0):
         """Advance a healthy, settled stream without resetting its wire sequence."""
-        if not self.continuous or self.state != "armed" or self.fault or self.last is None or self.last.phase != "settle_end":
+        if (
+            not self.continuous
+            or self.state != "armed"
+            or self.fault
+            or self.last is None
+            or self.last.phase != "settle_end"
+        ):
             raise RuntimeError("Next plan requires a healthy completed chunk")
         if run_id != self.guard.run_id or not plan_hash or plan_hash in self.plan_hashes:
             raise ValueError("Next plan identity is invalid or repeated")
@@ -271,8 +317,10 @@ class DeviceSession:
 
     def check_endpoint(self):
         feedback = self.feedback()
-        if (np.max(np.abs(feedback.velocities[self.checked])) > 0.02
-                or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > ARM_ENDPOINT_TOLERANCE_RAD):
+        if (
+            np.max(np.abs(feedback.velocities[self.checked])) > 0.02
+            or np.max(np.abs(feedback.positions[ARM] - self.last.positions[ARM])) > ARM_ENDPOINT_TOLERANCE_RAD
+        ):
             raise ValueError("Devices have not settled at the last target")
         tolerance = HAND_ENDPOINT_TOLERANCE_RAD
         if not feedback.hand_targets_reached or not feedback.hands_settled(self.last.positions, tolerance):
@@ -288,7 +336,8 @@ class DeviceSession:
         ):
             raise ValueError("Devices have not settled at the last target")
         if self.hand_control == "strict" and (
-            np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(self.last.positions)[HAND])) > HAND_ENDPOINT_TOLERANCE_RAD
+            np.max(np.abs(feedback.positions[HAND] - feedback.effective_target(self.last.positions)[HAND]))
+            > HAND_ENDPOINT_TOLERANCE_RAD
         ):
             raise ValueError("Hands have not settled at the last target")
         if self.hand_control == "slider" and (

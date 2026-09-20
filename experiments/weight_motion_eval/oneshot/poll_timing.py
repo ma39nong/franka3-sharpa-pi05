@@ -6,7 +6,9 @@ import time
 
 class PollTiming:
     def __init__(self):
-        self.parts = dict.fromkeys(("state_recv_ms", "diagnostic_recv_ms", "trace_ms", "diagnostic_check_ms", "decode_ms", "other_ms"), 0.0)
+        self.parts = dict.fromkeys(
+            ("state_recv_ms", "diagnostic_recv_ms", "trace_ms", "diagnostic_check_ms", "decode_ms", "other_ms"), 0.0
+        )
         self.counts = {"state_frames": 0, "diagnostic_frames": 0}
         self.gc_ms = [0.0, 0.0, 0.0]
         self.gc_counts = [0, 0, 0]
@@ -37,7 +39,8 @@ class PollTiming:
         gc.callbacks.remove(self.collection)
         self.mark("other_ms")
         self.result = {
-            **self.parts, **self.counts,
+            **self.parts,
+            **self.counts,
             "total_ms": (time.perf_counter() - self.started) * 1000,
             "cpu_ms": (time.thread_time() - self.cpu) * 1000,
             "gc_ms_by_generation": self.gc_ms,

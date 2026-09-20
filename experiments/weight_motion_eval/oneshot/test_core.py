@@ -196,7 +196,8 @@ def test_arm_endpoint_settling_uses_three_centiradians(case, phase, error, reach
 
 @pytest.mark.parametrize("error, accepted", [(0.05, True), (0.07999, True), (0.08001, False)])
 def test_arm_tracking_tolerance_and_error_detail(error, accepted):
-    from .core import ARM, check_tracking
+    from .core import ARM
+    from .core import check_tracking
 
     q = np.zeros(54)
     q[6] = error
