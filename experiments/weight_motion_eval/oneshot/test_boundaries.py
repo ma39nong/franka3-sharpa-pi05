@@ -1,5 +1,6 @@
 """Real boundary code against fake devices plus compiled C++ deadline checks."""
 
+from collections import deque
 from pathlib import Path
 import subprocess
 import sys
@@ -263,7 +264,7 @@ def test_hand_final_send_checks_actual_and_commanded_motion(monkeypatch, fault):
     if fault == "joint_disabled":
         diagnostics[NIDS[0]].status_word.ext_state = 1
     owner.diagnostics = (diagnostics, 10.01)
-    velocity = np.full(20, np.deg2rad(46) if fault == "actual_speed" else 0.0)
+    velocity = np.full(20, np.deg2rad(75.1) if fault == "actual_speed" else 0.0)
     owner.poll = lambda *args: (np.zeros(20), velocity, 10.01)
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.04 if fault == "expires_during_poll" else 10.01)
     target = np.full(20, 0.005)
@@ -328,6 +329,25 @@ def test_hand_limits_50_degree_targets_to_45_and_eventually_reaches_endpoint(mon
     np.testing.assert_allclose(positions[-1], signs * np.deg2rad(5), atol=1e-12)
     np.testing.assert_allclose(reports[-1]["positions"], positions[-1])
     assert all(dq == effort == 0 for t, commands in sent for q, dq, effort in commands)
+
+
+@pytest.mark.parametrize(("side", "label"), [("left", "左手"), ("right", "右手")])
+def test_hand_speed_warning_emits_once_per_excursion_for_both_hands(side, label):
+    owner = HandOwner.__new__(HandOwner)
+    owner.side = side
+    owner.fault_status = SimpleNamespace(pending=deque())
+    velocity = np.zeros(20)
+    velocity[3] = np.deg2rad(61)
+    owner.record_speed_warnings(velocity)
+    owner.record_speed_warnings(velocity)
+    assert len(owner.fault_status.pending) == 1
+    assert label in owner.fault_status.pending[0]
+    assert "joint[3]" in owner.fault_status.pending[0]
+    assert "60°/s" in owner.fault_status.pending[0]
+    assert "75°/s" in owner.fault_status.pending[0]
+    owner.record_speed_warnings(np.zeros(20))
+    owner.record_speed_warnings(velocity)
+    assert len(owner.fault_status.pending) == 2
 
 
 def test_hand_failed_clamped_send_does_not_advance_limiter(monkeypatch):

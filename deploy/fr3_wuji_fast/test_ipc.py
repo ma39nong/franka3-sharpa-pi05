@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from deploy.fr3_wuji_fast.control import worker
+from deploy.fr3_wuji_fast.limits import ARM_TRACKING_TOLERANCE_RAD
 from deploy.fr3_wuji_fast.timeline import checked_chunk
 from deploy.fr3_wuji_fast.timeline import prepare_initial
 from experiments.weight_motion_eval.oneshot.bridge import serve_connection
@@ -82,6 +83,7 @@ def test_spawned_rtg_worker_uses_original_device_session_and_releases(tmp_path):
         execute=True,
         hand_control="slider",
         arm_speed_rad_s=1.0,
+        arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD,
         qualification=SimpleNamespace(check_hand=lambda *a: None),
     )
     done = threading.Event()

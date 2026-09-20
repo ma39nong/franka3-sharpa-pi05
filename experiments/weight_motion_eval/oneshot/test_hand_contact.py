@@ -181,7 +181,7 @@ def test_sdk_checks_contact_deadline_with_cached_feedback_and_can_confirm_stop(m
     args = dict(lower=np.full(20, -2), upper=np.full(20, 2))
     result = owner.submit(np.full(20, 0.7), created=10, valid_until=10.02, now=10,
                           checked_feedback=owner.latest, **args)
-    assert result["positions"][17] == pytest.approx(0.11)
+    assert result["positions"][17] == pytest.approx(0.1 + 0.01 * np.deg2rad(45))
     # Twenty seconds of the same contact remains valid at the SDK boundary.
     clock.now = 30
     owner.latest = (np.zeros(20), np.zeros(20), 30)

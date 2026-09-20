@@ -14,6 +14,7 @@ def owner(monkeypatch):
     monkeypatch.setattr(module.time, "time", lambda: clock.now + 100)
     monkeypatch.setattr(module.time, "sleep", lambda dt: setattr(clock, "now", clock.now + dt))
     arms = RosArms.__new__(RosArms)
+    arms.stopped, arms.output = False, None  # Read-only feedback fixture.
     arms.offset = 100
     arms.samples = {side: (np.zeros(7), np.zeros(7), 9.99, 9.99) for side in ("left", "right")}
     return arms, clock

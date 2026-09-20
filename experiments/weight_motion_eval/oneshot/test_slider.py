@@ -1,4 +1,4 @@
-"""UI-style hand targets must not inherit strict measured-speed interlocks."""
+"""UI-style targets are clamped, with shared measured-speed safety limits."""
 
 from dataclasses import replace
 from itertools import pairwise
@@ -30,11 +30,14 @@ def feedback(now=10.0):
     return Feedback(np.zeros(54), dq, (now,) * 4, (now,) * 4, hand_control="slider")
 
 
-def test_slider_feedback_crosses_ipc_without_old_ceiling_but_arm_still_stops():
+def test_slider_feedback_warn_band_crosses_ipc_but_75_degree_limit_stops():
     f = Feedback(**wire_feedback(feedback()))
     f.check(10.0, 0)
-    with pytest.raises(ValueError, match="Measured"):
-        replace(f, hand_control="strict").check(10.0, 0)
+    replace(f, hand_control="strict").check(10.0, 0)
+    fast = f.velocities.copy()
+    fast[7] = np.deg2rad(75.1)
+    with pytest.raises(ValueError, match="left_hand"):
+        replace(f, velocities=fast).check(10.0, 0)
     dq = f.velocities.copy()
     dq[0] = 0.71
     with pytest.raises(ValueError, match="left_arm"):
@@ -82,8 +85,11 @@ def test_sdk_slider_clamps_real_sent_positions_despite_velocity_spike(monkeypatc
             lower=np.full(20, -2),
             upper=np.full(20, 2),
         )
-    np.testing.assert_allclose(result["positions"], 0.3, atol=1e-8)
-    assert all(np.max(np.abs(np.array(b)[:, 0] - np.array(a)[:, 0])) <= 0.010000001 for a, b in pairwise(sent))
+    np.testing.assert_allclose(result["positions"], 30 * 0.01 * np.deg2rad(45), atol=1e-8)
+    assert all(
+        np.max(np.abs(np.array(b)[:, 0] - np.array(a)[:, 0])) <= 0.01 * np.deg2rad(45) + 1e-9
+        for a, b in pairwise(sent)
+    )
     clock.now += 0.01
     owner.diagnostics[0][0].status_word.ext_state = 1
     with pytest.raises(ValueError, match="enabled"):

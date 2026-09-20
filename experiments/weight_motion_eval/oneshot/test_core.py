@@ -119,12 +119,15 @@ def test_output_slew_limit_rejects_jumps_even_with_zero_derivative(case, joint):
         guard.validate(next_frame, fb(0.21), 0.21)
 
 
-def test_measured_hand_speed_guard_and_clock_epoch(case):
+def test_measured_hand_speed_warn_band_continues_and_stop_threshold_faults(case):
     p = player(case)
     p.start(fb(), 0.2)
     velocities = np.zeros(54)
-    velocities[7] = np.deg2rad(46)
-    assert p.tick(fb(0.21, velocity=velocities), 0.21) is None
+    velocities[7] = np.deg2rad(61)
+    assert p.tick(fb(0.21, velocity=velocities), 0.21) is not None
+    assert p.state == "approach"
+    velocities[7] = np.deg2rad(75.1)
+    assert p.tick(fb(0.22, velocity=velocities), 0.22) is None
     assert p.state == "fault"
     p = player(case)
     p.start(fb(), 0.2)
@@ -134,12 +137,12 @@ def test_measured_hand_speed_guard_and_clock_epoch(case):
 
 def test_speed_fault_identifies_all_offending_joints_and_signed_values():
     velocities = np.zeros(54)
-    velocities[0], velocities[53] = 0.71, -0.8
+    velocities[0], velocities[53] = 0.71, -1.4
     with pytest.raises(ValueError, match="Measured joint speed exceeds software ceiling") as error:
         fb(velocity=velocities).check(0.2, 0)
     message = str(error.value)
     assert "left_arm[0] action_index=0 velocity=0.710000000 rad/s limit=0.700000000 rad/s" in message
-    assert "right_hand[19] action_index=53 velocity=-0.800000000 rad/s limit=0.785398163 rad/s" in message
+    assert "right_hand[19] action_index=53 velocity=-1.400000000 rad/s limit=1.308996939 rad/s" in message
 
 
 def test_stop_confirmation_requires_continuous_stationarity(case):

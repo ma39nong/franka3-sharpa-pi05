@@ -1,5 +1,6 @@
 """ROS feedback and ArmCommand source; never publishes the FR3 command bus."""
 
+import json
 import time
 
 import numpy as np
@@ -7,6 +8,7 @@ import numpy as np
 from .core import ARM
 from .devices import HAND_SLICES
 from .transport import ros_header
+from .controller_status import ControllerStatus, ControllerStatusUnavailable, STATUS_TOPIC
 
 
 class ArmFeedbackUnavailable(ValueError):
@@ -14,13 +16,14 @@ class ArmFeedbackUnavailable(ValueError):
 
 
 class RosArms:
-    def __init__(self, *, publish_reset_idle=False, output_enabled=True):
+    def __init__(self, *, publish_reset_idle=False, output_enabled=True, status_output=None):
         import rclpy
         from rclpy.qos import DurabilityPolicy
         from rclpy.qos import QoSProfile
         from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import JointState
         from std_msgs.msg import Bool
+        from std_msgs.msg import String
         from teleop_core import contract
         from teleop_interfaces.msg import ArmCommand
         from teleop_interfaces.msg import ArmCommandStatus
@@ -29,6 +32,8 @@ class RosArms:
         self.JointState, self.ArmCommand = JointState, ArmCommand
         self.node = rclpy.create_node("pi05_oneshot_devices")
         self.samples, self.statuses = {}, {}
+        self.controller_status = ControllerStatus()
+        self.status_output = status_output
         self.offset = time.time() - time.monotonic()
         self.output = (
             self.node.create_publisher(ArmCommand, contract.SOURCE_COMMAND_TOPIC, 1) if output_enabled else None
@@ -47,6 +52,10 @@ class RosArms:
             for side in ("left", "right")
         }
         for side in ("left", "right"):
+            self.node.create_subscription(
+                String, STATUS_TOPIC.format(side=side),
+                lambda msg, side=side: self.controller_status.receive(side, msg.data, time.monotonic(), time.time()), 1,
+            )
             self.node.create_subscription(
                 JointState,
                 contract.ARM_STATE_TOPIC.format(side=side),
@@ -88,12 +97,24 @@ class RosArms:
             self.rclpy.spin_once(self.node, timeout_sec=0)
             if time.monotonic() >= end:
                 break
+        if not self.stopped and self.output is not None:
+            self.controller_status.raise_fault()
+
+    def check_controller_status(self):
+        # A stopped arm still provides measured feedback for physical-stop
+        # confirmation. Its expected command-expiry latch must not hide it.
+        if not self.stopped and self.output is not None:
+            try:
+                self.controller_status.check(time.monotonic())
+            except ControllerStatusUnavailable as error:
+                raise ArmFeedbackUnavailable(str(error)) from error
 
     def feedback(self, now):
         self.spin(0.0001)
         now = time.monotonic()
         if abs(time.time() - now - self.offset) > 0.05:
             raise ValueError("ROS device clock offset changed")
+        self.check_controller_status()
         if set(self.samples) != {"left", "right"}:
             raise ArmFeedbackUnavailable("Waiting for both measured arms with velocities; " + self.feedback_ages(now))
         samples = [self.samples[side] for side in ("left", "right")]
@@ -141,6 +162,7 @@ class RosArms:
         expected = [c.SOURCE_COMMAND_TOPIC, c.ARM_COMMAND_TOPIC, c.RESET_ACTIVE_TOPIC]
         expected += [c.CONTROLLER_COMMAND_TOPIC.format(side=s) for s in ("left", "right")]
         expected += [c.WUJI_STATE_TOPIC.format(side=s) for s in ("left", "right")]
+        expected += [STATUS_TOPIC.format(side=s) for s in ("left", "right")]
         if any(self.node.count_publishers(topic) != 1 for topic in expected):
             raise RuntimeError("Missing or competing gateway, splitter, policy or hand owner")
         if any(self.node.count_subscribers(c.CONTROLLER_COMMAND_TOPIC.format(side=s)) != 1 for s in ("left", "right")):
@@ -183,6 +205,7 @@ class RosArms:
     def begin_submit(self, frame):
         if self.stopped or self.output is None:
             raise RuntimeError("Arm source cannot restart after stop")
+        self.check_controller_status()
         stamp, tag = ros_header(frame, time.monotonic(), time.time_ns())
         msg = self.ArmCommand()
         msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(stamp, 1_000_000_000)
@@ -200,6 +223,7 @@ class RosArms:
         key = (frame.run_id, frame.sequence)
         while time.monotonic() < frame.valid_until:
             self.spin(0.0003)
+            self.check_controller_status()
             if key in self.statuses:
                 status = self.statuses.pop(key)
                 if status.faults or list(status.accepted_sides) != ["left", "right"]:
@@ -215,4 +239,8 @@ class RosArms:
         # last accepted frame expires (at most 20 ms after frame creation).
 
     def close(self):
-        self.node.destroy_node()
+        try:
+            if self.status_output is not None:
+                self.status_output.write_text(json.dumps(self.controller_status.report(), indent=2) + "\n")
+        finally:
+            self.node.destroy_node()

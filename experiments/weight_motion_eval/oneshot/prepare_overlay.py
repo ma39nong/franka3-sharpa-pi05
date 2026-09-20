@@ -103,6 +103,8 @@ def prepare():
     header.write_text(h)
     source.write_text(s)
     shutil.copy2(Path(__file__).with_name("deadline.hpp"), header.parent / "pi05_deadline.hpp")
+    from .controller_diagnostics import install
+    install(target)
     manifest = {
         "reference": str(REFERENCE),
         "source_hashes": hashes,

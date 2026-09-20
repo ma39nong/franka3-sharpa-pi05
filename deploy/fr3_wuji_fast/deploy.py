@@ -15,7 +15,7 @@ import uuid
 from experiments.weight_motion_eval.cli import safe_output
 from experiments.weight_motion_eval.oneshot import deploy as hardware
 from experiments.weight_motion_eval.oneshot.ipc import RemoteDevices
-from experiments.weight_motion_eval.oneshot.limits import ARM_TRACKING_TOLERANCE_RAD
+from experiments.weight_motion_eval.oneshot.core import checked_arm_tracking_tolerance
 from experiments.weight_motion_eval.oneshot.limits import HAND_KD
 from experiments.weight_motion_eval.oneshot.limits import HAND_KP
 from experiments.weight_motion_eval.oneshot.limits import SLIDER_CURRENT_A
@@ -25,8 +25,10 @@ from experiments.weight_motion_eval.oneshot.qualification import SupervisedTrial
 from experiments.weight_motion_eval.reference import deployment_module
 
 from .consumer import FastConsumer
+from .limits import ARM_TRACKING_TOLERANCE_RAD
 from .timeline import ARM_SPEED_RAD_S
 from .timeline import Timeline
+from .smoothing import checked_backend, smoothing_settings
 
 ROOT = hardware.ROOT
 GATEWAY_ARM_SPEED_RAD_S = 1.2
@@ -107,10 +109,16 @@ def launch_commands(args, output, ipc):
 
 def main(argv=None):
     args = parse_args(argv)
+    # Fail before starting cameras/controllers if the fast-only dependency or
+    # acceleration/jerk settings are invalid.
+    checked_backend()
+    smoothing = smoothing_settings()
+    arm_tracking = checked_arm_tracking_tolerance(ARM_TRACKING_TOLERANCE_RAD)
     output = safe_output(args.output)
     output.mkdir(parents=True)
     runtime, limits, _ = hardware.write_runtime(args, output)
     runtime["arm_speed_rad_s"] = ARM_SPEED_RAD_S
+    runtime["arm_tracking_rad"] = arm_tracking
     (output / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
     settings = {
         "source_hz": 30,
@@ -120,6 +128,7 @@ def main(argv=None):
         "units": "radian",
         "model_uri": args.uri,
         "options": stream_options(args),
+        "arm_smoothing": smoothing,
         "initial_approach": "existing bounded quintic approach only",
         "device_limits_inherited": {
             "arm_speed_rad_s": ARM_SPEED_RAD_S,

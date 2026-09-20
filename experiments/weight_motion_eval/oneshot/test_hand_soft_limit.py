@@ -78,7 +78,7 @@ def test_sdk_boundary_continues_bounded_contact_and_retreat_obeys_rate_limit(mon
                             lower=np.full(20, -2), upper=np.full(20, 2))
     q[17] = 0.7
     report = submit(q)
-    assert report["positions"][17] == pytest.approx(0.11)
+    assert report["positions"][17] == pytest.approx(0.1 + 0.01 * np.deg2rad(45))
     assert report["soft_limited_indices"] == []
     assert report["contacts"] == ((17, 1, 0.1, 10.0),)
     events = [e for e in owner.trace.before if e["event"] == "bounded_contact"]

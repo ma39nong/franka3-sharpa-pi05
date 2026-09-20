@@ -25,6 +25,8 @@ from experiments.weight_motion_eval.reference import deployment_module
 
 from .timeline import ARM_SPEED_RAD_S
 from .timeline import Timeline
+from .limits import ARM_TRACKING_TOLERANCE_RAD
+from .smoothing import ArmSmoother
 
 
 def settled(feedback, target):
@@ -69,6 +71,8 @@ def run_control(
     phase, sequence = "approach", 0
     due = began = phase_began = clock()
     stable_since = None
+    smoother = ArmSmoother(first.start, limits, began, speed=ARM_SPEED_RAD_S)
+    notify({"event": "arm_smoothing", "settings": smoother.settings, "speed_rad_s": ARM_SPEED_RAD_S})
     overall_deadline = began + first.approach.duration + options["rounds"] * 4 + 50
     notify({"event": "stage", "text": "首帧受控接近；到位后进入 30 Hz 原时间轴"})
     while not stopping():
@@ -103,7 +107,7 @@ def run_control(
         else:
             q = first.chunk.actions[0].copy() if phase == "settle_start" else timeline.actions[-1].copy()
             dq = np.zeros(54)
-            if settled(fb, q):
+            if smoother.settled(q) and settled(fb, q):
                 stable_since = now if stable_since is None else stable_since
                 if now - stable_since >= 0.5:
                     if phase == "settle_end":
@@ -114,6 +118,7 @@ def run_control(
                                 "chunks": timeline.number,
                                 "elapsed_seconds": now - began,
                                 "frames": sequence,
+                                "arm_smoothing_max_deviation_rad": smoother.max_deviation,
                             }
                         )
                         return
@@ -137,7 +142,16 @@ def run_control(
             timeout = HAND_CONTACT_SETTLE_SECONDS if fb.contact_indices(q) else 5.0
             if phase != "playback" and now - phase_began > timeout:
                 raise RuntimeError("Measured endpoint settling timed out")
-        check_tracking(q, fb, ARM, "Normal-speed tracking")
+        raw_arm_target = q[ARM].copy()
+        q, dq = smoother.step(q, dq, now)
+        if sequence % 10 == 0:
+            notify({
+                "event": "arm_smoothing_sample", "at": now,
+                "target": raw_arm_target.tolist(),
+                "acceleration": smoother.acceleration.tolist(),
+                "deviation_rad": float(np.max(np.abs(raw_arm_target - q[ARM]))),
+            })
+        check_tracking(q, fb, ARM, "Normal-speed tracking", arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD)
         frame = Frame(run_id, first.digest, sequence, now, now + 0.02, now - began, q, dq, phase)
         fresh = devices.submit(frame, clock())
         if fresh is None:

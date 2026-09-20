@@ -218,9 +218,15 @@ def plan_digest(plan):
     return h.hexdigest()
 
 
-def check_tracking(target, feedback, indices, label):
+def checked_arm_tracking_tolerance(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError("Arm tracking tolerance must be positive and finite")
+    return float(value)
+
+
+def check_tracking(target, feedback, indices, label, *, arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD):
     errors = np.abs(target[indices] - feedback.positions[indices])
-    limits = np.where(np.isin(indices, ARM), ARM_TRACKING_TOLERANCE_RAD, 0.05)
+    limits = np.where(np.isin(indices, ARM), checked_arm_tracking_tolerance(arm_tracking_rad), 0.05)
     bad = np.flatnonzero(errors > limits)
     if bad.size:
         j = bad[np.argmax(errors[bad])]
@@ -240,7 +246,9 @@ class ConsumerGuard:
     A guard may arm once and may not be reused after stop/failure.
     """
 
-    def __init__(self, lower, upper, *, hand_control="strict", arm_speed_rad_s=0.7):
+    def __init__(self, lower, upper, *, hand_control="strict", arm_speed_rad_s=0.7,
+                 arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD):
+        self.arm_tracking_rad = checked_arm_tracking_tolerance(arm_tracking_rad)
         self.hand_control = check_hand_control(hand_control)
         self.checked = ARM if hand_control == "slider" else np.arange(54)
         self.arm_speed_rad_s = checked_arm_speed(arm_speed_rad_s)
@@ -281,7 +289,7 @@ class ConsumerGuard:
             raise ValueError("Command position exceeds joint limits")
         if np.any(np.abs(frame.velocities[self.checked]) > self.speed[self.checked] + 1e-9):
             raise ValueError("Command derivative exceeds joint speed ceiling")
-        check_tracking(frame.positions, feedback, self.checked, "Tracking")
+        check_tracking(frame.positions, feedback, self.checked, "Tracking", arm_tracking_rad=self.arm_tracking_rad)
         if self.last is None:
             if (
                 frame.sequence != 0

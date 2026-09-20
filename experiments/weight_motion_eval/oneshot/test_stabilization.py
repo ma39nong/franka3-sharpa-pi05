@@ -56,9 +56,9 @@ def test_stabilization_aborts_without_sending_on_unsafe_feedback(monkeypatch, ki
             raise ValueError(kind)
         q, dq = np.zeros(20), np.zeros(20)
         if kind == "overspeed":
-            dq[0] = np.deg2rad(46)
+            dq[0] = np.deg2rad(75.1)
         if kind == "pose":
-            q[0] = 0.006
+            q[0] = 0.101
         return q, dq, now
 
     owner, clock, sent = make_owner(monkeypatch, sample)
@@ -67,6 +67,18 @@ def test_stabilization_aborts_without_sending_on_unsafe_feedback(monkeypatch, ki
     with pytest.raises((ValueError, RuntimeError)):
         run(owner, clock)
     assert not sent
+
+
+def test_stabilization_allows_transient_inside_one_tenth_radian_bound(monkeypatch):
+    def sample(now):
+        q = np.zeros(20)
+        q[0] = 0.09
+        return q, np.zeros(20), now
+
+    owner, clock, sent = make_owner(monkeypatch, sample)
+    run(owner, clock)
+    assert sent
+    assert owner.trace.before[-1]["event"] == "stabilization_ready"
 
 
 @pytest.mark.parametrize("kind", ["repeated_frame", "never_quiet"])

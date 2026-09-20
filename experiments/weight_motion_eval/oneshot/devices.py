@@ -14,6 +14,7 @@ from .hand import stabilize_hands
 from .hand import wait_initial_feedback
 from .limits import HAND_ENDPOINT_TOLERANCE_RAD
 from .limits import ARM_ENDPOINT_TOLERANCE_RAD
+from .limits import ARM_TRACKING_TOLERANCE_RAD
 from .limits import check_hand_control
 from .motion_gc import MotionGC
 
@@ -22,7 +23,8 @@ HAND_SLICES = {"left": slice(7, 27), "right": slice(34, 54)}
 
 class DeviceSession:
     def __init__(
-        self, arms, hands, limits, *, execute=False, qualification=None, clock=time.monotonic, hand_control="strict", continuous=False, defer_motion_gc=False, arm_speed_rad_s=0.7
+        self, arms, hands, limits, *, execute=False, qualification=None, clock=time.monotonic, hand_control="strict", continuous=False, defer_motion_gc=False, arm_speed_rad_s=0.7,
+        arm_tracking_rad=ARM_TRACKING_TOLERANCE_RAD,
     ):
         self.motion_gc = MotionGC() if defer_motion_gc else None
         self.continuous = continuous
@@ -31,7 +33,7 @@ class DeviceSession:
         self.arms, self.hands, self.limits = arms, hands, limits
         self.execute, self.qualification, self.clock = execute, qualification, clock
         self.guard = ConsumerGuard(limits["lower"], limits["upper"], hand_control=hand_control,
-                                   arm_speed_rad_s=arm_speed_rad_s)
+                                   arm_speed_rad_s=arm_speed_rad_s, arm_tracking_rad=arm_tracking_rad)
         self.state = "readonly"
         self.fault = None
         self.plan_hashes = set()
@@ -70,6 +72,8 @@ class DeviceSession:
                 self.feedback_timings[side + "_hand_cpu_ms"] = (time.thread_time() - began_cpu) * 1000
                 self.feedback_timings[side + "_hand_parts"] = getattr(self.hands[side], "poll_timings", None)
             q[HAND_SLICES[side]], dq[HAND_SLICES[side]] = position, velocity
+            if hasattr(self.hands[side], "record_speed_warnings"):
+                self.hands[side].record_speed_warnings(velocity)
             sources.extend((arm_source[index], stamp))
             receipts.extend((arm_receive[index], self.hands[side].latest_received))
         soft_limits = tuple(item for side, hand in self.hands.items()
@@ -154,7 +158,7 @@ class DeviceSession:
 
     def submit(self, frame):
         if self.state != "armed":
-            raise RuntimeError("Session does not accept motion")
+            raise RuntimeError("Session does not accept motion: " + str(self.fault or self.state))
         timings = {"received_ms": (self.clock() - frame.created) * 1000}
         try:
             feedback = self.feedback()

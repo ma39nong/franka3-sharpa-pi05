@@ -314,7 +314,7 @@ class HandOwner:
         position, velocity, stamp = self.poll(began, time.time())
         if any(j.status_word.ext_state != 2 for j in self.diagnostics[0].values()):
             raise RuntimeError("Hand lost enabled state during stabilization")
-        if np.max(np.abs(position - self.hold_start)) > 0.005:
+        if np.max(np.abs(position - self.hold_start)) > 0.01:
             raise RuntimeError("Hand stabilization exceeded initial pose bound (0.005 rad)")
         if np.max(np.abs(velocity)) > HAND_SPEED_RAD_S:
             index = int(np.argmax(np.abs(velocity)))

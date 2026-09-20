@@ -19,6 +19,7 @@ from experiments.weight_motion_eval.oneshot.core import Admission
 from experiments.weight_motion_eval.oneshot.core import vector
 from experiments.weight_motion_eval.planner import make_phase
 from experiments.weight_motion_eval.planner import read_config
+from .smoothing import smoothing_settings
 
 SOURCE_HZ = 30
 CONTROL_HZ = 100
@@ -148,6 +149,7 @@ def prepare_initial(chunk, start, limits, config_path, now):
             "source_hz": SOURCE_HZ,
             "control_hz": CONTROL_HZ,
             "arm_speed_rad_s": ARM_SPEED_RAD_S,
+            "arm_smoothing": smoothing_settings(),
             "config": config,
         },
         sort_keys=True,

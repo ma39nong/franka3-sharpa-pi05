@@ -1,0 +1,27 @@
+# Offline planning assumptions, NOT verified hardware operating limits.
+# This tool cannot enable hardware output by changing a configuration flag.
+schema_version: 1
+hardware_output: false
+source_hz: 30
+sample_hz: 100
+minimum_time_scale: 0.625
+smoothing_passes: 2
+max_total_seconds: 60.0
+settle_seconds: 0.15
+arm_raw_initial_delta_rad: 0.3
+hand_raw_initial_delta_rad: null
+max_smoothing_delta_rad:
+  arm: 0.03
+  hand: 0.08
+approach:
+  arm: {velocity: 0.36, acceleration: 1.728, jerk: 27.648}
+  # Hand approach and playback both use the agreed 90 deg/s ceiling.
+  hand: {velocity: 1.5707963267948966, acceleration: 4.0, jerk: 40.0}
+playback:
+  arm: {velocity: 1.68, acceleration: 23.04, jerk: 1105.92}
+  # Per-joint software ceiling agreed for this trial: 90 deg/s = pi/2 rad/s.
+  hand: {velocity: 1.5707963267948966, acceleration: 12.0, jerk: 240.0}
+
+# Remove the legacy one-second approach floor only between completed chunks.
+# Analytic arm derivative bounds and the hand travel-time bound still apply.
+continuation_min_approach_seconds: 0.025

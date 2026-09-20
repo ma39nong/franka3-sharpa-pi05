@@ -123,10 +123,11 @@ def test_fast_preview_wires_speed_to_bridge_and_gateway(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy, "safe_output", lambda p: output)
     deploy.main(["--check"])
     assert json.loads((output / "runtime.json").read_text())["arm_speed_rad_s"] == 1
+    assert json.loads((output / "runtime.json").read_text())["arm_tracking_rad"] == 0.2
     assert json.loads((output / "fast-config.json").read_text())["device_limits_inherited"] == {
         "arm_speed_rad_s": 1,
         "gateway_arm_speed_ceiling_rad_s": 1.2,
-        "arm_tracking_rad": 0.08,
+        "arm_tracking_rad": 0.2,
         "slider_speed_rad_s": 1.0,
         "hand_current_a": 2.0,
         "kp": 8.0,

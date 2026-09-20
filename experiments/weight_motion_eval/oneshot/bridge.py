@@ -14,6 +14,7 @@ import sys
 import time
 
 from .core import checked_arm_speed
+from .core import checked_arm_tracking_tolerance
 from .devices import DeviceSession
 from .hand import HandOwner
 from .hand import wait_initial_feedback
@@ -22,6 +23,7 @@ from .ipc import receive
 from .ipc import unpack_frame
 from .ipc import wire_feedback
 from .loop_diagnostics import LoopDiagnostics
+from .limits import ARM_TRACKING_TOLERANCE_RAD
 from .qualification import Qualification
 from .qualification import SupervisedTrial
 from .qualification import digest
@@ -29,6 +31,13 @@ from .qualification import digest
 
 def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
     measure = diagnostics.measure if diagnostics else lambda *args: nullcontext()
+    def checked_pump(*args):
+        try:
+            pump(*args)
+        except (ValueError, RuntimeError) as error:
+            if not session.fault:
+                session.fault = str(error)
+            session.stop()
     conn.settimeout(0.002)
     last_request = 0
     # The client allows one in-flight RPC. EOF or another packet while enable
@@ -48,7 +57,7 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
                 session.service()
             if session.state != "armed":
                 with measure("idle_pump"):
-                    pump()
+                    checked_pump()
             continue
         except EOFError:
             session.stop()
@@ -63,6 +72,8 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
             # the sender watchdog, including when a queued command arrives late.
             with measure("request_health_watchdog"):
                 session.service(check_feedback=operation != "submit")
+            if session.fault and operation != "stop":
+                raise RuntimeError(session.fault)
             if operation == "inventory":
                 if session.state != "readonly":
                     raise ValueError("Readback of operating parameters is only allowed before acquisition")
@@ -125,7 +136,7 @@ def serve_connection(conn, session, *, stopping, pump, diagnostics=None):
             headroom = request["frame"]["created"] + 0.01 - session.clock()
             if headroom >= 0.006 and not select.select([conn], [], [], 0)[0]:
                 with measure("post_submit_pump"):
-                    pump(session.latest_feedback)
+                    checked_pump(session.latest_feedback)
                 with measure("post_submit_watchdog"):
                     session.service(check_feedback=False)
 
@@ -142,6 +153,7 @@ def main():
         parser.error("Supervised trial must explicitly enable output and cannot claim commissioning")
     config = json.loads(args.runtime.read_text())
     arm_speed = checked_arm_speed(config.get("arm_speed_rad_s", 0.7))
+    arm_tracking = checked_arm_tracking_tolerance(config.get("arm_tracking_rad", ARM_TRACKING_TOLERANCE_RAD))
     for path, expected in config["reference_hashes"].items():
         if digest(path) != expected:
             raise ValueError("Runtime reference limits changed: " + path)
@@ -189,7 +201,8 @@ def main():
             sys.executable, "-m", "experiments.weight_motion_eval.oneshot.loop_diagnostics",
             str(os.getpid()), str(args.runtime.parent / "cpu-load.jsonl")
         ])
-        arms = RosArms(publish_reset_idle=args.execute, output_enabled=args.execute)
+        arms = RosArms(publish_reset_idle=args.execute, output_enabled=args.execute,
+                       status_output=args.runtime.parent / "controller-status.json")
         for side in ("left", "right"):
             hands[side] = HandOwner(
                 wuji_sdk, side, config["hands"][side], hand_control=config.get("hand_control", "strict")
@@ -218,6 +231,7 @@ def main():
             continuous=config.get("continuous", False),
             defer_motion_gc=True,
             arm_speed_rad_s=arm_speed,
+            arm_tracking_rad=arm_tracking,
             qualification=qualification,
             hand_control=config.get("hand_control", "strict"),
         )

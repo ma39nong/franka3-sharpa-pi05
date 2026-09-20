@@ -29,12 +29,14 @@ def container_main(ipc):
     from rclpy.qos import QoSProfile
     from sensor_msgs.msg import JointState
     from std_msgs.msg import Bool
+    from std_msgs.msg import String
     from teleop_core import contract
 
     from .bridge import serve_connection
     from .devices import DeviceSession
     from .ros_devices import RosArms
     from .transport import validate_header
+    from .controller_status import STATUS_TOPIC
 
     data = json.loads((ipc / "fixture.json").read_text())
     start = np.array(data["start"])
@@ -47,6 +49,7 @@ def container_main(ipc):
     targets = {side: value.copy() for side, value in q.items()}
     expiry = {"left": 0, "right": 0}
     pubs = {side: robot.create_publisher(JointState, contract.ARM_STATE_TOPIC.format(side=side), 1) for side in q}
+    status_pubs = {side: robot.create_publisher(String, STATUS_TOPIC.format(side=side), 1) for side in q}
     torques = {
         side: robot.create_publisher(JointState, contract.EXTERNAL_TORQUES_TOPIC.format(side=side), 1) for side in q
     }
@@ -73,6 +76,8 @@ def container_main(ipc):
         now = time.monotonic()
         dt, last = now - last, now
         for side, current in q.items():
+            status_pubs[side].publish(String(data=json.dumps({"version": 1, "stamp_ns": time.time_ns(),
+                                                           "faulted": False, "reason": "none"})))
             if expiry[side] and time.time_ns() >= expiry[side]:
                 targets[side] = current.copy()
             before = current.copy()

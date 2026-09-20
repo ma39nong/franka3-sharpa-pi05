@@ -74,9 +74,13 @@ RTG 默认 `--trigger-fraction 0.5 --guidance-steps 3`，动作块中途异步�
 
 ## 继承的设备约束
 
-本入口取消的是慢速规划的主体时间拉伸。原机械臂关节限位、1 rad/s变化率、0.08 rad运动跟踪、
+本入口取消的是慢速规划的主体时间拉伸。原机械臂关节限位、1 rad/s变化率、0.2 rad运动跟踪、
 接触力矩保护、20ms帧有效期、反馈新鲜度和独占控制保持。双手使用当前提交版本的slider模式：
 1 rad/s指令限速、Kp=8、Kd=0.1、电流上限2A及已有接触处理；没有额外提高这些参数。
+快速机械臂跟踪误差参数位于 `deploy/fr3_wuji_fast/limits.py`：
+`ARM_TRACKING_TOLERANCE_RAD = 0.2`（单位 rad）。快速控制循环及设备下发检查共用此值，
+运行时写入 `runtime.json` 的 `arm_tracking_rad`。修改后重启快速执行端即可，模型服务无需重启。
+此参数也用于复用快速执行器的64维适配入口；慢速部署仍使用原来的0.08 rad默认值。
 双手模型越界角度沿用慢速连续入口的投影规则，保存原始预测与投影数量。
 
 任何机械臂节点段或RTG衔接段超过1 rad/s时，快速轨迹层逐关节按1 rad/s限幅并继续追赶目标，
@@ -117,3 +121,67 @@ env -u PYTHONPATH PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .ve
 本次开发没有启动真实机器人，也没有加载GPU模型。
 
 速度参数更新后需重新运行快速执行命令，模型服务无需重启。
+
+## 底层故障诊断与停止（2026-09-18）
+
+Pi05控制器在首次锁存故障时保留原因：`previous_command_expired`、
+`current_command_expired`、`update_gap`、`clock_reversed`、`future_command`、
+`invalid_window`、`decode_failed`、`sequence_mismatch` 或 `run_id_mismatch`。
+记录故障时刻、原始指令时间和截止时间、预期/实收序号、控制周期间隔；
+1kHz实时循环只记录固定大小快照，非实时10ms定时器发布状态并只打印一次详细错误。
+
+左右臂的 `/<side>/joint_impedance_controller/pi05_status` 心跳由设备进程检查。
+收到任一底层故障就走原有双臂双手停止路径，故障原因通过IPC返回快速执行端；
+网关成功应答不能覆盖已收到的底层故障。启动须具备双臂状态心跳，运行时心跳过期也停止。
+停止后继续读取实测位置/速度用于停止确认，不自动恢复发送。
+
+每次运行的 `controller-status.json` 保存首次故障和左右最新状态；`arms.log` 保存
+底层首次错误，`fast-report.json` 和 `device-exit.json` 保存上层停止原因。
+底层故障回传也保护使用同一Pi05设备桥的慢速部署；快速0.2rad、慢速0.08rad跟踪阈值
+及20ms指令有效期均保持各自原值。此修改用于精确定位和及时停止，不放宽时效或序号检查。
+
+修改控制器诊断源后执行（仅生成/构建，不启动设备）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m experiments.weight_motion_eval.oneshot.controller_diagnostics
+bash experiments/weight_motion_eval/oneshot/build_overlay.sh
+```
+
+新建overlay时 `prepare_overlay.py` 会自动加入诊断代码。构建完成后重新运行执行端，
+模型服务无需重启。
+
+## 快速机械臂平滑（2026-09-18）
+
+快速执行端现在在100Hz下发前使用本地 Ruckig 保留上一帧指令的位置、速度、加速度，
+对14个机械臂关节持续生成受约束的目标；动作块切换不重置生成器，块内部也经过同一处理。
+原RTG节点拼接与默认 `--guidance-steps 3` 不变，双手目标与SDK控制不变。
+首次接近、块间等待和末尾到位均使用同一生成器；末尾必须等生成器到达目标且停止，再检查实测停稳。
+急停、时效故障和反馈异常仍直接走原停止流程，不等待平滑。
+
+只影响 `fr3_wuji_fast` 及复用它的64维**快速**入口。中速 `fr3_wuji_medium`、
+慢速播放器、共用设备代码、底层阻抗参数均未修改。此功能是执行端轨迹平滑，并非模型端RTC。
+
+调参位置：`deploy/fr3_wuji_fast/limits.py`：
+
+```python
+ARM_ACCELERATION_RAD_S2 = 3.0  # rad/s²
+ARM_JERK_RAD_S3 = 30.0        # rad/s³，加速度变化率
+```
+
+速度上限仍为 `timeline.py` 的 `ARM_SPEED_RAD_S = 1.0`，跟踪阈值仍为0.2rad。
+降低加速度/jerk一般会使动作柔和，但增大目标跟随延迟；默认值为待现场验证的起点。
+这不是整段慢放：模型30Hz时间轴和100Hz下发不变，但机械臂可能滞后于模型目标，
+手臂与手指的配合时序、接触动作和成功率需要复测。使用当前采样位置作为静止目标反复重规划，
+未将有突变的原始目标速度直接传入。生成器不使用远程服务或中间路点。
+
+新增依赖只由快速入口导入，安装固定版本（已有环境已安装）：
+
+```bash
+.deployment/tools/bin/uv pip install --python .venv/bin/python -r deploy/fr3_wuji_fast/requirements.txt
+```
+
+依赖缺失、版本错误、平滑参数非法会在启动设备前报错。生成失败或预测制动轨迹越界时停止，
+不会退回原始目标继续发送。参数保存在 `fast-config.json`；`control/events.jsonl` 的
+`arm_smoothing_sample` 以10Hz记录原机械臂目标、生成器加速度与目标偏差，
+`frame_submitted.command` 为实际下发位置，`complete` 保存全程最大平滑偏差。
+修改参数后重启快速执行命令即可，原启动参数仍可用，模型服务不用重启。

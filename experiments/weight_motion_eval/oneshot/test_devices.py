@@ -1,6 +1,7 @@
 """Ownership, IPC, commissioning and acquisition-clock regression tests."""
 
 import json
+from collections import deque
 from pathlib import Path
 import socket
 import threading
@@ -20,6 +21,7 @@ from experiments.weight_motion_eval.oneshot.ipc import MAX_PACKET
 from experiments.weight_motion_eval.oneshot.ipc import RemoteDevices
 from experiments.weight_motion_eval.oneshot.ipc import encode
 from experiments.weight_motion_eval.oneshot.ipc import receive
+from experiments.weight_motion_eval.oneshot.hand import HandOwner
 from experiments.weight_motion_eval.oneshot.qualification import Qualification
 from experiments.weight_motion_eval.oneshot.qualification import digest
 from experiments.weight_motion_eval.oneshot.runner import run_live
@@ -158,6 +160,33 @@ def test_device_watchdog_stops_when_no_further_host_requests_arrive():
     assert all(hand.stops == 1 for hand in session.hands.values())
 
 
+def test_device_submission_reports_60_degree_hand_warning_without_stopping():
+    session = make_session()
+    prepare(session)
+    hand = session.hands["right"]
+    hand.side = "right"
+    hand.fault_status = SimpleNamespace(pending=deque())
+    hand.fault_status.drain = lambda: [hand.fault_status.pending.popleft()
+                                      for _ in range(len(hand.fault_status.pending))]
+    hand.record_speed_warnings = HandOwner.record_speed_warnings.__get__(hand, type(hand))
+    hand.poll = lambda now, wall: (np.zeros(20), np.full(20, np.deg2rad(61)), now)
+    result = session.submit(frame())
+    assert session.state == "armed"
+    assert any("右手实测速度超过 60°/s" in warning for warning in result["warnings"])
+
+
+def test_device_submission_stops_both_hands_above_75_degrees_per_second():
+    session = make_session()
+    prepare(session)
+    session.hands["left"].poll = lambda now, wall: (
+        np.zeros(20), np.full(20, np.deg2rad(75.1)), now
+    )
+    with pytest.raises(RuntimeError, match="left_hand"):
+        session.submit(frame())
+    assert session.state == "stopped"
+    assert all(hand.stops == 1 for hand in session.hands.values())
+
+
 def test_telemetry_publisher_error_cannot_be_hidden_by_next_good_sample():
     session = make_session()
     prepare(session)
@@ -279,6 +308,8 @@ def test_commissioning_requires_matching_measured_artifacts(tmp_path):
         "schema_version": 1,
         "controller_sha256": "controller",
         "hand_velocity_rad_s": np.pi / 4,
+        "hand_measured_speed_warning_rad_s": np.pi / 3,
+        "hand_measured_speed_stop_rad_s": 5 * np.pi / 12,
         "hand_raw_initial_delta_rad": 0.2,
         "hands": {"left": {"serial": "test"}},
         "tests": {name: {"passed": True, "evidence": "measured.json", "sha256": digest(evidence)} for name in names},
@@ -289,6 +320,12 @@ def test_commissioning_requires_matching_measured_artifacts(tmp_path):
     qualification.check_hand("left", {"serial": "test"})
     with pytest.raises(ValueError, match="identity"):
         qualification.check_hand("left", {"serial": "other"})
+    data["hand_measured_speed_stop_rad_s"] = np.deg2rad(45)
+    record.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="measured-speed thresholds"):
+        Qualification(record, controller_sha256="controller")
+    data["hand_measured_speed_stop_rad_s"] = 5 * np.pi / 12
+    record.write_text(json.dumps(data))
     evidence.write_text("changed")
     with pytest.raises(ValueError, match="evidence"):
         Qualification(record, controller_sha256="controller")
