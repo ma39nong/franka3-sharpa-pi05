@@ -18,7 +18,7 @@ def planning_config(model="30000", *, minimum_time_scale=0.625):
     config = read_config(Path(__file__).with_name("config.yaml"))
     config.update(model_profile=model, minimum_time_scale=minimum_time_scale, final_settle_seconds=0.5)
     config["source_hz"] = model_spec.source_hz
-    if model != "19999":
+    if model not in {"19999", "20hz"}:
         config["arm_raw_initial_delta_rad"] = 1.5
         config["max_smoothing_delta_rad"]["arm"] = 0.2
     return validate_config(config)

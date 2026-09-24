@@ -9,6 +9,8 @@ Currently, this repo contains three types of models:
 
 For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours of robot data, and examples for using them out of the box or fine-tuning them to your own datasets.
 
+This fork's FR3 dual-arm + Wuji hand tomato-task LoRA procedure and experiment history are documented in [FR3/Wuji fine-tuning notes](docs/Codex_%E7%95%AA%E8%8C%84%E4%BB%BB%E5%8A%A1%E6%95%B0%E6%8D%AE%E8%AE%AD%E7%BB%83%E4%B8%8E%E9%83%A8%E7%BD%B2%E8%AE%B0%E5%BD%95.md).
+
 This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
 
 ## Updates

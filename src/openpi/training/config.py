@@ -69,6 +69,9 @@ class LeRobotDatasetSpec:
 
     repo_id: str
     weight: float = 1.0
+    # Optional exact local dataset directory. When set, LeRobot reads this
+    # directory directly instead of resolving repo_id in its cache.
+    root: str | None = None
 
     def __post_init__(self) -> None:
         if not self.repo_id:
@@ -114,6 +117,12 @@ class DataConfig:
     # Optional weighted mixture of standard LeRobot datasets. When empty, repo_id
     # identifies the single dataset. For a mixture, repo_id is its logical asset ID.
     lerobot_datasets: Sequence[LeRobotDatasetSpec] = ()
+
+    # Optional action trajectory rate. The source observations may have a higher
+    # FPS; action targets are selected on the nearest source-frame timestamps.
+    action_hz: float | None = None
+    # Optional explicit LeRobot video decoder (for example, "pyav").
+    video_backend: str | None = None
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -387,6 +396,8 @@ class LeRobotFr3WujiDataConfig(DataConfigFactory):
     extra_delta_transform: bool = False
     action_sequence_keys: Sequence[str] = ("action",)
     lerobot_datasets: Sequence[LeRobotDatasetSpec] = ()
+    action_hz: float | None = None
+    video_backend: str | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -422,6 +433,8 @@ class LeRobotFr3WujiDataConfig(DataConfigFactory):
             model_transforms=ModelTransformFactory()(model_config),
             action_sequence_keys=self.action_sequence_keys,
             lerobot_datasets=self.lerobot_datasets,
+            action_hz=self.action_hz,
+            video_backend=self.video_backend,
         )
 
 
@@ -1089,6 +1102,37 @@ _CONFIGS.append(
             _fr3_wuji_base.data,
             repo_id="fr3_wuji/tomato_standard_quality_60ep",
         ),
+    )
+)
+
+# Local 2026-09-18 A/B collection. Source media and observations are 30 Hz;
+# future action targets are selected on a nearest-frame 20 Hz time grid. This
+# gives a 50-step, 2.5-second policy trajectory without re-encoding the videos.
+_FR3_WUJI_0918_ROOT = "/home/descfly/lpy/Convert_data/outputs/fr3_wuji/0918"
+_CONFIGS.append(
+    dataclasses.replace(
+        _fr3_wuji_base,
+        name="pi05_fr3_wuji_20hz",
+        data=dataclasses.replace(
+            _fr3_wuji_base.data,
+            repo_id="fr3_wuji/0918_20hz",
+            assets=AssetsConfig(asset_id="fr3_wuji/0918_20hz"),
+            action_hz=20.0,
+            video_backend="pyav",
+            lerobot_datasets=(
+                LeRobotDatasetSpec(
+                    repo_id="fr3_wuji/tomato_A_cleaned",
+                    root=f"{_FR3_WUJI_0918_ROOT}/tomato_A_cleaned",
+                    weight=0.7,
+                ),
+                LeRobotDatasetSpec(
+                    repo_id="fr3_wuji/tomato_B_cleaned",
+                    root=f"{_FR3_WUJI_0918_ROOT}/tomato_B_cleaned",
+                    weight=0.3,
+                ),
+            ),
+        ),
+        wandb_enabled=False,
     )
 )
 

@@ -258,13 +258,25 @@ def create_torch_dataset(
     if data_config.local_dataset_loader is not None:
         return _create_local_dataset(data_config, action_horizon)
 
-    def create_one(dataset_repo_id: str) -> tuple[Dataset, lerobot_dataset.LeRobotDatasetMetadata]:
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_repo_id)
+    def create_one(
+        dataset_repo_id: str, dataset_root: str | None = None
+    ) -> tuple[Dataset, lerobot_dataset.LeRobotDatasetMetadata]:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_repo_id, root=dataset_root)
+        action_hz = data_config.action_hz or dataset_meta.fps
+        if not np.isfinite(action_hz) or action_hz <= 0 or action_hz > dataset_meta.fps:
+            raise ValueError(
+                f"Action rate must be finite and in (0, {dataset_meta.fps}], got {action_hz} for {dataset_repo_id}"
+            )
+        # LeRobot v2 action windows are indexed on the source FPS grid. Pick the
+        # nearest representable source timestamp for every requested action tick.
+        action_delta_timestamps = [
+            round(t * dataset_meta.fps / action_hz) / dataset_meta.fps for t in range(action_horizon)
+        ]
         dataset: Dataset = lerobot_dataset.LeRobotDataset(
             dataset_repo_id,
-            delta_timestamps={
-                key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-            },
+            root=dataset_root,
+            delta_timestamps=dict.fromkeys(data_config.action_sequence_keys, action_delta_timestamps),
+            video_backend=data_config.video_backend,
         )
         if data_config.prompt_from_task:
             dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
@@ -273,7 +285,7 @@ def create_torch_dataset(
     if not data_config.lerobot_datasets:
         return create_one(repo_id)[0]
 
-    datasets_and_meta = [create_one(spec.repo_id) for spec in data_config.lerobot_datasets]
+    datasets_and_meta = [create_one(spec.repo_id, spec.root) for spec in data_config.lerobot_datasets]
     datasets = [item[0] for item in datasets_and_meta]
     metas = [item[1] for item in datasets_and_meta]
     reference = metas[0]

@@ -1,4 +1,5 @@
 """One mapping of model identities to checkpoints, ports and contracts."""
+
 from dataclasses import dataclass
 from importlib import import_module
 
@@ -24,7 +25,16 @@ MODELS = {
     "30000": ModelSpec("30000", 8002, "checkpoints/30000", 30, "deploy.fr3_wuji_models.model_30000.serve"),
     "30000v2": ModelSpec("30000v2", 8003, "checkpoints/30000v2", 30, "deploy.fr3_wuji_models.model_30000v2.contract"),
     "25000": ModelSpec("25000", 8004, "checkpoints/25000", 15, "deploy.fr3_wuji_models.model_25000.contract"),
-    "25000-single": ModelSpec("25000-single", 8005, "checkpoints/25000-single", 15, "deploy.fr3_wuji_models.model_25000_single.contract"),
+    "25000-single": ModelSpec(
+        "25000-single", 8005, "checkpoints/25000-single", 15, "deploy.fr3_wuji_models.model_25000_single.contract"
+    ),
+    "20hz": ModelSpec(
+        "20hz",
+        8006,
+        "checkpoints/pi05_fr3_wuji_20hz/tomato_lora_0918_20hz/19999",
+        20,
+        "deploy.fr3_wuji_models.model_20hz.serve",
+    ),
 }
 
 
