@@ -4,12 +4,14 @@ import numpy as np
 
 from deploy.fr3_wuji_slow.core import ARM
 from deploy.fr3_wuji_slow.core import HAND
+from deploy.fr3_wuji_slow.limits import ARM_TRACKING_TOLERANCE_RAD
 from deploy.fr3_wuji_slow.planner import Plan
 from deploy.fr3_wuji_slow.planner import make_phase
 
 ARM_HOME_SPEED_RAD_S = 0.20
 ARM_HOME_ACCELERATION_RAD_S2 = 0.40
 ARM_HOME_JERK_RAD_S3 = 3.20
+ARM_HOME_TRACKING_TOLERANCE_RAD = ARM_TRACKING_TOLERANCE_RAD * 2
 HAND_HOME_SPEED_RAD_S = 0.50
 SAMPLE_HZ = 100
 HAND_KNOTS = 50
@@ -35,6 +37,7 @@ def _config():
         "execution_steps": HAND_KNOTS,
         "settle_seconds": SETTLE_SECONDS,
         "hand_control": "slider",
+        "arm_tracking_rad": ARM_HOME_TRACKING_TOLERANCE_RAD,
         "approach": {"arm": dict(arm_caps), "hand": dict(hand_caps)},
         "playback": {"arm": dict(arm_caps), "hand": dict(hand_caps)},
     }
@@ -94,6 +97,7 @@ def build_home_plan(start, target, limits, names):
         "arm_speed_rad_s": ARM_HOME_SPEED_RAD_S,
         "arm_acceleration_rad_s2": ARM_HOME_ACCELERATION_RAD_S2,
         "arm_jerk_rad_s3": ARM_HOME_JERK_RAD_S3,
+        "arm_tracking_rad": ARM_HOME_TRACKING_TOLERANCE_RAD,
         "hand_target_speed_rad_s": HAND_HOME_SPEED_RAD_S,
         "approach_seconds": approach.duration,
         "playback_seconds": playback.duration,

@@ -4,11 +4,15 @@ import pytest
 from deploy.fr3_wuji_home import deploy
 from deploy.fr3_wuji_home.deploy import parse_args
 from deploy.fr3_wuji_home.planner import ARM_HOME_SPEED_RAD_S
+from deploy.fr3_wuji_home.planner import ARM_HOME_TRACKING_TOLERANCE_RAD
 from deploy.fr3_wuji_home.planner import HAND_HOME_SPEED_RAD_S
 from deploy.fr3_wuji_home.planner import build_home_plan
 from deploy.fr3_wuji_home.poses import load_home
 from deploy.fr3_wuji_slow.core import ARM
 from deploy.fr3_wuji_slow.core import HAND
+from deploy.fr3_wuji_slow.core import Admission
+from deploy.fr3_wuji_slow.core import Feedback
+from deploy.fr3_wuji_slow.core import OneShot
 from deploy.fr3_wuji_slow.runner import simulate
 
 
@@ -56,6 +60,8 @@ def test_home_plan_moves_arms_before_hands_and_respects_caps():
         "both_arms_to_home_and_settle",
         "both_wuji_hands_to_home_and_settle",
     ]
+    assert plan.config["arm_tracking_rad"] == pytest.approx(0.16)
+    assert plan.report["arm_tracking_rad"] == pytest.approx(ARM_HOME_TRACKING_TOLERANCE_RAD)
 
 
 def test_home_plan_runs_through_the_existing_bounded_simulator():
@@ -65,6 +71,29 @@ def test_home_plan_runs_through_the_existing_bounded_simulator():
     assert report["state"] == "complete"
     assert report["frames"] > 0
     assert set(trace["state"]) >= {"approach", "playback", "settle_start", "settle_end"}
+
+
+def test_home_player_uses_the_plan_scoped_double_tracking_tolerance():
+    home = load_home()
+    plan = build_home_plan(np.zeros(54), home.target, limits(), [f"joint-{index}" for index in range(54)])
+    player = OneShot(plan, Admission(0, 0.05, 0.15, "home", "tomato", 0), 0.2)
+
+    def feedback(now, positions):
+        return Feedback(
+            positions,
+            np.zeros(54),
+            (now,) * 4,
+            (now,) * 4,
+            hand_control="slider",
+        )
+
+    player.start(feedback(0.2, np.zeros(54)), 0.2)
+    target = plan.approach.sample(0.01)
+    measured = target.copy()
+    measured[6] += 0.12
+    assert player.tick(feedback(0.21, measured), 0.21) is not None
+    assert player.state == "approach"
+    assert player.arm_tracking_rad == pytest.approx(0.16)
 
 
 def test_unknown_home_and_hardware_flags_are_rejected(tmp_path):

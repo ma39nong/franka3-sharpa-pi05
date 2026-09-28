@@ -19,8 +19,8 @@ IMAGE_KEYS = {
 IMAGE_SHAPES = {"cam0": (400, 640, 3), "cam1": (480, 640, 3), "cam2": (480, 640, 3)}
 SOURCES = (*STATE_ORDER, *IMAGE_KEYS)
 PROMPT = (
-    "Pick up a tomato truss with the right hand, then pick a cherry tomato with the left hand "
-    "and place it in the left basket."
+    "Pick up a tomato truss with the right hand, then move the right hand to the center and keep it stationary. "
+    "Next, pick up a cherry tomato with the left hand and place it in the left basket."
 )
 
 

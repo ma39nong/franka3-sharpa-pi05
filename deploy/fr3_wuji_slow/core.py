@@ -262,7 +262,7 @@ def check_tracking(target, feedback, indices, label, *, arm_tracking_rad=ARM_TRA
             if start <= index < end
         )
         raise ValueError(
-            f"{label} error exceeds {limits[j]:.2f} rad: {group}[{index-offset}], "
+            f"{label} error exceeds {limits[j]:.2f} rad: {group}[{index - offset}], "
             f"target={target[index]:.6f}, measured={feedback.positions[index]:.6f}, "
             f"error={errors[j]:.6f} rad"
         )
@@ -357,6 +357,9 @@ class OneShot:
 
     def __post_init__(self):
         self.hand_control = check_hand_control(self.plan.config.get("hand_control", "strict"))
+        self.arm_tracking_rad = checked_arm_tracking_tolerance(
+            self.plan.config.get("arm_tracking_rad", ARM_TRACKING_TOLERANCE_RAD)
+        )
         self.checked = ARM if self.hand_control == "slider" else np.arange(54)
         self.admission.check()
         finite(self.prepared_at)
@@ -500,7 +503,13 @@ class OneShot:
                 settle_timeout = HAND_CONTACT_SETTLE_SECONDS if feedback.contact_indices(q) else 5
                 if now - self.phase_started > settle_timeout:
                     raise ValueError("Measured endpoint settling timed out")
-            check_tracking(q, feedback, self.checked, "Measured tracking")
+            check_tracking(
+                q,
+                feedback,
+                self.checked,
+                "Measured tracking",
+                arm_tracking_rad=self.arm_tracking_rad,
+            )
             frame = Frame(
                 self.run_id,
                 self.digest,

@@ -23,6 +23,7 @@ import uuid
 import numpy as np
 import yaml
 
+from deploy.fr3_wuji_home.planner import ARM_HOME_TRACKING_TOLERANCE_RAD
 from deploy.fr3_wuji_home.planner import build_home_plan
 from deploy.fr3_wuji_home.poses import DEFAULT_POSES
 from deploy.fr3_wuji_home.poses import load_home
@@ -30,7 +31,6 @@ from deploy.fr3_wuji_runtime import hardware
 from deploy.fr3_wuji_slow.core import Admission
 from deploy.fr3_wuji_slow.core import OneShot
 from deploy.fr3_wuji_slow.ipc import RemoteDevices
-from deploy.fr3_wuji_slow.limits import ARM_TRACKING_TOLERANCE_RAD
 from deploy.fr3_wuji_slow.runner import run_live
 
 ROOT = hardware.ROOT
@@ -110,7 +110,7 @@ def write_runtime(args, output, home):
         "hand_control": "slider",
         "continuous": False,
         "arm_speed_rad_s": ARM_RUNTIME_SPEED_RAD_S,
-        "arm_tracking_rad": ARM_TRACKING_TOLERANCE_RAD,
+        "arm_tracking_rad": ARM_HOME_TRACKING_TOLERANCE_RAD,
         "home": {
             "name": home.name,
             "description": home.description,
