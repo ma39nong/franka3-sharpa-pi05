@@ -11,10 +11,11 @@ from .planner import validate_config
 ARM_SPEED_RAD_S = 2.0
 
 
-def planning_config(model="30000", *, minimum_time_scale=0.625):
+def planning_config(model="64-lora-30hz", *, minimum_time_scale=0.625):
     from deploy.fr3_wuji_models.registry import profile
 
     model_spec = profile(model)
+    model = model_spec.name
     config = read_config(Path(__file__).with_name("config.yaml"))
     config.update(model_profile=model, minimum_time_scale=minimum_time_scale, final_settle_seconds=0.5)
     config["source_hz"] = model_spec.source_hz

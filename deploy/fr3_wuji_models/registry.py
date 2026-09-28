@@ -37,9 +37,19 @@ MODELS = {
     ),
 }
 
+# Descriptive operator names; checkpoint/service identities stay stable.
+MODEL_ALIASES = {
+    "54": "19999",
+    "64-lora-30hz": "30000",
+    "64-full-30hz": "30000v2",
+    "64-full-15hz-ab": "25000",
+    "64-full-15hz-a": "25000-single",
+    "64": "30000",  # Compatibility with the initial dimension-only name.
+}
+
 
 def profile(name: str) -> ModelSpec:
     try:
-        return MODELS[name]
+        return MODELS[MODEL_ALIASES.get(name, name)]
     except KeyError as error:
         raise ValueError(f"Unknown model profile: {name}") from error

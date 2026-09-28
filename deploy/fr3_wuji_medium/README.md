@@ -63,7 +63,7 @@ bash /home/user/lpy/Pi05/deploy/fr3_wuji/run.sh \
 
 ```bash
 bash /home/user/lpy/Pi05/deploy/fr3_wuji_medium/run.sh \
-  --model 19999 \
+  --model 54 \
   --checkpoint /home/user/lpy/Pi05/checkpoints/pi05_fr3_wuji_weighted/tomato_lora_0918_a70_b30/19999 \
   --uri ws://127.0.0.1:8001 \
   --execute --supervised-trial \
@@ -81,18 +81,28 @@ bash /home/user/lpy/Pi05/deploy/fr3_wuji_medium/run.sh \
 
 ```bash
 bash /home/user/lpy/Pi05/deploy/fr3_wuji_medium/run.sh \
-  --model 19999 \
+  --model 54 \
   --checkpoint /home/user/lpy/Pi05/checkpoints/pi05_fr3_wuji_weighted/tomato_lora_0918_a70_b30/19999 \
   --check --continuous
 ```
 
-同时支持 `--model 30000`、`--model 30000v2`、`--model 25000` 和
-`--model 25000-single`，对应 8002、8003、8004、8005 端口。
+64 维适配现在使用明确的名称：
+
+| `--model` | 原名称 | 默认端口 |
+| --- | --- | --- |
+| `64-lora-30hz` | `30000` / `64` | 8002 |
+| `64-full-30hz` | `30000v2` | 8003 |
+| `64-full-15hz-ab` | `25000` | 8004 |
+| `64-full-15hz-a` | `25000-single` | 8005 |
+
 25000 有单独的全量微调服务、状态输入顺序和 15 Hz 节点时间轴，见
 `/home/user/lpy/Pi05/deploy/fr3_wuji_25000/README.md`。
 25000-single 使用相同的输入输出映射，但有自己的 `tomato_A_15hz` 统计和服务身份，见
 `/home/user/lpy/Pi05/deploy/fr3_wuji_25000_single/README.md`。
-默认模型仍是 30000，因此以上用户 checkpoint 的命令需保留 `--model 19999`。
+默认模型为 `64-lora-30hz`（原 30000 适配），因此以上 54 维 checkpoint 的命令需保留 `--model 54`。
+`54` 表示原生 54 维、30 Hz 适配；原生 54 维、20 Hz 仍用 `--model 20hz`。
+所有旧名称继续兼容，其中 `64` 仅代表 `64-lora-30hz`，不代表全部 64 维模型。
+权重路径、服务契约、输入输出映射、手部参数和安全阈值不变。
 不传 `--continuous` 时执行单次 50 步预测。
 默认日志目录为 `/home/user/lpy/Pi05/logs/weight_motion_eval/medium-*`。
 默认结束后保持，Ctrl-C 停止并清理；`--finish-policy disable` 可在末端到位后释放。

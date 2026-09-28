@@ -15,7 +15,7 @@ import uuid
 import yaml
 
 from deploy.fr3_wuji_runtime import hardware
-from deploy.fr3_wuji_models.registry import MODELS, profile
+from deploy.fr3_wuji_models.registry import MODEL_ALIASES, MODELS, profile
 
 from .profile import ARM_SPEED_RAD_S
 from .profile import checkpoint_contract
@@ -59,7 +59,16 @@ def parse_args(argv=None):
     parser.add_argument("--wuji-sides", choices=("both",), default="both")
     parser.add_argument("--wuji-left-address", default="192.168.1.110:7447")
     parser.add_argument("--wuji-right-address", default="192.168.2.111:7447")
-    parser.add_argument("--model", choices=tuple(MODELS), default="30000")
+    parser.add_argument(
+        "--model",
+        choices=(*MODEL_ALIASES, *MODELS),
+        default="64-lora-30hz",
+        help=(
+            "54: native 54D/30Hz; 64-lora-30hz (default), 64-full-30hz, "
+            "64-full-15hz-ab or 64-full-15hz-a select distinct 64D profiles. "
+            "20hz selects native 54D/20Hz. Old names remain accepted."
+        ),
+    )
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--uri")
     parser.add_argument("--start-cameras", action="store_true")
@@ -87,6 +96,8 @@ def parse_args(argv=None):
         "--output", type=Path, default=ROOT / "logs/weight_motion_eval" / ("medium-" + uuid.uuid4().hex[:10])
     )
     args = parser.parse_args(argv)
+    # Resolve names before selecting contracts, planning bounds or device settings.
+    args.model = profile(args.model).name
     args.checkpoint = args.checkpoint or ROOT / profile(args.model).checkpoint
     args.uri = args.uri or profile(args.model).uri
     if args.rounds < 1 or not 2 <= args.replan_steps <= 50:

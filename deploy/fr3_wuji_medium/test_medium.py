@@ -223,13 +223,52 @@ def test_parent_prefetches_once_and_keeps_correct_round_across_completion(tmp_pa
     assert consumer.completed == 1
 
 
-@pytest.mark.parametrize("model,port", [("19999", "8001"), ("30000", "8002"), ("30000v2", "8003")])
-def test_entry_and_transport_use_medium_settings_only(model, port, tmp_path):
+@pytest.mark.parametrize(
+    "model,port",
+    [
+        ("54", "8001"), ("64", "8002"), ("19999", "8001"), ("30000", "8002"), ("30000v2", "8003"),
+        ("64-lora-30hz", "8002"), ("64-full-30hz", "8003"),
+        ("64-full-15hz-ab", "8004"), ("64-full-15hz-a", "8005"),
+    ],
+)
+def test_entry_and_transport_use_medium_settings_only(model, port, tmp_path, monkeypatch):
+    from deploy.fr3_wuji_runtime import hardware
+
+    # Only render command lines; no installed SDK or device connection is needed.
+    sdk = tmp_path / "sdk"
+    for package in ("wuji_sdk", "wuji_sdk.libs"):
+        (sdk / package).mkdir(parents=True)
+    monkeypatch.setattr(hardware, "SDK", sdk)
     args = parse_args(["--model", model, "--execute", "--supervised-trial", "--continuous"])
     assert args.uri.endswith(port) and args.minimum_time_scale == 0.625
     commands = launch_commands(args, tmp_path, tmp_path)
     assert commands["gateway"][-2:] == ["--arm-speed-rad-s", "2.0"]
     assert "deploy.fr3_wuji_medium.runtime.bridge" in commands["devices"]
+
+
+@pytest.mark.parametrize(
+    "model,legacy",
+    [
+        ("54", "19999"), ("64", "30000"),
+        ("64-lora-30hz", "30000"), ("64-full-30hz", "30000v2"),
+        ("64-full-15hz-ab", "25000"), ("64-full-15hz-a", "25000-single"),
+    ],
+)
+def test_dimension_names_preserve_model_contract_and_planning_bounds(model, legacy, tmp_path):
+    from deploy.fr3_wuji_models.registry import profile
+
+    assert profile(model) is profile(legacy)
+    assert planning_config(model) == planning_config(legacy)
+    for overrides in ([], ["--checkpoint", str(tmp_path / "custom"), "--uri", "ws://127.0.0.1:8123"]):
+        common = ["--check", "--output", str(tmp_path), *overrides]
+        assert vars(parse_args(["--model", model, *common])) == vars(parse_args(["--model", legacy, *common]))
+
+
+def test_default_model_retains_64d_service_and_custom_profiles_remain_distinct():
+    assert parse_args([]).model == "30000"
+    assert parse_args([]).uri == "ws://127.0.0.1:8002"
+    for model in ("30000v2", "25000", "25000-single", "20hz"):
+        assert parse_args(["--model", model]).model == model
 
 
 def test_prefetch_age_and_model_acquisition_bounds():
@@ -240,10 +279,10 @@ def test_prefetch_age_and_model_acquisition_bounds():
     limits, names = inputs()
     raw = np.zeros((50, 54))
     raw[:, 0] = 0.5
-    for model in ("19999", "30000"):
+    for model in ("54", "64", "19999", "30000"):
         config = planning_config(model)
         config["hand_control"] = "slider"
-        if model == "19999":
+        if model in {"54", "19999"}:
             with pytest.raises(ValueError, match="raw initial delta"):
                 build_plan(raw, np.zeros(54), config, limits, names)
         else:
