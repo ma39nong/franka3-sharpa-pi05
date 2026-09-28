@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001 -- Chinese operator messages use native punctuation.
 """Render deployment, inspect feedback, or execute one fresh 50-step prediction.
 
 Default --check only writes a reviewable launch configuration. Physical output
@@ -10,14 +11,15 @@ import copy
 import fcntl
 import ipaddress
 import json
-import os
 from pathlib import Path
-import subprocess
 import tempfile
 import time
 import uuid
 
-import yaml
+from deploy.fr3_wuji_models.model_19999.serve import checkpoint_contract
+from deploy.fr3_wuji_runtime import hardware
+from experiments.weight_motion_eval.oneshot.qualification import Qualification
+from experiments.weight_motion_eval.oneshot.qualification import SupervisedTrial
 
 from .ipc import RemoteDevices
 from .limits import HAND_CONTACT_SECONDS
@@ -25,11 +27,6 @@ from .limits import HAND_CURRENT_A
 from .limits import HAND_SPEED_RAD_S
 from .limits import SLIDER_CURRENT_A
 from .limits import SLIDER_SPEED_RAD_S
-from deploy.fr3_wuji_models.model_19999.serve import checkpoint_contract
-from experiments.weight_motion_eval.oneshot.qualification import Qualification
-from experiments.weight_motion_eval.oneshot.qualification import SupervisedTrial
-
-from deploy.fr3_wuji_runtime import hardware
 
 ROOT = hardware.ROOT
 REFERENCE = hardware.REFERENCE
@@ -38,7 +35,7 @@ OVERLAY = hardware.OVERLAY
 HELPER_CPUSETS = hardware.HELPER_CPUSETS
 
 
-def parse_args(argv=None):
+def parse_args(argv=None, *, default_checkpoint=None, output_prefix="deployment-"):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
@@ -49,7 +46,7 @@ def parse_args(argv=None):
     parser.add_argument("--wuji-sides", choices=("both",), default="both")
     parser.add_argument("--wuji-left-address", default="192.168.1.110:7447")
     parser.add_argument("--wuji-right-address", default="192.168.2.111:7447")
-    parser.add_argument("--checkpoint", type=Path, default=ROOT / "checkpoints/19999")
+    parser.add_argument("--checkpoint", type=Path, default=default_checkpoint or ROOT / "checkpoints/19999")
     parser.add_argument("--uri", default="ws://127.0.0.1:8001")
     parser.add_argument("--start-cameras", action="store_true")
     parser.add_argument("--finish-policy", choices=("hold", "disable"), default="hold")
@@ -67,7 +64,7 @@ def parse_args(argv=None):
         help="One operator-supervised 50-step run without historical commissioning evidence",
     )
     parser.add_argument(
-        "--output", type=Path, default=ROOT / "logs/weight_motion_eval" / ("deployment-" + uuid.uuid4().hex[:10])
+        "--output", type=Path, default=ROOT / "logs/weight_motion_eval" / (output_prefix + uuid.uuid4().hex[:10])
     )
     args = parser.parse_args(argv)
     if args.rounds < 1 or not 2 <= args.replan_steps <= 50:
@@ -97,18 +94,33 @@ preflight_owners = hardware.preflight_owners
 Children = hardware.Children
 
 
-def write_runtime(args, output):
-    return hardware.write_runtime(args, output, checkpoint_contract)
+def write_runtime(args, output, contract=checkpoint_contract):
+    return hardware.write_runtime(args, output, contract)
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def main(
+    argv=None,
+    *,
+    config_path=None,
+    contract=checkpoint_contract,
+    default_checkpoint=None,
+    output_prefix="deployment-",
+    profile_name="30hz-slow",
+):
+    args = parse_args(argv, default_checkpoint=default_checkpoint, output_prefix=output_prefix)
+    from deploy.fr3_wuji_slow.planner import read_config
     from experiments.weight_motion_eval.cli import safe_output
     from experiments.weight_motion_eval.reference import deployment_module
 
+    config_path = Path(config_path) if config_path is not None else Path(__file__).with_name("config.yaml")
+    base_config = read_config(config_path)
+
     output = safe_output(args.output)
     output.mkdir(parents=True)
-    runtime, limits, names = write_runtime(args, output)
+    runtime, limits, names = write_runtime(args, output, contract)
+    runtime["policy_source_hz"] = base_config["source_hz"]
+    runtime["speed_profile"] = profile_name
+    (output / "runtime.json").write_text(json.dumps(runtime, indent=2) + "\n")
     if not args.read_only and not args.execute:
         preview = copy.copy(args)
         preview.execute = True
@@ -123,6 +135,8 @@ def main(argv=None):
                     "runtime": str(output / "runtime.json"),
                     "arms": runtime["arms"],
                     "hands": runtime["hands"],
+                    "policy_source_hz": runtime["policy_source_hz"],
+                    "speed_profile": runtime["speed_profile"],
                     "controller_verified": True,
                     "execution_requires": "--execute plus --qualification or --supervised-trial; no devices started",
                 },
@@ -153,6 +167,8 @@ def main(argv=None):
                     "continuous": args.continuous,
                     "rounds": args.rounds if args.continuous else 1,
                     "execution_steps": args.replan_steps if args.continuous else 50,
+                    "policy_source_hz": runtime["policy_source_hz"],
+                    "speed_profile": runtime["speed_profile"],
                     "physical_stop_qualified": not args.supervised_trial,
                 },
                 indent=2,
@@ -223,14 +239,12 @@ def main(argv=None):
                 )
                 print("Four-device measured feedback received; no motor enable or command sent.")
                 return
-            from deploy.fr3_wuji_slow.planner import read_config
-
             from .live import LiveConsumer
 
             recorder_module = deployment_module("executor.async_recorder")
             recorder = recorder_module.AsyncRecorder(output)
             try:
-                config = read_config(Path(__file__).with_name("config.yaml"))
+                config = copy.deepcopy(base_config)
                 config["hand_control"] = args.hand_control
                 config["minimum_time_scale"] = args.minimum_time_scale
                 config["hand_raw_initial_delta_rad"] = qualification.data["hand_raw_initial_delta_rad"]
