@@ -1,6 +1,8 @@
 # Contributing to openpi
 
-We welcome contributions, improvements, and modifications. Everyone is welcome to use openpi in accordance to the [license](LICENSE). Contributors are also welcome to submit bug reports, feature requests, and pull requests. We can't promise to approve every pull request, and we are a small team with limited bandwidth to review all requests, but we'll give it our best effort. Specifics are described below.
+文档整理日期：2026-09-29。此日期仅表示归档或目录整理时间，原文记录的实验日期与验证状态保持不变。
+
+We welcome contributions, improvements, and modifications. Everyone is welcome to use openpi in accordance to the [license](../LICENSE). Contributors are also welcome to submit bug reports, feature requests, and pull requests. We can't promise to approve every pull request, and we are a small team with limited bandwidth to review all requests, but we'll give it our best effort. Specifics are described below.
 
 ## Issues and feature requests
 

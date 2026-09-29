@@ -1,5 +1,7 @@
 # Normalization statistics
 
+文档整理日期：2026-09-29。此日期仅表示归档或目录整理时间，原文记录的实验日期与验证状态保持不变。
+
 Following common practice, our models normalize the proprioceptive state inputs and action targets during policy training and inference. The statistics used for normalization are computed over the training data and stored alongside the model checkpoint.
 
 ## Reloading normalization statistics

@@ -1,5 +1,7 @@
 ### Docker Setup
 
+文档整理日期：2026-09-29。此日期仅表示归档或目录整理时间，原文记录的实验日期与验证状态保持不变。
+
 All of the examples in this repo provide instructions for being run normally, and also using Docker. Although not required, the Docker option is recommended as this will simplify software installation, produce a more stable environment, and also allow you to avoid installing ROS and cluttering your machine, for examples which depend on ROS.
 
 - Basic Docker installation instructions are [here](https://docs.docker.com/engine/install/).

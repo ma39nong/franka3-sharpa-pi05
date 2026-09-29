@@ -1,4 +1,6 @@
 
+
+文档整理日期：2026-09-29。此日期仅表示归档或目录整理时间，原文记录的实验日期与验证状态保持不变。
 # Running openpi models remotely
 
 We provide utilities for running openpi models remotely. This is useful for running inference on more powerful GPUs off-robot, and also helps keep the robot and policy environments separate (and e.g. avoid dependency hell with robot software).

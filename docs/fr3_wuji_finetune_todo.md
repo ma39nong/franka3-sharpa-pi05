@@ -1,5 +1,7 @@
 # FR3 + Wuji Hand 微调待办
 
+文档整理日期：2026-09-29。此日期仅表示归档或目录整理时间，原文记录的实验日期与验证状态保持不变。
+
 在官方 openpi 工作区（本仓库）微调 `pi05_base`。参考 [wuji-openpi](https://github.com/wuji-technology/wuji-openpi) 的 54 维约定，**第一阶段在线 transform，不改磁盘数据**。用 `data/dataset/episode24`（1 条、2377 帧）跑通后，把 `/home/descfly/datasets` 的 65 条整理成标准训练集。
 
 任务指令（训练与部署必须**逐字一致**）：
