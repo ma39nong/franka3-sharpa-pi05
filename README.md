@@ -1,126 +1,165 @@
-# OpenPI FR3 与 Wuji 部署
+# OpenPI FR3 双臂 + 双 Sharpa π0.5 番茄协作任务
 
-更新日期：2026-09-29
+更新日期：2026-10-08
 
-本仓库用于 FR3 双臂与 Wuji 双手的 pi05 番茄采摘任务，包含模型微调、推理服务和机器人执行入口。基于 Physical Intelligence 的 OpenPI 项目，当前操作入口以本页和根目录的使用说明为准。
+本仓库基于 Physical Intelligence 的 OpenPI，面向 **双 FR3 机械臂 + 双 Sharpa 灵巧手** 的番茄双手协作任务：右手抓取并移动到中间，左手摘取番茄，再由左手放入碗中。
 
-**完整操作说明：[FR3_Wuji_pi05部署使用说明.docx](FR3_Wuji_pi05部署使用说明.docx)**。文档包括快速指南、各模型启动命令、参数说明、state/action 映射和当前软件阈值。
+当前仓库同时保留原有的 FR3 + Wuji 54 维工程。Wuji 配置和部署功能不变；Sharpa 使用独立的 58 维数据协议、模型配置和离线验收流程。
 
-## 快速开始
+## 当前状态
 
-当前使用效果最好、建议优先使用 **70A_30B** 权重，模型为 **54 维、30 Hz、每次预测 50 步**。权重步骤目录为：
+- Sharpa 模型配置：`pi05_fr3_sharpa`
+- 模型：π0.5，`action_dim=58`，`action_horizon=50`
+- 动作顺序：左 FR3 7 + 左 Sharpa 22 + 右 FR3 7 + 右 Sharpa 22
+- 输入：三路 RGB、58 维机器人状态、任务文本
+- 当前正式训练策略沿用 Wuji 工程：
+  - SigLIP 全量训练
+  - Gemma 2B 主干冻结 + LoRA
+  - Gemma 300M Action Expert 主干冻结 + LoRA
+  - Action Head 全量训练
+  - Timestep MLP 全量训练
+  - AdamW、cosine warmup、关闭 EMA
+- 官方 `pi05_base` checkpoint 已在本机完成真实兼容性验证
+- 已使用 `episode284` 真实 batch 完成 forward/backward、单次 optimizer step、参数和 optimizer state 保存恢复验证
+- 尚未启动 Sharpa 长时间训练，也没有连接或控制硬件
+
+Sharpa 的训练配置位于 [`src/openpi/training/config.py`](src/openpi/training/config.py)，模型 freeze filter 位于 [`src/openpi/models/pi0_config.py`](src/openpi/models/pi0_config.py)。
+
+## Checkpoint 兼容性
+
+本机 checkpoint 路径：
 
 ```text
-checkpoints/pi05_fr3_wuji_weighted/tomato_lora_0918_a70_b30/19999
+/home/user/checkpoints/pi05_base/params
 ```
 
-部署提供**慢、中、快三种执行速度**，另有独立 **Home 归位**。先启动模型服务，等待 `ready` / `Warmup OK`，再启动一个机器人控制端。以下示例针对已配置好的本机环境；迁移机器时需按使用说明核对路径、控制器与设备配置。
+Sharpa 使用 `PartialCheckpointWeightLoader`。官方基础权重的动作投影宽度为 32，Sharpa 为 58，因此只有以下动作投影参数重新初始化：
 
-### 终端一 启动模型服务
+```text
+action_in_proj/kernel
 
-```bash
-cd /home/descfly/lpy/openpi
-CKPT="$PWD/checkpoints/pi05_fr3_wuji_weighted/tomato_lora_0918_a70_b30/19999"
-bash deploy/fr3_wuji/run.sh -m experiments.weight_motion_eval.oneshot.policy_server \
-  --checkpoint "$CKPT" --port 8001
+action_out_proj/bias
+
+action_out_proj/kernel
 ```
 
-### 终端二 选择一种执行速度
+其余基础参数严格按名称、形状和 dtype 检查。当前验证结果：
 
-先在第二个终端设置同一权重路径：
-
-```bash
-cd /home/descfly/lpy/openpi
-CKPT="$PWD/checkpoints/pi05_fr3_wuji_weighted/tomato_lora_0918_a70_b30/19999"
+```text
+目标参数叶：71
+checkpoint 参数叶：51
+unexpected：0
+非动作投影 shape mismatch：0
+合并后参数叶：71
 ```
 
-以下命令包含 `--execute`，会驱动真机；只选择其中一条运行。
+LoRA adapter 参数是目标 LoRA 结构新增的参数，由目标模型初始化；这不改变 Gemma 主干冻结策略。
 
-**慢速**：默认至少按模型时间轴的 2.5 倍时长播放。
+在其他机器上使用时，应把 `src/openpi/training/config.py` 中 Sharpa loader 的本地路径替换为可访问的 checkpoint 路径，或改为官方 GCS 路径。
 
-```bash
-bash deploy/fr3_wuji_slow/run.sh \
-  --checkpoint "$CKPT" --uri ws://127.0.0.1:8001 \
-  --execute --supervised-trial --continuous --rounds 50 --replan-steps 20 \
-  --minimum-time-scale 2.5 --start-cameras --finish-policy disable
-```
+## 训练策略与参数
 
-**中速**：显式使用 `--model 54`；默认约 25 秒后在下一段边界切慢速。全程中速可将 `--slow-after-seconds` 改为 `0`。
+Sharpa 继承原 `pi05_fr3_wuji` 的训练策略，不更换 model variant：
 
-```bash
-bash deploy/fr3_wuji_medium/run.sh --model 54 \
-  --checkpoint "$CKPT" --uri ws://127.0.0.1:8001 \
-  --execute --supervised-trial --continuous --rounds 50 --replan-steps 20 \
-  --minimum-time-scale 0.625 --slow-after-seconds 25 \
-  --start-cameras --finish-policy disable
-```
-
-**快速**：采用 30 Hz 模型时间轴和 RTG 异步衔接。
-
-```bash
-bash deploy/fr3_wuji_fast/run.sh \
-  --checkpoint "$CKPT" --uri ws://127.0.0.1:8001 \
-  --execute --supervised-trial --broker-mode rtg --rounds 50 \
-  --start-cameras --finish-policy disable
-```
-
-三种入口均以 100 Hz 下发设备指令，实际运行耗时还受轨迹约束和推理衔接影响。慢/中速的 `--rounds 50 --replan-steps 20` 表示运行 50 轮，每轮预测 50 步、使用前 20 步；快速入口不使用 `--continuous` 或 `--replan-steps`。
-
-### Home 归位
-
-在项目根目录执行：
-
-```bash
-# 只检查配置
-bash deploy/fr3_wuji_home/run.sh --check
-
-# 真机归位：先双臂，再双手，完成后释放退出
-bash deploy/fr3_wuji_home/home.sh
-```
-
-Home 不需要模型服务或相机，不要与其他控制端同时运行。
-
-## State 和 action 映射
-
-硬件接口统一为 54 维，关节位置单位为 rad。索引从 0 开始，区间左闭右开。
-
-| 部件 | 硬件 state / action 索引 | 维度 |
-| --- | --- | --- |
-| 左臂 | `[0:7]` | 7 |
-| 左手 | `[7:27]` | 20 |
-| 右臂 | `[27:34]` | 7 |
-| 右手 | `[34:54]` | 20 |
-
-输入 `observation/state` 为 `(54,)`，服务端输出 `actions` 为 `(50, 54)`，表示未来 50 步的绝对关节目标。70A_30B 服务已经完成反归一化与臂部 delta 还原，控制端不要再次叠加当前 state。
-
-| 模型 | 模型内部 state 顺序 | 模型内部 action 顺序 |
-| --- | --- | --- |
-| 70A_30B / 原生 54 维 | 左臂→左手→右臂→右手 | 左臂→左手→右臂→右手 |
-| 30000 / 30000v2，64 维 | 左臂→右臂→左手→右手→补零 10 维 | 左臂→右臂→左手→右手→末 10 维 |
-| 25000 / 25000-single，64 维 | 左臂→左手→右臂→右手→补零 10 维 | 左臂→右臂→左手→右手→末 10 维 |
-
-64 维模型由配套 server 补零、裁剪并重排，最终也返回硬件顺序的 `(50, 54)` 绝对关节目标。不同微调方式的模型可能需要让 **Codex 单独编写或调整 server 适配**，核对模型结构、输入输出维度、关节顺序、权重自带归一化统计、delta/绝对动作语义和模型频率。
-
-切换权重时，先停止控制端和旧模型服务，再按模型身份同步切换服务入口、`--model`、`--checkpoint` 和端口。54/64 维及 30/20/15 Hz 的完整对应关系见使用说明和[模型适配说明](deploy/fr3_wuji_models/README.md)。
-
-## 目录与文档
-
-根目录的两份主要使用文档为本 README 和 Word 使用说明。历史说明与训练记录集中在 `docs/`；各代码模块的配套 README 保留在所属目录。
-
-| 目录或文件 | 内容 |
+| 参数 | 当前 Sharpa 值 |
 | --- | --- |
-| [FR3_Wuji_pi05部署使用说明.docx](FR3_Wuji_pi05部署使用说明.docx) | 当前部署操作说明，优先阅读 |
-| [docs/README.md](docs/README.md) | 带整理日期的文档索引与历史资料 |
-| `deploy/` | 模型服务、慢/中/快执行入口和 Home 归位 |
-| `src/openpi/` | 模型、策略、数据变换与训练配置 |
-| `scripts/` | 训练、数据准备与辅助工具 |
-| `examples/` | 数据转换及其他机器人平台示例 |
-| `checkpoints/` | 本地模型权重，使用完整步骤目录中的 `params/` 和 `assets/` |
-| `experiments/weight_motion_eval/` | 推理、动作评估与部署相关实现 |
-| `logs/` | 本机运行记录 |
+| PaliGemma | `gemma_2b_lora` |
+| Action Expert | `gemma_300m_lora` |
+| 学习率 | cosine decay，warmup 1000 步 |
+| peak / end lr | `2.5e-5` / `2.5e-6` |
+| Optimizer | AdamW，`b1=0.9`，`b2=0.95` |
+| weight decay | `1e-10` |
+| gradient clip | `1.0` |
+| batch size | `8` |
+| 训练步数 | `20,000` |
+| checkpoint | 每 `2,000` 步保存，`keep_period=10,000` |
+| EMA | 关闭 |
+| WandB | 关闭 |
 
-训练与数据转换可从[番茄任务数据训练与部署记录](docs/Codex_番茄任务数据训练与部署记录.md)开始。通用安装、基础模型、其他机器人示例与 PyTorch 使用方式保留在[原 README 归档](docs/README_原版_2026-09-29.md)。历史资料中的机器路径和阶段性状态可能已变化，部署命令优先参考当前使用说明。
+训练入口仍然是：
+
+```bash
+uv run --no-sync scripts/train.py pi05_fr3_sharpa \
+  --exp-name <experiment-name> \
+  --log-interval 10
+```
+
+正式训练前应确认本机 checkpoint、Sharpa 数据目录和 norm stats 路径均可访问。本 README 不代表已经启动过正式训练。
+
+## Sharpa 数据
+
+ROS bag 转换和 LeRobot 导出工具位于 [`examples/fr3_sharpa/`](examples/fr3_sharpa/)：
+
+- [`convert_rosbag.py`](examples/fr3_sharpa/convert_rosbag.py)：读取 ROS bag，按 58 维协议对齐状态、动作和三路图像
+- [`export_lerobot.py`](examples/fr3_sharpa/export_lerobot.py)：导出 LeRobot v2 数据集
+- [`fr3_sharpa_protocol.py`](src/openpi/policies/fr3_sharpa_protocol.py)：定义关节名称、顺序和 58 维协议
+- [`fr3_sharpa_policy.py`](src/openpi/policies/fr3_sharpa_policy.py)：定义 Sharpa 输入输出变换
+
+已验证的 episode284 数据：
+
+```text
+30 Hz：/home/user/franka_teleop_data/converted/fr3_sharpa_episode284
+20 Hz causal：/home/user/franka_teleop_data/converted/fr3_sharpa_episode284_20hz_causal2
+```
+
+30 Hz LeRobot 数据为 1547 帧，nominal FPS 为 30；20 Hz 因果版本为 1031 帧，nominal FPS 为 20。两种版本的时间间隔都没有发现缺帧间隔。
+
+### 30 Hz 与 20 Hz 结论
+
+- 30 Hz 的 50-step action horizon 覆盖约 1.67 秒。
+- 20 Hz 的 50-step action horizon 覆盖 2.5 秒。
+- 当前 30 Hz 版本使用最近样本同步，可能选到目标时刻之后的观测。
+- 20 Hz causal 版本只使用目标时刻之前的最新样本，观测延迟已记录在 `report.json`。
+- 30 Hz 也可以采用同样的 causal 同步，但需要重新生成数据并重新计算 norm stats。
+- 当前 episode284 没有发现由裁剪或缺帧造成的动作不连续；快速动作峰值仍集中在右手抓取、左手摘取等动作变化附近。
+
+这些结论来自 episode284 的离线测量。抓取、移动、摘取和放碗的语义阶段没有写入 bag 标签，因此动作峰值只能作为阶段变化的代理，不能替代独立任务成功率评估。
+
+## 离线验收
+
+验收内容包括：
+
+- 本地 `pi05_base` 权重初始化
+- episode284 真实 batch 的 forward/backward
+- SigLIP、Gemma 2B LoRA、Gemma 300M LoRA、Action Head、Timestep MLP 梯度统计
+- 单次正式 optimizer step
+- 可训练参数更新、冻结参数不更新
+- 参数、optimizer state、global step 保存恢复
+- 恢复后确定性 forward
+- 20 Hz / 30 Hz 数据 FPS、重复率、时间戳年龄和动作峰值对比
+
+本机原始报告位于：
+
+```text
+/home/user/franka_teleop_data/converted/fr3_sharpa_episode284/report.json
+/home/user/franka_teleop_data/converted/fr3_sharpa_episode284_20hz_causal2/report.json
+```
+
+大型数据、视频和 checkpoint 不提交到 GitHub。
+
+## 原 Wuji 工程
+
+原有 Wuji 配置仍为 54 维、30 Hz、50-step action horizon。其训练、服务和硬件执行入口保持不变。原有部署说明见：
+
+- [FR3_Wuji_pi05部署使用说明.docx](FR3_Wuji_pi05部署使用说明.docx)
+- [番茄任务数据训练与部署记录](docs/Codex_番茄任务数据训练与部署记录.md)
+- [文档索引](docs/README.md)
+
+切换 Wuji 权重时，仍需使用对应的 54 维适配器、norm stats 和部署入口，不要将 Wuji checkpoint 直接当作 Sharpa 58 维 checkpoint 使用。
+
+## 目录
+
+| 路径 | 内容 |
+| --- | --- |
+| `src/openpi/models/` | π0、π0.5 和相关模型实现 |
+| `src/openpi/training/` | 训练配置、数据加载、归一化和 checkpoint 逻辑 |
+| `src/openpi/policies/` | Wuji、Sharpa 以及其他平台的输入输出变换 |
+| `examples/fr3_sharpa/` | Sharpa ROS bag 转换、导出和检查工具 |
+| `examples/fr3_wuji/` | 原 Wuji 数据转换和检查工具 |
+| `scripts/` | 训练、统计、数据准备和辅助脚本 |
+| `deploy/` | 原 Wuji 模型服务和硬件执行入口 |
+| `docs/` | 训练记录、部署说明和历史资料 |
 
 ## 许可证
 
-项目代码许可证见 [LICENSE](LICENSE)，Gemma 相关条款见 [LICENSE_GEMMA.txt](LICENSE_GEMMA.txt)。贡献流程见[贡献指南归档](docs/CONTRIBUTING_2026-09-29.md)。
+项目代码许可证见 [LICENSE](LICENSE)，Gemma 相关条款见 [LICENSE_GEMMA.txt](LICENSE_GEMMA.txt)。
