@@ -21,6 +21,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.fr3_wuji_policy as fr3_wuji_policy
+import openpi.policies.fr3_sharpa_policy as fr3_sharpa_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -425,7 +426,48 @@ class LeRobotFr3WujiDataConfig(DataConfigFactory):
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
             )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=self.action_sequence_keys,
+            lerobot_datasets=self.lerobot_datasets,
+            action_hz=self.action_hz,
+            video_backend=self.video_backend,
+        )
 
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotFr3SharpaDataConfig(DataConfigFactory):
+    """Data config for the versioned 58D dual-FR3/dual-Sharpa dataset."""
+
+    extra_delta_transform: bool = False
+    action_sequence_keys: Sequence[str] = ("action",)
+    lerobot_datasets: Sequence[LeRobotDatasetSpec] = ()
+    action_hz: float | None = None
+    video_backend: str | None = "pyav"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform({
+            "observation/image": "observation.images.cam0",
+            "observation/left_wrist_image": "observation.images.cam1",
+            "observation/right_wrist_image": "observation.images.cam2",
+            "observation/state": "observation.state",
+            "actions": "action",
+            "prompt": "task",
+        })])
+        data_transforms = _transforms.Group(
+            inputs=[fr3_sharpa_policy.Fr3SharpaInputs(model_type=model_config.model_type)],
+            outputs=[fr3_sharpa_policy.Fr3SharpaOutputs()],
+        )
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(7, -22, 7, -22)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
@@ -875,6 +917,44 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         # EMA is turned off for LoRA fine-tuning.
+        ema_decay=None,
+        batch_size=8,
+        num_workers=8,
+        num_train_steps=20_000,
+        save_interval=2_000,
+        keep_period=10_000,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        name="pi05_fr3_sharpa",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=58,
+            action_horizon=50,
+            max_token_len=256,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotFr3SharpaDataConfig(
+            repo_id="fr3_sharpa/v1",
+            assets=AssetsConfig(asset_id="fr3_sharpa/v1"),
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+            action_hz=30.0,
+            lerobot_datasets=(LeRobotDatasetSpec(
+                repo_id="fr3_sharpa/episode284",
+                root="/home/user/franka_teleop_data/converted/fr3_sharpa_episode284/lerobot",
+            ),),
+        ),
+        weight_loader=weight_loaders.PartialCheckpointWeightLoader("/home/user/checkpoints/pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=58,
+            action_horizon=50,
+            max_token_len=256,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
         ema_decay=None,
         batch_size=8,
         num_workers=8,
