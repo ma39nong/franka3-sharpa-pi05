@@ -16,3 +16,41 @@ The output is intentionally outside Git. `report.json` is the acceptance report;
 Images are stored as `images/{cam0,cam1,cam2}/*.jpg`. A frame is emitted only when
 all four state/action streams and all three RGB cameras have a source sample within
 the configured tolerance; no missing robot state or action is fabricated.
+
+Export the intermediate into a standard LeRobot v2.1 dataset with the FPS recorded
+in `report.json` (the exporter cross-checks metadata, parquet timestamps, MP4 frame
+rates, and representative LeRobotDataset samples):
+
+```bash
+uv run python /home/user/sharpa-pi05/examples/fr3_sharpa/export_lerobot.py \
+  --source /home/user/franka_teleop_data/converted/fr3_sharpa_episode0 \
+  --repo-id fr3_sharpa/episode0 \
+  --output /home/user/franka_teleop_data/converted/fr3_sharpa_episode0/lerobot
+```
+
+Batch conversion writes one manifest and can optionally export all accepted
+episodes into one multi-episode LeRobot dataset. The ROS conversion stage runs in
+the ROS 2 environment; the optional exporter additionally needs the repository's
+LeRobot/uv environment:
+
+```bash
+PYTHONPATH=/home/user/sharpa-pi05/src pixi run -e ros2 python batch_convert.py \
+  --input-root /home/user/franka_teleop_data/bags/gello_sharpa_tactile \
+  --output-root /home/user/franka_teleop_data/converted/batch_30hz_causal \
+  --hz 30 --causal
+```
+
+Crop intervals are supplied as relative seconds in a JSON file, for example
+`{"episode284": [[12.0, 45.0], [50.0, 80.0]]}`. Each interval becomes a separate
+LeRobot episode, so action chunks cannot cross a crop boundary. Static frames are
+never removed automatically; the source bag and full intermediate remain intact.
+
+Compare two causal conversions and save the age, repetition, and action-event
+report with:
+
+```bash
+uv run python compare_causal.py \
+  --low /path/to/episode284_20hz_causal \
+  --high /path/to/episode284_30hz_causal \
+  --output /path/to/causal_comparison.json
+```

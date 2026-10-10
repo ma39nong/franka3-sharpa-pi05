@@ -214,6 +214,7 @@ def convert(bag: Path, output: Path, *, hz: float = 30.0, tolerance_ms: float = 
     arm_action_sets = {}
     image_errors = {name: [] for name in CAMERA_TOPICS}
     stream_errors = {topic: [] for topic in required_with_arm_action}
+    stream_selected_times = {topic: [] for topic in required_with_arm_action}
     dropped = []
     cursor = start
     while cursor <= end:
@@ -226,6 +227,7 @@ def convert(bag: Path, output: Path, *, hz: float = 30.0, tolerance_ms: float = 
             else:
                 chosen[topic] = item
                 stream_errors[topic].append(item.time_ns - cursor)
+                stream_selected_times[topic].append(item.time_ns)
         if failures:
             dropped.append({"time_ns": cursor, "missing": failures})
             cursor += step
@@ -283,6 +285,14 @@ def convert(bag: Path, output: Path, *, hz: float = 30.0, tolerance_ms: float = 
                                          "max": float(np.max(errors) / 1e6) if errors else None,
                                          "mean_abs": float(np.mean(np.abs(errors)) / 1e6) if errors else None}
                                 for topic, errors in stream_errors.items()},
+        "stream_repetition": {topic: {
+            "selected_frames": len(times),
+            "unique_source_samples": len(set(times)),
+            "repeated_frames": len(times) - len(set(times)),
+            "repeated_rate": float((len(times) - len(set(times))) / len(times)) if times else None,
+        } for topic, times in stream_selected_times.items()},
+        "causal_future_sample_count": {topic: int(sum(error > 0 for error in errors))
+                                       for topic, errors in stream_errors.items()},
         "camera_formats": {name: {"encoding": getattr(samples[topic][0].value, "encoding", None),
                                    "height": getattr(samples[topic][0].value, "height", None),
                                    "width": getattr(samples[topic][0].value, "width", None),
@@ -303,6 +313,13 @@ def convert(bag: Path, output: Path, *, hz: float = 30.0, tolerance_ms: float = 
                                         "max": float(np.max(-np.asarray(errors) / 1e6)) if errors else None,
                                         "timeout_samples": int(sum(error is None or error > tolerance for error in errors))}
                            for topic, errors in stream_errors.items()},
+        "action_motion": {
+            "delta_l2_threshold_rad": 0.01,
+            "active_frames": int(np.sum(np.linalg.norm(np.diff(np.asarray(rows_action), axis=0), axis=1) > 0.01)) if len(rows_action) > 1 else 0,
+            "total_delta_frames": max(0, len(rows_action) - 1),
+            "active_fraction": float(np.mean(np.linalg.norm(np.diff(np.asarray(rows_action), axis=0), axis=1) > 0.01)) if len(rows_action) > 1 else 0.0,
+            "max_delta_l2_rad": float(np.max(np.linalg.norm(np.diff(np.asarray(rows_action), axis=0), axis=1))) if len(rows_action) > 1 else 0.0,
+        },
         "unit": "rad", "nan_inf_rejected": True, "status": "converted_intermediate",
     }
     np.savez_compressed(output / "episode.npz", time_ns=np.asarray(rows_time, dtype=np.int64),
