@@ -968,14 +968,14 @@ _CONFIGS = [
             pi05=True,
             action_dim=58,
             action_horizon=50,
-            max_token_len=256,
+            max_token_len=320,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotFr3SharpaDataConfig(
             repo_id="fr3_sharpa/tier_a_b1_20hz",
             assets=AssetsConfig(
-                assets_dir="/home/user/sharpa_training_assets",
+                assets_dir="/home/descfly/LTT/franka3-sharpa-pi05/assets/pi05_fr3_sharpa_tier_a_b1_20hz",
                 asset_id="fr3_sharpa/tier_a_b1_20hz",
             ),
             base_config=DataConfig(prompt_from_task=True),
@@ -985,24 +985,24 @@ _CONFIGS = [
             lerobot_datasets=(
                 LeRobotDatasetSpec(
                     repo_id="fr3_sharpa/tier_a_20hz",
-                    root="/home/user/sharpa_lerobot/tier_a_20hz",
+                    root="/media/descfly/833BD1AED8D615E8/data/sharpa_lerobot/tier_a_20hz",
                     weight=0.7,
                 ),
                 LeRobotDatasetSpec(
                     repo_id="fr3_sharpa/tier_b1_20hz",
-                    root="/home/user/sharpa_lerobot/tier_b1_20hz",
+                    root="/media/descfly/833BD1AED8D615E8/data/sharpa_lerobot/tier_b1_20hz",
                     weight=0.3,
                 ),
             ),
         ),
         weight_loader=weight_loaders.PartialCheckpointWeightLoader(
-            "/home/user/checkpoints/pi05_base/params"
+            "/home/descfly/.cache/openpi/openpi-assets/checkpoints/pi05_base/params"
         ),
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             action_dim=58,
             action_horizon=50,
-            max_token_len=256,
+            max_token_len=320,
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
@@ -1020,11 +1020,12 @@ _CONFIGS = [
             weight_decay=1e-10,
             clip_gradient_norm=1.0,
         ),
-        assets_base_dir="/home/user/sharpa_training_assets",
-        checkpoint_base_dir="/home/user/checkpoints",
+        assets_base_dir="/home/descfly/LTT/franka3-sharpa-pi05/assets",
+        checkpoint_base_dir="/home/descfly/LTT/franka3-sharpa-pi05/checkpoints",
         batch_size=8,
         num_workers=8,
         num_train_steps=30_000,
+        log_interval=10,
         save_interval=2_000,
         keep_period=10_000,
         wandb_enabled=False,

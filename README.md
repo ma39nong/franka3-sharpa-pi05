@@ -62,6 +62,9 @@ LoRA adapter 参数是目标 LoRA 结构新增的参数，由目标模型初始�
 
 ## 训练策略与参数
 
+本机两个 20 Hz 数据集的路径、环境配置、训练命令和完整超参数见
+[Sharpa 本机 20 Hz 训练](docs/Sharpa_本机20Hz训练.md)。
+
 Sharpa 继承原 `pi05_fr3_wuji` 的训练策略，不更换 model variant：
 
 | 参数 | 当前 Sharpa 值 |
