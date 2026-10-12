@@ -11,6 +11,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# Physical camera IDs are preserved in ROS bags and LeRobot datasets.
+# Use this mapping at the policy boundary for both training and deployment.
+POLICY_CAMERA_KEYS = {
+    "observation/image": "cam0",
+    "observation/left_wrist_image": "cam2",
+    "observation/right_wrist_image": "cam1",
+}
+
 FR3_JOINTS = tuple(f"{side}_fr3_joint{i}" for side in ("left", "right") for i in range(1, 8))
 SHARPA_JOINTS = (
     "thumb_CMC_FE", "thumb_CMC_AA", "thumb_MCP_FE", "thumb_MCP_AA", "thumb_IP",

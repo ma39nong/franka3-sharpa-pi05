@@ -14,9 +14,11 @@ import time
 
 import numpy as np
 
+from openpi.policies.fr3_sharpa_protocol import POLICY_CAMERA_KEYS
+
 from . import config
-from .runtime import SharpaRuntime
 from .preflight import offline_sanity_check
+from .runtime import SharpaRuntime
 
 DEFAULT_PROMPT = (
     "Pick up a tomato with the right hand, move it to the center, "
@@ -28,8 +30,8 @@ ROS_PROJECT = GELLO_REPO / "portable_deps/litchi_hardware"
 
 def load_sample(path: Path, prompt: str) -> dict:
     """Offline LeRobot sample for dry-run and ros-test only."""
-    import pyarrow.parquet as pq
     from PIL import Image
+    import pyarrow.parquet as pq
 
     table = pq.read_table(path).slice(0, 1)
 
@@ -38,9 +40,7 @@ def load_sample(path: Path, prompt: str) -> dict:
 
     return {
         "observation/state": np.asarray(table["observation.state"][0].as_py(), dtype=np.float32),
-        "observation/image": image("observation.images.cam0"),
-        "observation/left_wrist_image": image("observation.images.cam1"),
-        "observation/right_wrist_image": image("observation.images.cam2"),
+        **{key: image(f"observation.images.{camera}") for key, camera in POLICY_CAMERA_KEYS.items()},
         "prompt": prompt,
     }
 
@@ -76,9 +76,7 @@ def live_observation(overlay: Path, prompt: str) -> dict:
 
     return {
         "observation/state": np.asarray(snapshot["state"], dtype=np.float32),
-        "observation/image": decode("cam0"),
-        "observation/left_wrist_image": decode("cam1"),
-        "observation/right_wrist_image": decode("cam2"),
+        **{key: decode(camera) for key, camera in POLICY_CAMERA_KEYS.items()},
         "prompt": prompt,
         "_captured_monotonic_ns": snapshot["captured_monotonic_ns"],
     }

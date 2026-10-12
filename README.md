@@ -12,6 +12,9 @@
 - 模型：π0.5，`action_dim=58`，`action_horizon=50`
 - 动作顺序：左 FR3 7 + 左 Sharpa 22 + 右 FR3 7 + 右 Sharpa 22
 - 输入：三路 RGB、58 维机器人状态、任务文本
+- Sharpa 相机映射：头部 cam0、左腕 cam2、右腕 cam1；训练和部署共用同一映射。
+  旧映射训练的权重需配合其原部署版本，新训练请新建实验，详见
+  [相机映射与权重兼容说明](examples/fr3_sharpa/README.md)。
 - 当前正式训练策略沿用 Wuji 工程：
   - SigLIP 全量训练
   - Gemma 2B 主干冻结 + LoRA
@@ -58,6 +61,9 @@ LoRA adapter 参数是目标 LoRA 结构新增的参数，由目标模型初始�
 在其他机器上使用时，应把 `src/openpi/training/config.py` 中 Sharpa loader 的本地路径替换为可访问的 checkpoint 路径，或改为官方 GCS 路径。
 
 ## 训练策略与参数
+
+本机两个 20 Hz 数据集的路径、环境配置、训练命令和完整超参数见
+[Sharpa 本机 20 Hz 训练](docs/Sharpa_本机20Hz训练.md)。
 
 Sharpa 继承原 `pi05_fr3_wuji` 的训练策略，不更换 model variant：
 
