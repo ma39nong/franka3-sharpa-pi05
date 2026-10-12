@@ -17,6 +17,15 @@ Images are stored as `images/{cam0,cam1,cam2}/*.jpg`. A frame is emitted only wh
 all four state/action streams and all three RGB cameras have a source sample within
 the configured tolerance; no missing robot state or action is fabricated.
 
+Sharpa 相机的物理对应为 **cam0 = 头部、cam1 = 右腕、cam2 = 左腕**。
+转换和导出保留原始相机编号；训练与部署在 policy 输入边界共用
+`src/openpi/policies/fr3_sharpa_protocol.py` 的 `POLICY_CAMERA_KEYS`，将 cam2
+送入左腕输入、cam1 送入右腕输入。已有数据集无需重命名或重新转换。
+
+旧代码将左右腕相机输入交换。使用旧映射训练的 checkpoint 仍依赖旧输入顺序，
+不能直接配合修正后的部署映射使用。新训练应使用修正后的映射并新建实验；如需
+评估旧 checkpoint，应使用与其训练版本一致的部署代码。本修复不修改已有权重。
+
 Export the intermediate into a standard LeRobot v2.1 dataset with the FPS recorded
 in `report.json` (the exporter cross-checks metadata, parquet timestamps, MP4 frame
 rates, and representative LeRobotDataset samples):

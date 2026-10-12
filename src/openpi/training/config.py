@@ -20,8 +20,9 @@ import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
-import openpi.policies.fr3_wuji_policy as fr3_wuji_policy
 import openpi.policies.fr3_sharpa_policy as fr3_sharpa_policy
+from openpi.policies.fr3_sharpa_protocol import POLICY_CAMERA_KEYS
+import openpi.policies.fr3_wuji_policy as fr3_wuji_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -451,9 +452,7 @@ class LeRobotFr3SharpaDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform({
-            "observation/image": "observation.images.cam0",
-            "observation/left_wrist_image": "observation.images.cam1",
-            "observation/right_wrist_image": "observation.images.cam2",
+            **{key: f"observation.images.{camera}" for key, camera in POLICY_CAMERA_KEYS.items()},
             "observation/state": "observation.state",
             "actions": "action",
             "prompt": "task",

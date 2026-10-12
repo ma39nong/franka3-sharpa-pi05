@@ -12,6 +12,9 @@
 - 模型：π0.5，`action_dim=58`，`action_horizon=50`
 - 动作顺序：左 FR3 7 + 左 Sharpa 22 + 右 FR3 7 + 右 Sharpa 22
 - 输入：三路 RGB、58 维机器人状态、任务文本
+- Sharpa 相机映射：头部 cam0、左腕 cam2、右腕 cam1；训练和部署共用同一映射。
+  旧映射训练的权重需配合其原部署版本，新训练请新建实验，详见
+  [相机映射与权重兼容说明](examples/fr3_sharpa/README.md)。
 - 当前正式训练策略沿用 Wuji 工程：
   - SigLIP 全量训练
   - Gemma 2B 主干冻结 + LoRA
