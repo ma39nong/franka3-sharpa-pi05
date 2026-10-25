@@ -4,6 +4,8 @@
 
 ## 全量与 LoRA 统一入口
 
+日常启动说明按模型分别放在 [全量目录](../fr3_sharpa_full/README.md) 和 [LoRA 目录](../fr3_sharpa_lora/README.md)。本目录保留公共实现及硬件工具，原有启动脚本继续有效。
+
 全量和 LoRA 共存在 `chunk-base-test`，共用 Home、SDK、prepare、三档速度和执行循环。`model_profiles.py` 集中注册模型，`model_env.sh` 在导入 Python 配置前选择模型。不传 `--model` 默认全量，现有工作机命令继续有效。模型终端与执行终端需要选择相同模型。
 
 | `--model` | 参数变体 | 时间轴／动作 | 默认端口 | 模型配置 |

@@ -6,6 +6,7 @@
 | --- | --- |
 | [新机器部署与研究交接](SHARPA_HANDOFF.md) | 仓库来源与版本、环境安装、外部资产、训练参考及历史代码查询 |
 | [Sharpa 部署](../deploy/fr3_sharpa_runtime/README.md) | 全量／LoRA 统一入口、30 Hz、SDK 与日志 |
+| [全量部署版本](../deploy/fr3_sharpa_full/README.md) | 全量模型独立入口、工作机配置与启动 |
 | [LoRA 部署版本](../deploy/fr3_sharpa_lora/README.md) | 30 Hz LoRA 配置隔离、权重接入与工作机运行 |
 | [Sharpa 部署结构](../deploy/fr3_sharpa_runtime/ARCHITECTURE.md) | 模型层、公共执行层和三档速度 |
 | [保留的 Wuji 设计参考](reference_wuji_architecture.md) | 历史职责划分和轨迹方案，非当前运行入口 |

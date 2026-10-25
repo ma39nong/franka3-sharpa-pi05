@@ -2,6 +2,8 @@
 
 全量与 LoRA 已在 `chunk-base-test` 共存，使用同一组入口，通过 `--model full/lora` 选择。当前没有新的 LoRA checkpoint；本目录准备模型加载配置和部署入口，尚未完成真实 LoRA 权重加载或实机验证。
 
+全量版本的对称入口与命令见 [fr3_sharpa_full](../fr3_sharpa_full/README.md)。
+
 ## 与全量部署的关系
 
 | 项目 | 全量入口（默认） | LoRA 入口 |

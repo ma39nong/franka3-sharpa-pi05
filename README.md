@@ -4,6 +4,8 @@
 
 ## 全量与 LoRA 统一入口
 
+日常使用可直接进入 [全量部署目录](deploy/fr3_sharpa_full/README.md) 或 [LoRA 部署目录](deploy/fr3_sharpa_lora/README.md)；底层共用 runtime。
+
 全量和 LoRA 共存在 `chunk-base-test`，共用 Home、SDK、prepare、三档速度和执行循环。`model_profiles.py` 集中注册模型，`model_env.sh` 在导入 Python 配置前选择模型。不传 `--model` 默认全量，现有工作机命令继续有效。模型终端与执行终端需要选择相同模型。
 
 | `--model` | 参数变体 | 时间轴／动作 | 默认端口 | 模型配置 |
@@ -172,7 +174,9 @@ bash deploy/fr3_sharpa_runtime/serve.sh --smoke-only
 
 | 目录 | 用途 |
 | --- | --- |
-| `deploy/fr3_sharpa_runtime/` | 当前模型服务、prepare、SDK 执行和运行记录 |
+| `deploy/fr3_sharpa_full/` | 全量模型启动入口与使用说明 |
+| `deploy/fr3_sharpa_lora/` | LoRA 模型启动入口、权重配置与说明 |
+| `deploy/fr3_sharpa_runtime/` | 两种模型共用的加载、观测、prepare、SDK 执行和运行记录 |
 | `src/openpi/policies/fr3_sharpa_policy.py` | 58D 输入输出变换 |
 | `src/openpi/policies/fr3_sharpa_protocol.py` | Sharpa 关节名称和协议 |
 | `examples/fr3_sharpa/` | Sharpa 离线数据转换、导出与比较工具 |
