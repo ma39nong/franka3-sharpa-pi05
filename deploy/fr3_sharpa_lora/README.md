@@ -1,6 +1,6 @@
 # Sharpa 30 Hz LoRA 部署版本
 
-分支：`codex/sharpa-lora-deploy`，从已完成全量部署的 `chunk-base-test`（`11d63ef`）建立。当前没有新的 LoRA checkpoint；本目录准备模型加载配置和部署入口，尚未完成真实 LoRA 权重加载或实机验证。
+分支：`sharpa-lora-deploy`，从已完成全量部署的 `chunk-base-test`（`11d63ef`）建立。当前没有新的 LoRA checkpoint；本目录准备模型加载配置和部署入口，尚未完成真实 LoRA 权重加载或实机验证。
 
 ## 与全量部署的关系
 

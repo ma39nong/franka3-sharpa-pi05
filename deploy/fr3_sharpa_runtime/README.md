@@ -4,7 +4,7 @@
 
 ## LoRA 模型入口
 
-本入口默认仍加载已部署的全量模型。新 [LoRA 入口](../fr3_sharpa_lora/README.md) 在 `codex/sharpa-lora-deploy` 分支，通过 `model_profiles.py` 选择 `gemma_2b_lora`／`gemma_300m_lora`，独立读取 `.deployment/lora.env`，默认使用端口 18766。两种模型共用下方的 Home、现场执行与退出清理代码。新 LoRA 权重尚未提供，配置测试不代表真实模型已就绪。
+本入口默认仍加载已部署的全量模型。新 [LoRA 入口](../fr3_sharpa_lora/README.md) 在 `sharpa-lora-deploy` 分支，通过 `model_profiles.py` 选择 `gemma_2b_lora`／`gemma_300m_lora`，独立读取 `.deployment/lora.env`，默认使用端口 18766。两种模型共用下方的 Home、现场执行与退出清理代码。新 LoRA 权重尚未提供，配置测试不代表真实模型已就绪。
 
 ## 本机配置
 
