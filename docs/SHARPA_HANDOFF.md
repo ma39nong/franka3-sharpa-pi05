@@ -203,7 +203,7 @@ UI `dataset_roots` 记录的四个完整路径如下，均为 normal：
 
 当前 `serve.sh` → `serve.py` → `model_loader.build_config()` → `create_trained_policy()`。部署配置名为 `pi05_fr3_sharpa_ab4_normal_rgb_fullft_absolute_30hz_deploy`，只用于推理身份；训练参考 clone 不需要处在某个固定绝对路径，也不参与当前服务的 import。
 
-`src/openpi/training/config.py` 保留了历史 Sharpa LoRA 配置：`pi05_fr3_sharpa`（30 Hz）、`pi05_fr3_sharpa_tier_a_b1_20hz`、`pi05_fr3_sharpa_a04_b05_c01_30hz`。它们包含 LoRA 参数分支、不同数据身份，以及双臂 delta 转换；直接套用当前 full/absolute 权重会产生结构或语义不匹配。研究 LoRA 应建立单独加载配置和验证统计/动作契约，不能只改路径或关闭检查。
+`src/openpi/training/config.py` 保留了历史 Sharpa LoRA 配置：`pi05_fr3_sharpa`（30 Hz）、`pi05_fr3_sharpa_a04_b05_c01_30hz`。它们包含 LoRA 参数分支、不同数据身份，以及双臂 delta 转换；直接套用当前 full/absolute 权重会产生结构或语义不匹配。研究 LoRA 应建立单独加载配置和验证统计/动作契约，不能只改路径或关闭检查。
 
 ## 查阅移除前的 Wuji 实现
 
@@ -223,4 +223,4 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 
 ## 同仓库选择全量或 LoRA
 
-`chunk-base-test` 现在共存两种模型配置；默认全量部署流程继续有效。共享入口 `serve.sh` 和 `runtime.sh` 可添加 `--model full` 或 `--model lora`，两端选择须一致；`serve.sh --list-models` 可离线查看模型注册。机器配置和 Home 共用，LoRA 独立使用 `.deployment/lora.env`，默认端口 18766。新的 30 Hz／58D absolute LoRA 尚无 checkpoint，权重接入、GPU smoke 和现场步骤见 [LoRA 部署说明](../deploy/fr3_sharpa_lora/README.md)。历史 20 Hz／delta 配置仍只用于历史复现。
+`chunk-base-test` 现在共存两种模型配置；默认全量部署流程继续有效。共享入口 `serve.sh` 和 `runtime.sh` 可添加 `--model full` 或 `--model lora`，两端选择须一致；`serve.sh --list-models` 可离线查看模型注册。机器配置和 Home 共用，LoRA 独立使用 `.deployment/lora.env`，默认端口 18766。新的 30 Hz／58D absolute LoRA 尚无 checkpoint，权重接入、GPU smoke 和现场步骤见 [LoRA 部署说明](../deploy/fr3_sharpa_lora/README.md)。

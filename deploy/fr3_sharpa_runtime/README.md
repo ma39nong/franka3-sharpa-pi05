@@ -24,7 +24,7 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 
 `--model` 和 `--list-models` 是 shell 入口参数。端口可分别通过 `SHARPA_FULL_PORT`、`SHARPA_LORA_PORT` 设置。LoRA 复用机器配置，但不回退使用全量权重、统计或日志。旧 LoRA 专用脚本保留为兼容别名。
 
-新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，真实加载与工作机实机验证待完成。历史 20 Hz／delta 权重需要另外匹配频率和变换。
+新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，真实加载与工作机实机验证待完成。
 
 权重接入步骤见 [LoRA 部署说明](../fr3_sharpa_lora/README.md)。
 

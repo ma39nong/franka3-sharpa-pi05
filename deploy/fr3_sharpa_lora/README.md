@@ -95,16 +95,3 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora \
 ```
 
 缺少或误选权重会在进入硬件会话管理器之前失败。完成真实单轮验证后，才按实际任务需要调整为 `--num-chunks 0` 持续重推。停止和硬件清理行为与全量版本相同，见 [共享 runtime 说明](../fr3_sharpa_runtime/README.md)。
-
-## 之前的 20 Hz LoRA
-
-之前确实做过 `pi05_fr3_sharpa_tier_a_b1_20hz` 的 LoRA 部署，包括 prepare 和两段 chunk 的实机试验。旧训练配置对双臂做 delta 监督，输出变换后才成为执行端的绝对关节目标；它与这里预备的 30 Hz absolute 模型配置不同。
-
-旧 checkpoint 路径记录为：
-
-```text
-checkpoints/new-train/pi05_fr3_sharpa_tier_a_b1_20hz/
-  sharpa_camfix_a70_b130_20hz_30k_wandb/29999
-```
-
-该历史权重不作为新版本默认值，也未拿它冒充 30 Hz LoRA 做 GPU／现场验证。需要重现旧试验时，应同时恢复匹配的频率、数据变换和统计。

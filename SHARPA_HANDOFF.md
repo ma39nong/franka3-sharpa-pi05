@@ -130,7 +130,7 @@ git checkout 68440ed8b39693b5fd206403843901187f453c1c
 
 当前 `serve.sh` → `serve.py` → `model_loader.build_config()` → `create_trained_policy()`。部署配置名为 `pi05_fr3_sharpa_ab4_normal_rgb_fullft_absolute_30hz_deploy`，只用于推理身份；训练参考 clone 不需要处在某个固定绝对路径，也不参与当前服务的 import。
 
-`src/openpi/training/config.py` 保留了历史 Sharpa LoRA 配置：`pi05_fr3_sharpa`（30 Hz）、`pi05_fr3_sharpa_tier_a_b1_20hz`、`pi05_fr3_sharpa_a04_b05_c01_30hz`。它们包含 LoRA 参数分支、不同数据身份，以及双臂 delta 转换；直接套用当前 full/absolute 权重会产生结构或语义不匹配。研究 LoRA 应建立单独加载配置和验证统计/动作契约，不能只改路径或关闭检查。
+`src/openpi/training/config.py` 保留了历史 Sharpa LoRA 配置：`pi05_fr3_sharpa`（30 Hz）、`pi05_fr3_sharpa_a04_b05_c01_30hz`。它们包含 LoRA 参数分支、不同数据身份，以及双臂 delta 转换；直接套用当前 full/absolute 权重会产生结构或语义不匹配。研究 LoRA 应建立单独加载配置和验证统计/动作契约，不能只改路径或关闭检查。
 
 ## 查阅移除前的 Wuji 实现
 

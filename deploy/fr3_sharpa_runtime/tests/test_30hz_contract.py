@@ -20,7 +20,7 @@ def test_deployment_timeline_and_records_are_30hz():
         replace(chunk, fps=20)
 
 
-def test_policy_handshake_rejects_old_20hz_service(monkeypatch):
+def test_policy_handshake_rejects_mismatched_frequency(monkeypatch):
     monkeypatch.setattr(config, "CHECKPOINT", Path("/test/30hz"))
     monkeypatch.setattr(config, "NORM_STATS", Path("/test/30hz/norm_stats.json"))
     metadata = {"config_name": config.CONFIG_NAME, "checkpoint": str(config.CHECKPOINT),
