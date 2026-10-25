@@ -1,18 +1,20 @@
 # Sharpa 30 Hz LoRA 部署版本
 
-分支：`sharpa-lora-deploy`，从已完成全量部署的 `chunk-base-test`（`11d63ef`）建立。当前没有新的 LoRA checkpoint；本目录准备模型加载配置和部署入口，尚未完成真实 LoRA 权重加载或实机验证。
+全量与 LoRA 已在 `chunk-base-test` 共存，使用同一组入口，通过 `--model full/lora` 选择。当前没有新的 LoRA checkpoint；本目录准备模型加载配置和部署入口，尚未完成真实 LoRA 权重加载或实机验证。
 
 ## 与全量部署的关系
 
 | 项目 | 全量入口（默认） | LoRA 入口 |
 | --- | --- | --- |
-| 模型服务 | `deploy/fr3_sharpa_runtime/serve.sh` | `deploy/fr3_sharpa_lora/serve.sh` |
-| 执行端 | `deploy/fr3_sharpa_runtime/runtime.sh` | `deploy/fr3_sharpa_lora/runtime.sh` |
+| 模型服务 | `serve.sh --model full` | `serve.sh --model lora` |
+| 执行端 | `runtime.sh --model full` | `runtime.sh --model lora` |
 | 机器／硬件配置 | `.deployment/local.env` | 复用同一文件，不覆盖 |
 | 模型配置 | 原 `SHARPA_CHECKPOINT` 等配置 | `.deployment/lora.env` 的 `SHARPA_LORA_*` 配置 |
 | 参数变体 | `gemma_2b` + `gemma_300m` | `gemma_2b_lora` + `gemma_300m_lora` |
 | 服务端口 | 18765 | 默认 18766，可单独设置 |
 | 日志 | `~/.local/state/fr3_sharpa_runtime/execution_traces/` | `~/.local/state/fr3_sharpa_lora/execution_traces/` |
+
+表中脚本均位于 `deploy/fr3_sharpa_runtime/`，`--list-models` 输出集中注册的配置。本目录的 `serve.sh`／`runtime.sh` 仅保留为固定选择 LoRA 的兼容别名。
 
 没有复制机器人执行代码。Home、固定双手配置、SDK 后端、30 Hz 下发、预测裁剪、默认预测 50／执行 15 帧，以及退出清理，均复用当前已部署版本。两个模型服务可以分别启动，但同一套机器人一次只由一个执行端控制。
 
@@ -26,7 +28,7 @@ LoRA 入口不使用全量 `SHARPA_CHECKPOINT`／`SHARPA_NORM_STATS`／日志配
 - VLM LoRA rank/alpha = 16/16，Action Expert rank/alpha = 32/32，沿用训练工程 `training_configs/recipes/pi05_lora_v1.py`。
 - 配套完整 Orbax checkpoint，包含基础参数及 VLM、Expert 的完整 LoRA 分支，使用该模型自己的 `assets/.../norm_stats.json`。不支持直接提供只包含 adapter 的文件。
 
-分支检查验证 adapter 分支完整性；rank/alpha 是所选 recipe 的假设，不是从参数名推断的事实。全局参数形状在实际恢复模型时严格核对；alpha 和动作语义仍需由实际训练配置确认。若未来训练使用不同 rank/alpha、频率或 delta 监督，需要先匹配加载配置。
+参数树检查验证 adapter 分支完整性；rank/alpha 是所选 recipe 的假设，不是从参数名推断的事实。全局参数形状在实际恢复模型时严格核对；alpha 和动作语义仍需由实际训练配置确认。若未来训练使用不同 rank/alpha、频率或 delta 监督，需要先匹配加载配置。
 
 ## 还没有 checkpoint 时
 
@@ -34,8 +36,8 @@ LoRA 入口不使用全量 `SHARPA_CHECKPOINT`／`SHARPA_NORM_STATS`／日志配
 
 ```bash
 cd /实际的/部署仓库
-bash deploy/fr3_sharpa_lora/serve.sh --help
-bash deploy/fr3_sharpa_lora/runtime.sh \
+bash deploy/fr3_sharpa_runtime/serve.sh --model lora --help
+bash deploy/fr3_sharpa_runtime/runtime.sh --model lora \
   --check --initialization home --execute-steps 15 --speed slow --num-chunks 1
 ```
 
@@ -60,8 +62,8 @@ source deploy/fr3_sharpa_runtime/env.sh
 ### 权重检查与 GPU 假观测验证
 
 ```bash
-bash deploy/fr3_sharpa_lora/serve.sh --check-only
-bash deploy/fr3_sharpa_lora/serve.sh --smoke-only --report .deployment/lora_smoke.json
+bash deploy/fr3_sharpa_runtime/serve.sh --model lora --check-only
+bash deploy/fr3_sharpa_runtime/serve.sh --model lora --smoke-only --report .deployment/lora_smoke.json
 ```
 
 应显示 `model_finetune_mode: lora`、两种 `_lora` 变体、30 Hz 和 58D；预热后输出 `(50,58)`。合成测试元数据不能替代这一步真实参数加载。
@@ -78,13 +80,13 @@ bash deploy/fr3_sharpa_runtime/hardware.sh up
 终端二，启动 LoRA 模型服务并保持运行：
 
 ```bash
-bash deploy/fr3_sharpa_lora/serve.sh
+bash deploy/fr3_sharpa_runtime/serve.sh --model lora
 ```
 
 终端三，以下命令驱动机器人，首次使用有限轮数：
 
 ```bash
-bash deploy/fr3_sharpa_lora/runtime.sh \
+bash deploy/fr3_sharpa_runtime/runtime.sh --model lora \
   --execute --enable-hardware --sharpa-backend sdk_direct \
   --initialization home --home-task powder_weighing \
   --prepare-speed-rad-s 0.03 --execute-steps 15 --speed slow --num-chunks 1

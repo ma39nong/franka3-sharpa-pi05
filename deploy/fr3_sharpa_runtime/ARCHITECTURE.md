@@ -6,7 +6,7 @@
 
 | 层 | 当前文件 | 责任 |
 | --- | --- | --- |
-| 模型加载 | `model_loader.py`, `serve.py` | checkpoint、模型参数结构、统计、输入输出适配、预热和模型服务 |
+| 模型加载 | `model_profiles.py`, `model_env.sh`, `model_loader.py`, `serve.py` | checkpoint、模型参数结构、统计、输入输出适配、预热和模型服务 |
 | 动作契约 | `config.py`, `protocol.py`, `action_adapter.py` | 58D、关节顺序、rad、绝对位置、30 Hz 和权重/统计身份 |
 | 执行策略 | `profiles.py`, `policy_prepare.py` | 慢/中/快时间倍率、prepare、重新观测与 chunk 循环 |
 | 公共运行层 | `run.py`, `motion_worker.py`, `ros_observation.py`, `feedback.py` | 观测、IPC、阶段报告和进程清理 |
@@ -14,7 +14,7 @@
 
 所有速度使用相同推理服务、prepare 和设备执行代码。无需按 LoRA/full 创建两套机器人部署目录。客户端核对物理动作契约和 checkpoint/统计身份，训练方式仅为服务端模型信息。
 
-当前模型加载配置支持已验证的 AB4 normal 4000 步全量权重。未来接入未合并的 LoRA 时，在模型层增加匹配的参数配置即可；不能仅去掉参数树检查就声称旧 20 Hz/delta 权重可用。LoRA 若已合并为基础模型矩阵，参数结构可以与全量模型相同。无论训练方式，都必须分别确认频率、关节顺序和绝对/增量语义。
+当前同一分支注册 `full` 和 `lora`，由共享 shell 入口的 `--model` 选择，默认仍为全量。全量支持已验证的 AB4 normal 4000 步权重；LoRA 预设 30 Hz／58D absolute、VLM rank 16／Expert rank 32，尚无新 checkpoint，真实加载待验证。权重、统计、端口和日志配置分别保存，硬件执行共用。不能仅去掉参数树检查就声称旧 20 Hz/delta 权重可用。LoRA 若已合并为基础模型矩阵，参数结构可以与全量模型相同。无论训练方式，都必须分别确认频率、关节顺序和绝对/增量语义。
 
 ## Home 与滚动执行
 

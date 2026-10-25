@@ -220,3 +220,7 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 ## 最低交接验收
 
 接收者应能在不访问作者 home 目录的条件下完成：独立 Python 环境安装、checkpoint/stats 检查、GPU smoke、真实样本 dry-run、双臂和双手 Home 资产核对、Compose 解析及消息导入。提供者应交付这些结果与三份仓库版本；现场试验另记设备身份、参数、执行 trace 和实际结果。`COMPLETE` 只表示指令下发完成，不能写成任务成功或可从任意姿态无碰撞运行。
+
+## 同仓库选择全量或 LoRA
+
+`chunk-base-test` 现在共存两种模型配置；默认全量部署流程继续有效。共享入口 `serve.sh` 和 `runtime.sh` 可添加 `--model full` 或 `--model lora`，两端选择须一致；`serve.sh --list-models` 可离线查看模型注册。机器配置和 Home 共用，LoRA 独立使用 `.deployment/lora.env`，默认端口 18766。新的 30 Hz／58D absolute LoRA 尚无 checkpoint，权重接入、GPU smoke 和现场步骤见 [LoRA 部署说明](../deploy/fr3_sharpa_lora/README.md)。历史 20 Hz／delta 配置仍只用于历史复现。

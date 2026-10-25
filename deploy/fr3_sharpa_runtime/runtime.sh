@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT/deploy/fr3_sharpa_runtime/env.sh"
+source "$ROOT/deploy/fr3_sharpa_runtime/model_env.sh" "$@"
+set -- "${SHARPA_MODEL_ARGS[@]}"
+# LoRA model validation must happen before any hardware session is entered.
+if [[ "$SHARPA_MODEL_PROFILE" == lora ]]; then
+  previous=""
+  for argument in "$@"; do
+    if [[ "$argument" == --execute || "$argument" == --mode=execute || ( "$previous" == --mode && "$argument" == execute ) ]]; then
+      interpreter="${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}"
+      "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only > /dev/null
+      break
+    fi
+    previous="$argument"
+  done
+fi
 # Offline inspection must work without the robot workstation or ROS overlay.
 previous=""
 for argument in "$@"; do

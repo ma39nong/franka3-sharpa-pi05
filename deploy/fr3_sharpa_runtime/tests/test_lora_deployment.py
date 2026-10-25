@@ -164,3 +164,94 @@ def test_lora_execute_with_absent_files_stops_before_hardware(tmp_path):
 def test_model_profile_rejects_unknown_name():
     with pytest.raises(ValueError, match="Unknown SHARPA_MODEL_PROFILE"):
         get_model_profile("typo")
+
+
+@pytest.mark.parametrize("model", ["full", "lora"])
+def test_unified_runtime_selects_model_without_changing_execution(model, lora_checkpoint, tmp_path):
+    checkpoint, _ = lora_checkpoint
+    defaults = write_defaults(checkpoint, output=tmp_path / "lora.env")
+    env = clean_environment()
+    env.update(SHARPA_LORA_ENV_FILE=str(defaults), SHARPA_CHECKPOINT="/full/checkpoint")
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_runtime/runtime.sh", "--check", "--speed", "medium",
+                             "--num-chunks", "2", "--model", model],
+                             cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["model_profile"] == model
+    assert report["policy_url"].endswith(":18765" if model == "full" else ":18766")
+    assert report["checkpoint"] == ("/full/checkpoint" if model == "full" else str(checkpoint))
+    assert report["execute_steps"] == 15 and report["initialization"] == "home"
+    assert report["num_chunks"] == 2 and report["execute_speed_scale"] == 0.5
+    assert report["hardware_output"] is False
+
+
+def test_unified_full_overrides_inherited_lora_profile():
+    env = clean_environment()
+    env.update(SHARPA_MODEL_PROFILE="lora", SHARPA_CHECKPOINT="/full/checkpoint",
+               SHARPA_LORA_ENV_FILE="/nonexistent/should-not-be-read")
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_runtime/runtime.sh", "--model=full", "--check"],
+                             cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["model_profile"] == "full"
+
+
+@pytest.mark.parametrize("script", ["serve.sh", "runtime.sh"])
+def test_shared_model_registry_is_available_without_weights(script):
+    result = subprocess.run(["bash", f"deploy/fr3_sharpa_runtime/{script}", "--list-models"],
+                             cwd=ROOT, env=clean_environment(), text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    registry = {model["name"]: model for model in json.loads(result.stdout)}
+    assert set(registry) == {"full", "lora"}
+    assert registry["full"]["default_port"] == 18765
+    assert registry["lora"]["checkpoint_env"] == "SHARPA_LORA_CHECKPOINT"
+    assert registry["lora"]["training_action_supervision"] == "absolute"
+
+
+@pytest.mark.parametrize("args", [["--model"], ["--model", "unknown"], ["--model", "full", "--model", "lora"]])
+def test_invalid_model_selection_fails_before_loading_or_hardware(args):
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_runtime/runtime.sh", *args, "--check"],
+                             cwd=ROOT, env=clean_environment(), text=True, capture_output=True)
+    assert result.returncode == 2
+    assert "model" in result.stderr.lower()
+
+
+def test_legacy_lora_alias_does_not_allow_model_override():
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_lora/runtime.sh", "--model", "full", "--check"],
+                             cwd=ROOT, env=clean_environment(), text=True, capture_output=True)
+    assert result.returncode == 2
+    assert "Conflicting" in result.stderr
+
+
+def test_unified_lora_execute_keeps_pre_hardware_checkpoint_validation(tmp_path):
+    defaults = tmp_path / "empty.env"
+    defaults.write_text("")
+    env = clean_environment()
+    env.update(SHARPA_LORA_ENV_FILE=str(defaults),
+               SHARPA_LORA_CHECKPOINT=str(tmp_path / "absent-checkpoint"),
+               SHARPA_LORA_NORM_STATS=str(tmp_path / "absent-stats.json"))
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_runtime/runtime.sh", "--model=lora",
+                             "--execute", "--enable-hardware"], cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "Missing complete Orbax" in result.stderr
+
+
+@pytest.mark.parametrize("model", ["full", "lora"])
+def test_unified_model_service_loads_the_matching_metadata_only(model, lora_checkpoint, tmp_path):
+    checkpoint, stats = lora_checkpoint
+    if model == "full":
+        path = checkpoint / "params/_METADATA"
+        data = json.loads(path.read_text())
+        data["tree_metadata"] = {name: entry for name, entry in data["tree_metadata"].items() if "lora" not in name}
+        path.write_text(json.dumps(data))
+    defaults = write_defaults(checkpoint, output=tmp_path / "lora.env") if model == "lora" else None
+    env = clean_environment()
+    env.update(SHARPA_CHECKPOINT=str(checkpoint), SHARPA_NORM_STATS=str(stats))
+    if defaults is not None:
+        env["SHARPA_LORA_ENV_FILE"] = str(defaults)
+    result = subprocess.run(["bash", "deploy/fr3_sharpa_runtime/serve.sh", "--model", model, "--check-only"],
+                             cwd=ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["model_finetune_mode"] == model
+    assert report["checkpoint"] == str(checkpoint)
+    assert report["warmed_up"] is False

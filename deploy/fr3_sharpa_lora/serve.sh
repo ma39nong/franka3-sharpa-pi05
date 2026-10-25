@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Compatibility alias; all model selection and launch logic lives in the shared runtime.
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
-exec bash "$LORA_ROOT/deploy/fr3_sharpa_runtime/serve.sh" "$@"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+exec bash "$ROOT/deploy/fr3_sharpa_runtime/serve.sh" --model lora "$@"

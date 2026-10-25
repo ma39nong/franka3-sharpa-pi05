@@ -340,7 +340,7 @@ def run_preflight_only(args) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora}, --list-models")
     parser.add_argument("--mode", choices=("dry-run", "ros-test", "preflight-only", "prepare", "execute", "handoff-verify", "check"), default="dry-run")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="Print model/execution settings without ROS, SDK or model loading")

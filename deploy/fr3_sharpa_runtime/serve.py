@@ -13,7 +13,7 @@ from .timing import TimedPolicy, timed_server_class
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora}, --list-models")
     parser.add_argument("--port", type=int, default=config.POLICY_PORT)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check-only", action="store_true", help="Check metadata/statistics without loading weights")

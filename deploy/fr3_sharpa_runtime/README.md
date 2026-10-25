@@ -2,9 +2,29 @@
 
 当前模型：π0.5 全量微调、30 Hz、原生 58D、50 帧、全部为绝对关节目标，单位 rad。执行路径是 policy server → runtime → FR3 Safety Gateway / Sharpa SDK direct。LoRA/full 参数差异由模型加载层处理，速度档位共用同一个执行器。
 
-## LoRA 模型入口
+## 全量与 LoRA 统一入口
 
-本入口默认仍加载已部署的全量模型。新 [LoRA 入口](../fr3_sharpa_lora/README.md) 在 `sharpa-lora-deploy` 分支，通过 `model_profiles.py` 选择 `gemma_2b_lora`／`gemma_300m_lora`，独立读取 `.deployment/lora.env`，默认使用端口 18766。两种模型共用下方的 Home、现场执行与退出清理代码。新 LoRA 权重尚未提供，配置测试不代表真实模型已就绪。
+全量和 LoRA 共存在 `chunk-base-test`，共用 Home、SDK、prepare、三档速度和执行循环。`model_profiles.py` 集中注册模型，`model_env.sh` 在导入 Python 配置前选择模型。不传 `--model` 默认全量，现有工作机命令继续有效。模型终端与执行终端需要选择相同模型。
+
+| `--model` | 参数变体 | 时间轴／动作 | 默认端口 | 模型配置 |
+| --- | --- | --- | ---: | --- |
+| `full` | `gemma_2b` + `gemma_300m` | 30 Hz／58D absolute | 18765 | `.deployment/local.env` 的 `SHARPA_CHECKPOINT`、`SHARPA_NORM_STATS` |
+| `lora` | `gemma_2b_lora` + `gemma_300m_lora` | 30 Hz／58D absolute | 18766 | `.deployment/lora.env` 的 `SHARPA_LORA_*` |
+
+```bash
+bash deploy/fr3_sharpa_runtime/serve.sh --list-models
+bash deploy/fr3_sharpa_runtime/serve.sh --model full
+bash deploy/fr3_sharpa_runtime/runtime.sh --model full --check --speed medium
+# 切换 LoRA 时，两端都选择 lora：
+bash deploy/fr3_sharpa_runtime/serve.sh --model lora
+bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
+```
+
+`--model` 和 `--list-models` 是 shell 入口参数。端口可分别通过 `SHARPA_FULL_PORT`、`SHARPA_LORA_PORT` 设置。LoRA 复用机器配置，但不回退使用全量权重、统计或日志。旧 LoRA 专用脚本保留为兼容别名。
+
+新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，真实加载与工作机实机验证待完成。历史 20 Hz／delta 权重需要另外匹配频率和变换。
+
+权重接入步骤见 [LoRA 部署说明](../fr3_sharpa_lora/README.md)。
 
 ## 本机配置
 

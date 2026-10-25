@@ -10,10 +10,9 @@ MODEL_PROFILE = get_model_profile(os.environ.get("SHARPA_MODEL_PROFILE", "full")
 CONFIG_NAME = MODEL_PROFILE.config_name
 # LoRA deliberately ignores generic/full checkpoint settings from local.env.
 # It has no default weight, so a missing LoRA path never falls back to full.
-CHECKPOINT_ENV = "SHARPA_LORA_CHECKPOINT" if MODEL_PROFILE.name == "lora" else "SHARPA_CHECKPOINT"
-NORM_STATS_ENV = "SHARPA_LORA_NORM_STATS" if MODEL_PROFILE.name == "lora" else "SHARPA_NORM_STATS"
-_checkpoint_value = os.environ.get(CHECKPOINT_ENV, "" if MODEL_PROFILE.name == "lora" else
-    "/media/user/8C0F29AFFD6CD874/sharpa_tomato_ckpt_4000")
+CHECKPOINT_ENV = MODEL_PROFILE.checkpoint_env
+NORM_STATS_ENV = MODEL_PROFILE.norm_stats_env
+_checkpoint_value = os.environ.get(CHECKPOINT_ENV, MODEL_PROFILE.default_checkpoint)
 CHECKPOINT = Path(_checkpoint_value).expanduser().resolve() if _checkpoint_value else None
 
 
@@ -30,7 +29,7 @@ def _norm_stats_path():
 # Prefer checkpoint-owned statistics. Never reuse another experiment's stats
 # just because its data was sampled at the same rate.
 NORM_STATS = _norm_stats_path()
-POLICY_PORT = int(os.environ.get("SHARPA_LORA_PORT", 18766)) if MODEL_PROFILE.name == "lora" else 18765
+POLICY_PORT = int(os.environ.get(MODEL_PROFILE.port_env, MODEL_PROFILE.default_port))
 if not 1 <= POLICY_PORT <= 65535:
     raise ValueError("Invalid model service port")
 POLICY_URL = f"ws://127.0.0.1:{POLICY_PORT}"
@@ -43,10 +42,7 @@ STATE_DIM = ACTION_DIM
 CHUNK_LENGTH = ACTION_HORIZON
 ACTION_ORDER = ["left_arm_7", "left_hand_22", "right_arm_7", "right_hand_22"]
 CAMERA_MAPPING = {"head": "cam0", "left_wrist": "cam2", "right_wrist": "cam1"}
-EXECUTION_TRACE_DIR = Path(os.environ.get(
-    "SHARPA_LORA_EXECUTION_TRACE_DIR" if MODEL_PROFILE.name == "lora" else "SHARPA_EXECUTION_TRACE_DIR",
-    str(Path.home() / (".local/state/fr3_sharpa_lora/execution_traces" if MODEL_PROFILE.name == "lora"
-                       else ".local/state/fr3_sharpa_runtime/execution_traces"))))
+EXECUTION_TRACE_DIR = Path(os.environ.get(MODEL_PROFILE.trace_env, str(Path.home() / MODEL_PROFILE.trace_subdir)))
 
 
 def require_checkpoint() -> Path:
