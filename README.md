@@ -171,7 +171,9 @@ bash deploy/fr3_sharpa_runtime/serve.sh --smoke-only
 | `training_configs/recipes/common.py` | 模型窗口、优化器、学习率、随机种子和 checkpoint 保存规则 |
 | `training_configs/embodiments/fr3_sharpa.py` | 58D、rad、absolute、30 Hz 和三路相机角色 |
 
-**这些文件是可核查的训练参考，不是 4000 步权重完整的复现记录。**参考 baseline 的 asset_id 为 `tomato_sharpa_fulltask_v1_absolute_30hz`，当前权重携带的是 `tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz`；原始 AB4 实验模块、服务器启动参数、数据清单与采样比例尚未取得，不能据此声称可重训得到同一权重。详细参数和待补交接材料见 [训练与资产溯源](docs/SHARPA_HANDOFF.md#训练参考与权重溯源)。
+**2026-10-25 已在 28 服务器找到实际 AB4 UI 任务和当次训练归档。**任务 ID 为 `2200a091b1ee48239ad11b203a4bf934`，训练源码记录为 `42f887916d22cd58c022e95a000e2cb241a8a459`；实际记录是四个 A/B normal 批次、训练全局 batch **512**、FSDP **8**、absolute、horizon **50**、计划 30,000 步、每 2,000 步保存、`epoch_shuffle`。不能将上述参考 baseline 的 batch 64，或早期对话建议的 batch 32，写成该实验的实际设置。
+
+实际 asset_id 为 `tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz`。服务器统计文件与本机 4000 步 checkpoint 自带文件的 SHA256 完全一致；归档 `.experiment.py` 的摘要也与 UI 记录一致。源码快照、UI 覆盖参数、四个数据路径及两份摘要见 [已找到的 AB4 实验记录](docs/SHARPA_HANDOFF.md#已找到的-ab4-实验记录)。原始 checkpoint 旧路径目前不存在，仍未完成模型参数文件逐项比对；训练主进程环境变量和数据文件完整性也不能仅由这两份摘要推定。
 
 本仓库 `src/openpi/training/config.py` 中的 `pi05_fr3_sharpa`、`pi05_fr3_sharpa_tier_a_b1_20hz`、`pi05_fr3_sharpa_a04_b05_c01_30hz` 是保留的历史 LoRA 配置，包含 LoRA 变体和双臂 delta 变换。当前 `serve.sh` 使用上述独立 model_loader，不选择这些历史配置；不要只把 checkpoint 路径替换到旧配置里加载。
 

@@ -7,7 +7,7 @@
 | 工程 | 来源与核对版本 | 责任与是否必需 |
 | --- | --- | --- |
 | 当前部署仓库 | `https://github.com/ma39nong/franka3-sharpa-pi05.git`，分支 `chunk-base-test` | 模型服务、观测、动作协议、Home、执行调度和日志；必需 |
-| 训练参考 | `https://gitlab.litchibot.top/fruit-train/tomato-openpi.git`，`68440ed8b39693b5fd206403843901187f453c1c` | 理解 recipe 或开展训练时使用；仅加载已有权重不需要安装此工程 |
+| 训练工程 | `https://gitlab.litchibot.top/fruit-train/tomato-openpi.git`；实际 AB4 训练记录为 `42f887916d22cd58c022e95a000e2cb241a8a459`，本机 main 参考为 `68440ed8b39693b5fd206403843901187f453c1c` | 重建实验以实际源码快照和 UI 覆盖参数为准；仅加载已有权重不需要安装此工程 |
 | 硬件工程 | `ssh://git@gitlab.litchibot.top:2222/fruit-infra/data-collection/gello-teleoperation.git`；本机核对 `4fd958fdd1de9762da2375759625da49e78bab39` | FR3 控制、安全网关、相机、消息定义和 Sharpa HAL；现场部署必需 |
 
 GitLab 地址需要相应访问权限。硬件仓库的 `portable_deps/litchi_hardware`、供应商 SDK 和本机配置不由普通 clone 自动提供；应向设备/工程维护者取得授权的完整依赖包。不要假设拿到仓库源码就已拿到供应商运行库。硬件工程根目录的 `工程迁移与一键安装说明.md`、`一键安装环境.sh` 和 `data_collection/docs/SHARPA_ARM_RECORDING.md` 分别说明环境安装和相机数据链路。
@@ -28,7 +28,7 @@ GitLab 地址需要相应访问权限。硬件仓库的 `portable_deps/litchi_ha
 | 双臂 Home | `poses.yaml`，包含 `tasks.powder_weighing.home.left/right` 各 7 个具名关节角，单位 rad | 固定 Home 部署 |
 | 固定双手 Home | `.deployment/hand_home.json`；`unit: rad`，`tasks.powder_weighing.left/right` 各含 22 个 `joint_names` 和对应 `positions` | 当前默认固定 Home 部署 |
 | 数据与任务文本 | 有名称/频率元数据的 LeRobot 数据和 `meta/tasks.jsonl`；服务器路径不是下载地址 | 真实样本研究、效果评估 |
-| 原始训练记录 | 实际实验模块、源码 commit、完整启动参数、数据清单、统计审计、日志和种子 | 重训复现 |
+| 原始训练记录 | 28 服务器已找到 AB4 UI run.json、训练 JSON、源码快照和日志；见下方记录路径。仍需交接这些文件及其数据/环境依赖 | 重训复现 |
 
 `train_state/` 用于训练恢复；当前推理加载 `params/` 和配套 stats，不需要 optimizer state。不要将另一实验的 stats 配给当前 checkpoint。
 
@@ -122,9 +122,82 @@ git checkout 68440ed8b39693b5fd206403843901187f453c1c
 
 原始 116D 存储状态在部署数据适配中按 `[0:7, 28:50, 14:21, 72:94]` 提取位置，原始 action58 的重排为 `[0:7, 14:36, 7:14, 36:58]`；实时 ROS 已是 canonical 58D，不再重排。上述固定版本 baseline 直接要求 canonical 58D，它不是当前 AB4 原始数据预处理实验的完整记录。
 
-参考 baseline 的 asset_id 是 `tomato_sharpa_fulltask_v1_absolute_30hz`；当前权重的 asset_id 是 `tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz`。目前只能确认推理参数结构、配套统计和现有代码路径，不能从这两个相似名字推断它们使用同一数据、同一采样或同一训练模块。
+### 已找到的 AB4 实验记录
 
-要复现 4000 步训练，提供者还必须交出：实际 AB4 实验模块及 commit、完整 CLI/环境覆盖参数、A/B 文件清单与版本/采样、归一化审计及摘要、真实 tasks.jsonl、初始基础权重身份、训练日志及 checkpoint 恢复信息。当前仓库没有这些完整记录，因此不能给出保证复现该权重的训练命令。
+2026-10-25 只读检查 28 服务器后，找到了以下实际运行记录。原先“AB4 实验配置尚未取得”的结论已更新；本节的实际设置优先于上表的通用 baseline 默认值。
+
+服务器工程为 `/home/tairan/workspace/code/openpi`，其物理路径是 `/mnt/data/users/tairan/workspace/code/openpi`。以下路径均相对此工程：
+
+```text
+logs/training_ui/2200a091b1ee48239ad11b203a4bf934/
+  run.json
+  state.json
+  console.log
+
+logs/pi05_fr3_sharpa_1016_2_multimodal_rgb_fullft_v1_absolute_30hz/
+  tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_absolute_s42_1022_2100/
+    20261022_210518_072235_3334021.json
+    20261022_210518_072235_3334021.experiment.py
+    20261022_210518_072235_3334021.log
+
+assets/tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz/
+  norm_stats.json
+  norm_metadata.json
+```
+
+UI 记录的实验模块为：
+
+```text
+training_configs.experiments.tomato_sharpa.template.tairan.tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_absolute_s42_1022_2100
+```
+
+该模块原来的 template 源文件目前不存在，使用上面的 `.experiment.py` 归档检查当次代码；不要用现有 main baseline 代替它。归档 JSON 记录的训练源码 commit 为 `42f887916d22cd58c022e95a000e2cb241a8a459`。重建实验需要该 commit、归档源码和 `run.json` 的运行覆盖值共同参与，不能只 checkout commit 就声称恢复了实验。
+
+| 实际 UI 运行设置 | 记录值 |
+| --- | --- |
+| 实验名 | `tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_absolute_s42_1022_2100` |
+| asset_id | `tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz` |
+| 动作监督 / horizon | absolute / 50 |
+| 训练全局 batch / FSDP | **512 / 8** |
+| 计划训练步数 / 保存间隔 | 30,000 / 2,000；不是已证明训练完成的步数 |
+| 采样 | `epoch_shuffle`；不能据此写成另行指定的 A:B 加权比例 |
+| LR peak / end / warmup / decay | 2.5e-5 / 2.5e-6 / 1000 / 30000 |
+| seed / model_seed / data_seed / augmentation_seed | 42 / 42 / 42001 / 42002 |
+| 梯度裁剪 | 1 |
+| 读取时的 UI 状态 | stopped；不等同于按计划完成 30,000 步 |
+
+UI `dataset_roots` 记录的四个完整路径如下，均为 normal：
+
+```text
+/mnt/data/users/mengxiang/workspace/data/sharpa/A/54_120_data_lerobot--batch-000001--e1f8de59549f8711/normal
+/mnt/data/users/mengxiang/workspace/data/sharpa/A/121_430_data_lerobot--batch-000001--50a0ecd82e4177d5/normal
+/mnt/data/users/mengxiang/workspace/data/sharpa/B/56_106_data_lerobot--batch-000001--ba765ddf94aef37c/normal
+/mnt/data/users/mengxiang/workspace/data/sharpa/B/130_423_data_lerobot--batch-000001--2a48e3b9415b986c/normal
+```
+
+四个目录不是四组等概率采样的证明。应继续检查实际数据集合并、episode 数量、归一化审计及源码中的采样实现；不要从 AB4 命名推断 A:B 比例。
+
+已完成的摘要核对：
+
+| 核对对象 | SHA256 | 结果 |
+| --- | --- | --- |
+| 服务器 AB4 norm_stats.json 与本机 4000 步 checkpoint 自带统计 | `91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b` | 文件摘要一致 |
+| 归档 experiment.py 与 UI run.json 的 config_sha256 | `0cff57cb1912243fde9ec9a77c4b3e643759aa42e30e4e7e6402b9967560d152` | 源码摘要一致 |
+
+### 对话日志解释了什么
+
+用户提供的历史对话记录了：main 的 58D baseline 拒绝 116D 数据；转用 `42f8879` 的 multimodal_rgb 适配；创建个人配置以便 UI 发现；早期 batch 64/FSDP 1 首步 OOM 后建议 batch 32/FSDP 8；随后仅将本地官方配置更新到 sharpa 分支，没有改动服务器既有实验。
+
+这解释了本机新 baseline 与服务器训练源码可能不同。对话中的统计计算 batch 512 不是训练 batch 512 的证据；本次训练 batch 512 的依据是实际 UI run.json。该段对话未记录四批 AB4 normal 的最终切换及 4000 步权重导出，不能替代实际训练归档。
+
+### 尚未闭环的复现材料
+
+- `state.json` 记录的 checkpoint 旧路径位于 `code/openpi-sharpa-42f8879/checkpoints/.../tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_absolute_s42_1022_2100`，读取时该路径不存在。尚未将原始 step 4000 的全部参数文件与本机权重逐项比对。统计摘要相同不证明权重参数完全相同。
+- 已取得四个数据根目录的记录，但本轮未验证全部数据文件和 episode 清单的完整性、内容摘要及相对采样占比。实际任务文本、基础权重身份和完整环境依赖应随归档一并核查。
+- 对话提到在 UI 启动前设置 `XLA_PYTHON_CLIENT_PREALLOCATE=true` 和 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.90`；这只能证明当时讨论了设置方法，不能证明 AB4 训练主进程确实采用。UI 任务值、训练进程环境和统计计算 batch 需要分开记录。
+- 这些归档目前保存在服务器，本文记录了位置和已核对指纹，尚未将原始文件打包进本部署仓库。交接时需取得文件本身，并核查日志/配置中的凭据或访问 token，不能只交一段服务器绝对路径。
+
+因此已能补齐实际实验来源和关键设置，但尚不承诺逐位重训复现同一 4000 步权重。已下载权重的推理部署仍按当前 model_loader 和配套 stats 进行。
 
 ## 当前加载代码与历史 LoRA 的区别
 

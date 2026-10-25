@@ -145,7 +145,7 @@ bash deploy/fr3_sharpa_runtime/hardware.sh stop
 
 每轮执行保存 chunk JSON、整次 events.jsonl 和 run.json。`COMPLETE` 表示指令下发完成，不代表全部关节精确到位或番茄任务成功。prepare、观测、推理、执行失败与中断会记录对应阶段。
 
-checkpoint 原始服务器训练 manifest 未随权重提供。当前加载设置是与该权重结构匹配的推理配置，并非恢复出的训练实验配置；仍需核对实际数据清单、训练时相机和动作语义。GPU smoke 和真实样本 dry-run不替代现场相机、左右设备身份及轨迹检查。
+checkpoint 下载目录未携带完整训练记录；2026-10-25 已在 28 服务器另行找到 AB4 UI 任务、归档配置源码、训练 JSON 与日志，并核对源码及统计指纹一致。实际运行设置为 batch 512、FSDP 8、absolute、horizon 50，数据根目录为四个 A/B normal 批次，详见 [实际 AB4 实验记录](../../docs/SHARPA_HANDOFF.md#已找到的-ab4-实验记录)。原始 checkpoint 旧路径目前不存在，尚未逐项比对模型参数文件，不能仅凭统计一致宣称权重来源已完全闭环。GPU smoke 和真实样本 dry-run 不替代现场相机、左右设备身份及轨迹检查。
 
 单元测试：
 
