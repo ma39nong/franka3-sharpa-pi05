@@ -422,7 +422,8 @@ def main() -> None:
                           "hand_initialization": "fixed_named_hand_home",
                           "hand_home": str(args.hand_home),
                           "action_shape": [config.ACTION_HORIZON, config.ACTION_DIM],
-                          "checkpoint": str(config.CHECKPOINT), "policy_url": args.policy_url,
+                          "checkpoint": str(config.CHECKPOINT) if config.CHECKPOINT is not None else None,
+                          "model_profile": config.MODEL_PROFILE.name, "policy_url": args.policy_url,
                           "sharpa_backend": args.sharpa_backend}, indent=2))
         return
     if args.execute or args.preflight_only or args.prepare or args.handoff_verify:

@@ -1,4 +1,4 @@
-"""Serve/check/smoke-test the native 58D absolute full-finetune checkpoint."""
+"""Serve/check/smoke-test the selected native 58D absolute checkpoint."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .timing import TimedPolicy, timed_server_class
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=18765)
+    parser.add_argument("--port", type=int, default=config.POLICY_PORT)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check-only", action="store_true", help="Check metadata/statistics without loading weights")
     modes.add_argument("--smoke-only", action="store_true", help="Load GPU model, infer dummy observations and exit; no hardware")
@@ -39,7 +39,7 @@ def main() -> None:
     training = build_config()
     config.validate_training_contract(training)
     stats = normalize.load(config.NORM_STATS.parent)
-    print("Loading full-finetune 58D absolute model", flush=True)
+    print(f"Loading {config.MODEL_PROFILE.name} 58D absolute model", flush=True)
     policy = policy_config.create_trained_policy(
         training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT)
     observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": config.DEFAULT_PROMPT}
@@ -49,7 +49,7 @@ def main() -> None:
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])
     metadata.update(warmed_up=True, smoke_action_shape=list(actions.shape), smoke_finite=True)
-    print("Warmup OK: actions=(50, 58), full, absolute, 30 Hz", flush=True)
+    print(f"Warmup OK: actions=(50, 58), {config.MODEL_PROFILE.name}, absolute, 30 Hz", flush=True)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(metadata, indent=2) + "\n")

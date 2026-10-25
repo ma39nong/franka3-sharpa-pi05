@@ -2,6 +2,10 @@
 
 当前模型：π0.5 全量微调、30 Hz、原生 58D、50 帧、全部为绝对关节目标，单位 rad。执行路径是 policy server → runtime → FR3 Safety Gateway / Sharpa SDK direct。LoRA/full 参数差异由模型加载层处理，速度档位共用同一个执行器。
 
+## LoRA 模型入口
+
+本入口默认仍加载已部署的全量模型。新 [LoRA 入口](../fr3_sharpa_lora/README.md) 在 `codex/sharpa-lora-deploy` 分支，通过 `model_profiles.py` 选择 `gemma_2b_lora`／`gemma_300m_lora`，独立读取 `.deployment/lora.env`，默认使用端口 18766。两种模型共用下方的 Home、现场执行与退出清理代码。新 LoRA 权重尚未提供，配置测试不代表真实模型已就绪。
+
 ## 本机配置
 
 在仓库根目录运行。首次使用可通过已有 OpenPI Python 环境生成本机配置：

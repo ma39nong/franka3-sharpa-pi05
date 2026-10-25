@@ -2,6 +2,10 @@
 
 双 FR3 机械臂、双 Sharpa 灵巧手的视觉语言动作模型工程。当前部署使用 **π0.5 全量微调、30 Hz、原生 58 维绝对关节目标**。
 
+## LoRA 部署版本
+
+`codex/sharpa-lora-deploy` 分支新增 [30 Hz LoRA 独立入口](deploy/fr3_sharpa_lora/README.md)。模型配置、端口和日志与全量版本分开，复用相同 Home／SDK／执行与退出清理逻辑；以下全量命令默认行为保留。新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，未完成真实 LoRA 加载或工作机实机验证。
+
 ## 当前配置
 
 | 项目 | 配置 |

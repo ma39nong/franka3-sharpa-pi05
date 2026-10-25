@@ -1,4 +1,4 @@
-"""Shared model-loading boundary; current profile is native 58D full-finetune.
+"""Shared model-loading boundary; native 58D full and LoRA profiles share the runtime.
 
 The inference adapter accepts already-canonical live positions. Converter
 116D storage is reduced/reordered during training, not applied a second time
@@ -12,6 +12,7 @@ import json
 import numpy as np
 
 from . import config
+from .model_profiles import validate_parameter_layout
 
 
 def checkpoint_contract():
@@ -21,8 +22,7 @@ def checkpoint_contract():
     if not manifest.is_file() or not tree_path.is_file():
         raise ValueError("Missing complete Orbax params metadata/manifest")
     entries = json.loads(tree_path.read_text())["tree_metadata"]
-    if any("lora" in key.lower() for key in entries):
-        raise ValueError("Full-finetune deployment cannot load LoRA parameter branches")
+    validate_parameter_layout(entries, config.MODEL_PROFILE)
     projection_shapes = {}
     for entry in entries.values():
         names = [part["key"] for part in entry["key_metadata"]]
@@ -49,8 +49,12 @@ def checkpoint_contract():
         "checkpoint": str(checkpoint), "norm_stats": str(config.NORM_STATS),
         "checkpoint_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "normalization_sha256": hashlib.sha256(config.NORM_STATS.read_bytes()).hexdigest(),
-        "model_finetune_mode": "full", "paligemma_variant": "gemma_2b",
-        "action_expert_variant": "gemma_300m", "action_dim": config.ACTION_DIM,
+        "model_finetune_mode": config.MODEL_PROFILE.name,
+        "paligemma_variant": config.MODEL_PROFILE.paligemma_variant,
+        "action_expert_variant": config.MODEL_PROFILE.action_expert_variant,
+        "lora_recipe": ({"vlm_rank": 16, "vlm_alpha": 16, "expert_rank": 32, "expert_alpha": 32,
+                         "rank_source": "configured recipe; global shapes checked at model load"}
+                        if config.MODEL_PROFILE.name == "lora" else None), "action_dim": config.ACTION_DIM,
         "action_horizon": config.ACTION_HORIZON, "action_hz": config.ACTION_HZ,
         "action_representation": "absolute_joint_position",
         "action_order": config.ACTION_ORDER,
@@ -68,7 +72,8 @@ def build_config():
     # No DeltaActions/AbsoluteActions pair: this checkpoint predicts absolutes.
     model = Pi0Config(pi05=True, dtype="bfloat16", action_dim=58,
                       action_horizon=50, max_token_len=256,
-                      paligemma_variant="gemma_2b", action_expert_variant="gemma_300m")
+                      paligemma_variant=config.MODEL_PROFILE.paligemma_variant,
+                      action_expert_variant=config.MODEL_PROFILE.action_expert_variant)
     data = LeRobotFr3SharpaDataConfig(
         repo_id=config.NORM_STATS.parent.name,
         assets=AssetsConfig(assets_dir=str(config.NORM_STATS.parent.parent),

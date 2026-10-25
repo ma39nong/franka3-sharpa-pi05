@@ -4,15 +4,22 @@ import os
 from pathlib import Path
 
 from .protocol import ACTION_DIM, ACTION_HORIZON, FPS
+from .model_profiles import get_model_profile
 
-CONFIG_NAME = "pi05_fr3_sharpa_ab4_normal_rgb_fullft_absolute_30hz_deploy"
-# User-provided full-finetune checkpoint. An override must name the complete
-# step directory; the matching stats are selected from its assets/.
-CHECKPOINT = Path(os.environ.get("SHARPA_CHECKPOINT",
-    "/media/user/8C0F29AFFD6CD874/sharpa_tomato_ckpt_4000")).expanduser().resolve()
+MODEL_PROFILE = get_model_profile(os.environ.get("SHARPA_MODEL_PROFILE", "full"))
+CONFIG_NAME = MODEL_PROFILE.config_name
+# LoRA deliberately ignores generic/full checkpoint settings from local.env.
+# It has no default weight, so a missing LoRA path never falls back to full.
+CHECKPOINT_ENV = "SHARPA_LORA_CHECKPOINT" if MODEL_PROFILE.name == "lora" else "SHARPA_CHECKPOINT"
+NORM_STATS_ENV = "SHARPA_LORA_NORM_STATS" if MODEL_PROFILE.name == "lora" else "SHARPA_NORM_STATS"
+_checkpoint_value = os.environ.get(CHECKPOINT_ENV, "" if MODEL_PROFILE.name == "lora" else
+    "/media/user/8C0F29AFFD6CD874/sharpa_tomato_ckpt_4000")
+CHECKPOINT = Path(_checkpoint_value).expanduser().resolve() if _checkpoint_value else None
+
+
 def _norm_stats_path():
-    if os.environ.get("SHARPA_NORM_STATS"):
-        return Path(os.environ["SHARPA_NORM_STATS"]).expanduser().resolve()
+    if os.environ.get(NORM_STATS_ENV):
+        return Path(os.environ[NORM_STATS_ENV]).expanduser().resolve()
     if CHECKPOINT is not None:
         candidates = sorted((CHECKPOINT / "assets").rglob("norm_stats.json"))
         if len(candidates) == 1:
@@ -23,7 +30,10 @@ def _norm_stats_path():
 # Prefer checkpoint-owned statistics. Never reuse another experiment's stats
 # just because its data was sampled at the same rate.
 NORM_STATS = _norm_stats_path()
-POLICY_URL = "ws://127.0.0.1:18765"
+POLICY_PORT = int(os.environ.get("SHARPA_LORA_PORT", 18766)) if MODEL_PROFILE.name == "lora" else 18765
+if not 1 <= POLICY_PORT <= 65535:
+    raise ValueError("Invalid model service port")
+POLICY_URL = f"ws://127.0.0.1:{POLICY_PORT}"
 ACTION_HZ = FPS
 SOURCE = "openpi"
 FR3_TOPIC = "/teleop/arm_commands"
@@ -34,24 +44,27 @@ CHUNK_LENGTH = ACTION_HORIZON
 ACTION_ORDER = ["left_arm_7", "left_hand_22", "right_arm_7", "right_hand_22"]
 CAMERA_MAPPING = {"head": "cam0", "left_wrist": "cam2", "right_wrist": "cam1"}
 EXECUTION_TRACE_DIR = Path(os.environ.get(
-    "SHARPA_EXECUTION_TRACE_DIR", str(Path.home() / ".local/state/fr3_sharpa_runtime/execution_traces")))
+    "SHARPA_LORA_EXECUTION_TRACE_DIR" if MODEL_PROFILE.name == "lora" else "SHARPA_EXECUTION_TRACE_DIR",
+    str(Path.home() / (".local/state/fr3_sharpa_lora/execution_traces" if MODEL_PROFILE.name == "lora"
+                       else ".local/state/fr3_sharpa_runtime/execution_traces"))))
 
 
 def require_checkpoint() -> Path:
     if CHECKPOINT is None:
-        raise ValueError("Set SHARPA_CHECKPOINT to the complete trained 30 Hz step directory in both terminals")
+        raise ValueError(f"Set {CHECKPOINT_ENV} to the complete trained 30 Hz step directory in both terminals")
     if NORM_STATS is None:
-        raise ValueError("Set SHARPA_NORM_STATS to matching norm_stats.json, or include exactly one in checkpoint assets/")
+        raise ValueError(f"Set {NORM_STATS_ENV} to matching norm_stats.json, or include exactly one in checkpoint assets/")
     return CHECKPOINT
 
 
 def validate_training_contract(training):
     if training.data.action_hz != ACTION_HZ:
         raise ValueError(f"Training action_hz={training.data.action_hz} does not match deployment {ACTION_HZ} Hz")
-    if (training.model.paligemma_variant != "gemma_2b"
-            or training.model.action_expert_variant != "gemma_300m"
+    if (training.model.paligemma_variant != MODEL_PROFILE.paligemma_variant
+            or training.model.action_expert_variant != MODEL_PROFILE.action_expert_variant
             or training.data.extra_delta_transform):
-        raise ValueError("Deployment requires full-finetune Gemma variants and absolute actions (no delta transform)")
+        label = "full-finetune" if MODEL_PROFILE.name == "full" else "LoRA"
+        raise ValueError(f"Deployment requires {label} Gemma variants and absolute actions (no delta transform)")
     if training.model.action_dim != ACTION_DIM or training.model.action_horizon != ACTION_HORIZON:
         raise ValueError("Training action shape does not match the 50x58 deployment contract")
 
