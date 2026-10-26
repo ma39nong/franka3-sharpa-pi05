@@ -260,3 +260,12 @@ class SharpaSdkDirectExecutor:
         self.left = self.right = None
         self._last_send = None
         return errors
+
+    def shutdown_confirmed(self):
+        """Final-exit disable verification on owned handles, without reconnecting."""
+        from .shutdown import disable_and_confirm
+        try:
+            return disable_and_confirm({"left": self.left, "right": self.right})
+        finally:
+            self.left = self.right = None
+            self._last_send = None

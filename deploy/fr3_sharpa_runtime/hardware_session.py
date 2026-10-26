@@ -85,7 +85,7 @@ class HardwareSession:
             raise RuntimeError("OpenPI cleanup incomplete: " + "; ".join(errors))
 
 
-def run_session(command, hardware):
+def run_session(command, hardware, *, shutdown_grace_s=15):
     """Forward termination to the runtime tree, then release its hardware containers."""
     child = None
     interrupted = None
@@ -109,8 +109,10 @@ def run_session(command, hardware):
             except subprocess.TimeoutExpired:
                 if interrupted is not None:
                     try:
-                        status = child.wait(timeout=15)
+                        status = child.wait(timeout=shutdown_grace_s)
                     except subprocess.TimeoutExpired:
+                        print("[sharpa-shutdown] ERROR 执行端退出超时，将终止进程组；未确认设备失能。",
+                              file=sys.stderr, flush=True)
                         os.killpg(child.pid, signal.SIGTERM)
                         try:
                             status = child.wait(timeout=5)
@@ -135,7 +137,14 @@ def main():
     if sys.argv[1:] == ["stop"]:
         hardware.cleanup()
         return
-    raise SystemExit(run_session([sys.executable, "-m", "deploy.fr3_sharpa_runtime.run", *sys.argv[1:]], hardware))
+    import argparse
+    from .shutdown import DisableSettings
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--sharpa-backend", default="sdk_direct")
+    args, _ = parser.parse_known_args()
+    grace = DisableSettings.from_env().session_grace_s if args.sharpa_backend == "sdk_direct" else 15
+    raise SystemExit(run_session([sys.executable, "-m", "deploy.fr3_sharpa_runtime.run", *sys.argv[1:]],
+                                 hardware, shutdown_grace_s=grace))
 
 
 if __name__ == "__main__":

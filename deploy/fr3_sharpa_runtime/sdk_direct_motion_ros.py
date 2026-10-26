@@ -35,6 +35,8 @@ def main() -> None:
     parser.add_argument("--speed-rad-s", type=float, default=0.03)
     parser.add_argument("--execute-speed-scale", type=float, default=1.0)
     args = parser.parse_args()
+    from .shutdown import DisableSettings
+    DisableSettings.from_env()  # Reject invalid shutdown bounds before touching devices.
 
     import rclpy
     from sensor_msgs.msg import JointState
@@ -248,22 +250,35 @@ def main() -> None:
                           "reason": str(error), "detail": detail}), file=protocol, flush=True)
         raise SystemExit(1)
     finally:
-        feedback_stop.set()
-        if ros_executor is not None:
-            ros_executor.shutdown(timeout_sec=1.0)
-        if ros_spin_thread is not None:
-            ros_spin_thread.join(timeout=1.0)
-        if feedback_thread is not None:
-            feedback_thread.join(timeout=1.0)
-        stop_errors = executor.stop()
-        if stop_errors:
-            print("WARNING: Sharpa cleanup could not be fully confirmed: "
-                  + "; ".join(stop_errors), file=sys.stderr)
-        feedback.close()
-        node.destroy_node()
-        rclpy.shutdown()
-        if protocol is not sys.stdout:
-            protocol.close()
+        from .shutdown import protect_disable_confirmation
+        with protect_disable_confirmation():
+            feedback_stop.set()
+            try:
+                if ros_executor is not None:
+                    ros_executor.shutdown(timeout_sec=1.0)
+                if ros_spin_thread is not None:
+                    ros_spin_thread.join(timeout=1.0)
+                if feedback_thread is not None:
+                    feedback_thread.join(timeout=1.0)
+            except Exception as error:
+                print(f"WARNING: ROS cleanup failed before hand disable: {error}", file=sys.stderr, flush=True)
+            try:
+                shutdown_report = executor.shutdown_confirmed()
+            except Exception as error:
+                shutdown_report = {"status": "FAIL", "error": str(error)}
+                print(f"[sharpa-shutdown] ERROR 失能确认异常，双手状态未确认: {error}", file=sys.stderr, flush=True)
+            # Dedicated IPC acknowledgement: a pixi wrapper exiting does not
+            # prove its SDK child has completed disable/readback.
+            try:
+                print(json.dumps({"operation": "shutdown", **shutdown_report}), file=protocol, flush=True)
+            except (OSError, ValueError) as error:
+                print(f"[sharpa-shutdown] WARNING cannot deliver shutdown acknowledgement: {error}",
+                      file=sys.stderr, flush=True)
+            feedback.close()
+            node.destroy_node()
+            rclpy.shutdown()
+            if protocol is not sys.stdout:
+                protocol.close()
 
 
 if __name__ == "__main__":

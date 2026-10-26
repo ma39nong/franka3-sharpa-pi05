@@ -47,7 +47,7 @@ bash deploy/fr3_sharpa_full/runtime.sh \
   --prepare-speed-rad-s 0.03 --execute-steps 15 --speed slow --num-chunks 1
 ```
 
-确认单轮后，按任务需要设置 `--num-chunks 0` 连续运行。执行终端 Ctrl-C 会清理其所属硬件会话；模型服务需在模型终端单独停止。
+确认单轮后，按任务需要设置 `--num-chunks 0` 连续运行。执行终端 Ctrl-C 会先请求双手失能并读回确认（默认最多 120 秒、每手 120 次），随后清理其所属硬件会话；确认失败会在终端明确输出 ERROR/FAIL。参数和异常情况见 [退出确认说明](../fr3_sharpa_runtime/README.md)。模型服务需在模型终端单独停止。
 
 ## 目录与兼容性
 

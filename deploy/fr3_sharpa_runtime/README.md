@@ -157,6 +157,20 @@ bash deploy/fr3_sharpa_runtime/runtime.sh \
 
 执行终端退出时（包括 Ctrl-C、SIGTERM、正常完成指定轮数或运行失败），`runtime.sh` 的会话管理器先结束 runtime/SDK 子进程，再清理该次执行启动前记录的部署容器。它会停止并删除 OpenPI 的 `openpi-cameras` 与使用 `/etc/openpi/teleop_control.yaml` 的 `teleop-control`；释放网关后停止对应的机械臂控制容器。删除网关容器可避免后续遥操误用它残留的 OpenPI 配置，遥操启动器会重新按自身配置创建网关。
 
+SDK direct 在最终退出时先对已有双手连接请求失能，并通过 SDK `get_enable_state` 读回确认；只接收布尔 False 作为确认，不将“stop 调用未报错”当作成功。左右手并行处理，默认总确认窗口 **120 秒**、每只手最多 **120 次**、重试间隔 **1 秒**。确认成功后断开 SDK，再继续既有的进程和容器清理；某只手始终使能、读回失败或调用超时，则在终端输出该手的 ERROR、尝试次数、最后使能状态和错误，再退出。没有已有连接时不会为检查状态重新连接或使能设备，也不会自动张手、回 Home。
+
+可在第三个执行终端启动前覆盖以下环境变量（模型终端无需设置）：
+
+```bash
+export SHARPA_DISABLE_TIMEOUT_S=120
+export SHARPA_DISABLE_MAX_ATTEMPTS=120
+export SHARPA_DISABLE_RETRY_INTERVAL_S=1
+```
+
+以上 120 秒是失能/读回窗口，不包括后续原有容器停止耗时。父进程为确认留有等待余量，并等待 SDK 的专用退出确认消息；即使 Pixi 包装进程先退出也不当作设备已失能。确认期间再次 Ctrl-C 会提示等待，不跳过确认；若 SDK/进程挂起导致最终仍未收到确认，上层会明确输出“未确认设备失能”后按有限超时退出。SIGKILL、断电或设备通信故障无法保证完成失能，不能把程序退出视为设备失能的证据。
+
+终端成功信息形如 `[sharpa-shutdown] left: 已读回使能=False...`，左右手各一条，最终输出 PASS。未成功则输出 `[sharpa-shutdown] ERROR left/right: ...未确认失能...` 和最终 FAIL；如果失能已确认但断连失败，会单独说明断连错误。原来的 watchdog stop、推理服务退出和容器清理顺序/范围不变。
+
 清理按不可变容器 ID、Compose 配置来源和网关挂载路径核对，不按服务名强制关闭后来重建的容器；检测到遥操已经接管时跳过对应控制器。不执行整个项目的 `down`，也不停止其他遥操服务。模型服务是独立终端，需要另行 Ctrl-C 结束。`--check`、帮助、离线 dry-run 不触发硬件清理。
 
 如果只启动了硬件、尚未运行执行端，或强制终止导致自动清理未完成，可显式重试：
