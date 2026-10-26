@@ -186,6 +186,8 @@ def execute_policy_prepare(args):
                 if attempt == 0:
                     print("POLICY WARMUP: discarded stale inference; reacquiring observation", file=sys.stderr)
                     current = live_observation(args.ros_overlay, args.prompt)
+                    if "_inference_context" in observation:
+                        current["_inference_context"] = observation["_inference_context"]
             raise RuntimeError("Observation expired during inference; no new target/chunk will be sent")
         initial = live_observation(args.ros_overlay, args.prompt)
         # Only legacy policy prepare consumes an inference before the chunk loop.
@@ -226,7 +228,8 @@ def execute_policy_prepare(args):
             execute_steps=getattr(args, "execute_steps", 50),
             initial_target=initial_target, home_metadata=home_metadata,
             prepare_initial=initialization != "current",
-            prediction_clip_rad=getattr(args, "prediction_clip_rad", 0.05))
+            prediction_clip_rad=getattr(args, "prediction_clip_rad", 0.05),
+            rolling_options=getattr(args, "rolling_options", None))
         if trace_writer is not None:
             result["execution_traces"] = trace_writer.paths
             result["run_report"] = str(trace_writer.run_path)
@@ -408,7 +411,31 @@ def main() -> None:
                         help="Sharpa command backend; sdk_direct bypasses the legacy litchibot validation path")
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
+    parser.add_argument("--inference-preset", choices=("paper-rolling",))
+    parser.add_argument("--inpainting", choices=("off", "soft", "correlation"), default="off")
+    parser.add_argument("--compression", choices=("off", "cubic"), default="off")
+    parser.add_argument("--reference-max-age-s", type=float, default=1.0)
+    parser.add_argument("--hand-variation-rad", type=float, default=0.05)
     args = parser.parse_args()
+    args.rolling_options = None
+    if args.inference_preset:
+        if args.broker_mode != "serial":
+            parser.error("paper-rolling requires --broker-mode serial; RTC is a separate experiment")
+        from .rolling import RollingOptions
+        if config.MODEL_PROFILE.name not in ("full", "full-delta") or args.sharpa_backend != "sdk_direct":
+            parser.error("paper-rolling requires full/full-delta and sdk_direct")
+        if args.initialization == "policy" or args.prepare_policy_first:
+            parser.error("paper-rolling supports current or Home initialization")
+        if args.execute_steps not in (None, 26):
+            parser.error("paper-rolling requires --execute-steps 26")
+        args.execute_steps = 26
+        try:
+            args.rolling_options = RollingOptions(args.inpainting, args.compression,
+                args.reference_max_age_s, args.hand_variation_rad)
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.inpainting != "off" or args.compression != "off":
+        parser.error("--inpainting/--compression require --inference-preset paper-rolling")
     if not np.isfinite(args.prediction_clip_rad) or args.prediction_clip_rad < 0:
         parser.error("--prediction-clip-rad must be finite and nonnegative")
     if args.prepare_policy_first and args.sharpa_backend == "sdk_direct":
@@ -471,7 +498,8 @@ def main() -> None:
                           "model_profile": config.MODEL_PROFILE.name, "policy_url": args.policy_url,
                           "training_action_supervision": config.MODEL_PROFILE.training_action_supervision,
                           "action_representation": "absolute_joint_position",
-                          "sharpa_backend": args.sharpa_backend}, indent=2))
+                          "sharpa_backend": args.sharpa_backend,
+                          "inference_experiment": args.rolling_options.as_dict() if args.rolling_options else None}, indent=2))
         return
     if args.execute or args.preflight_only or args.prepare or args.handoff_verify:
         if args.mode != "dry-run":
@@ -479,6 +507,8 @@ def main() -> None:
         args.mode = "execute" if args.execute else "prepare" if args.prepare else "handoff-verify" if args.handoff_verify else "preflight-only"
     if args.broker_mode == "rtc" and args.mode != "execute":
         parser.error("--broker-mode rtc is for execute or offline --check only")
+    if args.rolling_options and args.mode != "execute":
+        parser.error("paper-rolling requires --check or --execute; use paper_replay for synthetic evaluation")
     if args.mode == "execute":
         if not args.enable_hardware or args.episode_parquet:
             parser.error("execute requires --enable-hardware and live ROS observations; recorded samples are forbidden")

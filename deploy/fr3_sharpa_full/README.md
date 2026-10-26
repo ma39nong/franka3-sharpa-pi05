@@ -137,3 +137,7 @@ bash deploy/fr3_sharpa_runtime/hardware.sh stop
 - `../fr3_sharpa_runtime/`：共享实现与硬件工具；旧的启动命令继续有效。
 
 本目录脚本转发到共享入口的 `--model full`，不复制模型加载或机器人执行代码，也不修改现有工作机配置。完整现场配置、观测及退出行为见 [公共 runtime 说明](../fr3_sharpa_runtime/README.md)。LoRA 权重接入见 [LoRA 说明](../fr3_sharpa_lora/README.md)。
+
+## 可选推理实验
+
+全量 absolute 与 full-delta 可分别沿用本目录入口，显式启用滚动参考、Soft Inpainting 和独立动作压缩。原命令默认行为不变。配置、工控机三终端命令及离线验证见 [论文推理实验说明](../../docs/pi05_paper_adaptation/README.md)。

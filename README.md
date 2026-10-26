@@ -393,3 +393,7 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 旧实现包括 Wuji 设备协议、54D/其他模型映射和 RTG/Ruckig 方案，不是当前 Sharpa 的可运行入口。当前功能与历史设计的差异见 [架构说明](deploy/fr3_sharpa_runtime/ARCHITECTURE.md)和 [Wuji 历史参考](docs/reference_wuji_architecture.md)。
 
 权重、训练数据、运行日志和本机构建产物不提交 Git。许可证见 [LICENSE](LICENSE) 和 [LICENSE_GEMMA.txt](LICENSE_GEMMA.txt)。
+
+## 可选论文推理实验
+
+新增默认关闭的滚动参考、去噪内部 Soft Inpainting、可选相关性传播，以及 26→20 三次插值压缩。支持现有 full/full-delta，保留默认 50/15 和全部原硬件执行路径。本轮只做 CPU 离线测试；接入方式、独立开关、时间轴限制和验证边界见 [推理实验说明](docs/pi05_paper_adaptation/README.md)。

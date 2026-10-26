@@ -11,6 +11,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
+from openpi.models.inpainting import correct_inpainting
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
@@ -269,7 +270,12 @@ class Pi0(_model.BaseModel):
         rtc_actions: at.Float[at.Array, "b ah ad"] | None = None,
         rtc_weights: at.Float[at.Array, "b ah 1"] | None = None,
         rtc_max_guidance_weight: float | at.Float[at.Array, ""] = 5.0,
-    ) -> _model.Actions:
+        initial_actions: at.Float[at.Array, "b n ad"] | None = None,
+        correction_matrix: at.Float[at.Array, "u o"] | None = None,
+    ) -> _model.Actions | tuple[_model.Actions, at.Int[at.Array, "2"]]:
+        """Sample actions; an explicit reference additionally returns correction counters."""
+        if initial_actions is not None and (rtc_actions is not None or rtc_weights is not None):
+            raise ValueError("RTC and rolling inpainting cannot be combined in one sampling request")
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -289,6 +295,15 @@ class Pi0(_model.BaseModel):
                 raise ValueError(f"rtc_weights must have shape {expected_weights_shape}, got {rtc_weights.shape}")
             if jnp.shape(rtc_max_guidance_weight) != ():
                 raise ValueError("rtc_max_guidance_weight must be a scalar")
+        if initial_actions is not None:
+            if initial_actions.shape != (batch_size, 4, self.action_dim):
+                raise ValueError("Inpainting requires four reference steps in model action space")
+            if correction_matrix is not None and correction_matrix.shape != (
+                (self.action_horizon - 4) * self.action_dim, 4 * self.action_dim
+            ):
+                raise ValueError("Inpainting matrix must cover all free horizon dimensions")
+        elif correction_matrix is not None:
+            raise ValueError("A correction matrix requires initial_actions")
 
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
@@ -328,7 +343,7 @@ class Pi0(_model.BaseModel):
             return self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
         def step(carry):
-            x_t, time = carry
+            x_t, time = carry[:2]
             if rtc_actions is None:
                 # Keep the original path entirely outside VJP when RTC is not
                 # requested, preserving its numerical behavior and cost.
@@ -343,12 +358,20 @@ class Pi0(_model.BaseModel):
                     rtc_max_guidance_weight,
                 )
 
+            if initial_actions is not None:
+                corrected, counts = correct_inpainting(
+                    x_t + dt * v_t, initial_actions, noise, time + dt,
+                    correction_matrix=correction_matrix)
+                return corrected, time + dt, carry[2] + counts
             return x_t + dt * v_t, time + dt
 
         def cond(carry):
-            x_t, time = carry
+            _, time = carry[:2]
             # robust to floating-point error
             return time >= -dt / 2
 
+        if initial_actions is not None:
+            x_0, _, counts = jax.lax.while_loop(cond, step, (noise, 1.0, jnp.zeros(2, dtype=jnp.int32)))
+            return x_0, counts
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0

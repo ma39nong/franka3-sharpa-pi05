@@ -153,3 +153,40 @@ def test_missing_delta_model_fails_before_hardware(tmp_path):
     result = subprocess.run(["bash", "deploy/fr3_sharpa_full/runtime_delta.sh", "--execute", "--enable-hardware"],
                             cwd=ROOT, env=env, text=True, capture_output=True)
     assert result.returncode != 0 and "Missing complete Orbax" in result.stderr
+
+
+def test_rolling_reference_matches_actual_training_delta_and_quantile_pipeline(monkeypatch, delta_checkpoint):
+    from deploy.fr3_sharpa_runtime.model_service import encode_reference
+    select_delta(monkeypatch, delta_checkpoint)
+    training = build_config()
+    data = training.data.create(training.assets_dirs, training.model)
+    stats = normalize.load(delta_checkpoint[1].parent)
+    normalizer = transforms.Normalize(stats, use_quantiles=data.use_quantile_norm)
+    state = np.linspace(-0.8, 0.8, 58, dtype=np.float32)
+    targets = np.broadcast_to(np.linspace(-0.2, 0.3, 58, dtype=np.float32), (4, 58)).copy()
+    obs = {"observation/state": state.copy(), "actions": targets.copy()}
+    for key in ("observation/image", "observation/left_wrist_image", "observation/right_wrist_image"):
+        obs[key] = np.zeros((8, 8, 3), dtype=np.uint8)
+    expected = normalizer(transforms.compose(data.data_transforms.inputs)(obs))["actions"]
+    encoded = encode_reference(targets, state, delta=True, normalizer=normalizer)
+    np.testing.assert_allclose(encoded, expected, atol=1e-7)
+
+
+def test_covariance_tool_uses_selected_delta_stats_and_refuses_overwrite(monkeypatch, delta_checkpoint, tmp_path):
+    from deploy.fr3_sharpa_runtime import correlation
+    select_delta(monkeypatch, delta_checkpoint)
+    states = np.stack([np.full(58, n * 0.01, dtype=np.float32) for n in range(3)])
+    targets = np.stack([np.full((50, 58), n * 0.02, dtype=np.float32) for n in range(3)])
+    source, output = tmp_path / "windows.npz", tmp_path / "covariance.npz"
+    np.savez(source, absolute_actions=targets, states=states)
+    monkeypatch.setattr(sys, "argv", ["correlation", "--input", str(source), "--output", str(output)])
+    correlation.main()
+    with np.load(output, allow_pickle=False) as asset:
+        info = json.loads(asset["metadata"].item())
+        assert info["sample_count"] == 3
+        assert info["space"] == "normalized_training_actions"
+        assert asset["covariance"].shape == (2900, 2900)
+        # Arms subtract the new state; hands retain the absolute targets.
+        assert asset["covariance"][7, 7] == pytest.approx(4 * asset["covariance"][0, 0], rel=1e-4)
+    with pytest.raises(FileExistsError):
+        correlation.main()

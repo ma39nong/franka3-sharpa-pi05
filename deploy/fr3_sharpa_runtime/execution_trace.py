@@ -134,6 +134,15 @@ class ExecutionTraceWriter:
             self.paths.append(str(destination))
         return str(destination)
 
+    def record_experiment(self, path, *, context, diagnostics, execution_targets, compression):
+        destination = Path(path)
+        payload = json.loads(destination.read_text(encoding="utf-8"))
+        payload["inference_experiment"] = {"context": context, "diagnostics": diagnostics,
+            "compression": compression, "execution_targets": np.asarray(execution_targets).tolist(),
+            "model_horizon": 50, "effective_horizon": 30, "consumed_model_steps": 26,
+            "overlap_indices": [26, 30], "alignment": "trajectory_phase_not_wall_clock"}
+        self._write(destination, payload)
+
     def finish_chunk(self, path: str, *, observation_after: dict | None,
                      command_duration_s: float, end_to_end_duration_s: float, execution_report=None) -> None:
         destination = Path(path)

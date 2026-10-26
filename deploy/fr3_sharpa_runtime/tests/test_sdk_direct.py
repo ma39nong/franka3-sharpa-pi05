@@ -13,7 +13,10 @@ def chunk(value=0.0):
     return np.full((50, 58), value, dtype=np.float32)
 
 
-def test_direct_validator_rejects_slew():
+def test_direct_validator_rejects_slew(monkeypatch):
+    # This is a slew unit test, independent of the workstation's vendor asset.
+    from deploy.fr3_sharpa_runtime import sdk_direct
+    monkeypatch.setattr(sdk_direct, "hand_joint_limits", lambda: np.tile([-1., 1.], (22, 1)))
     actions = chunk()
     actions[1, LEFT_SHARPA_SLICE.start] = 0.11
     with pytest.raises(ValueError, match="slew"):
@@ -137,7 +140,9 @@ def test_clock_scheduler_does_not_accumulate_send_cost_or_burst_after_stall():
     assert len(starts) == 1
 
 
-def test_sdk_direct_can_validate_raw_ranges_before_time_stretching():
+def test_sdk_direct_can_validate_raw_ranges_before_time_stretching(monkeypatch):
+    from deploy.fr3_sharpa_runtime import sdk_direct
+    monkeypatch.setattr(sdk_direct, "hand_joint_limits", lambda: np.tile([-1., 1.], (22, 1)))
     actions = chunk()
     actions[1:, 7] = 0.15
     validate_direct_hand_actions(actions, check_slew=False)
