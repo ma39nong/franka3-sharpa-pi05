@@ -49,7 +49,11 @@ def checkpoint_contract():
         "checkpoint": str(checkpoint), "norm_stats": str(config.NORM_STATS),
         "checkpoint_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "normalization_sha256": hashlib.sha256(config.NORM_STATS.read_bytes()).hexdigest(),
-        "model_finetune_mode": config.MODEL_PROFILE.name,
+        "model_profile": config.MODEL_PROFILE.name,
+        "model_finetune_mode": config.MODEL_PROFILE.finetune_mode,
+        "training_action_supervision": config.MODEL_PROFILE.training_action_supervision,
+        "delta_reference": "chunk_start_measured_joint_positions" if config.MODEL_PROFILE.extra_delta_transform else None,
+        "delta_dimensions": list(range(7)) + list(range(29, 36)) if config.MODEL_PROFILE.extra_delta_transform else [],
         "paligemma_variant": config.MODEL_PROFILE.paligemma_variant,
         "action_expert_variant": config.MODEL_PROFILE.action_expert_variant,
         "lora_recipe": ({"vlm_rank": 16, "vlm_alpha": 16, "expert_rank": 32, "expert_alpha": 32,
@@ -69,7 +73,8 @@ def build_config():
 
     # Reuse the canonical 58D runtime input adapter. The training converter's
     # action layout (LA, RA, LH, RH) was already reordered before normalization.
-    # No DeltaActions/AbsoluteActions pair: this checkpoint predicts absolutes.
+    # For delta profiles the existing output transform restores only the arms
+    # against this observation's measured state, after action unnormalization.
     model = Pi0Config(pi05=True, dtype="bfloat16", action_dim=58,
                       action_horizon=50, max_token_len=256,
                       paligemma_variant=config.MODEL_PROFILE.paligemma_variant,
@@ -78,6 +83,6 @@ def build_config():
         repo_id=config.NORM_STATS.parent.name,
         assets=AssetsConfig(assets_dir=str(config.NORM_STATS.parent.parent),
                             asset_id=config.NORM_STATS.parent.name),
-        extra_delta_transform=False, action_hz=30.0)
+        extra_delta_transform=config.MODEL_PROFILE.extra_delta_transform, action_hz=30.0)
     return TrainConfig(name=config.CONFIG_NAME, model=model, data=data,
                        freeze_filter=model.get_freeze_filter())

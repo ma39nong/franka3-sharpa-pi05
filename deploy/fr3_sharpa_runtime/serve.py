@@ -1,4 +1,4 @@
-"""Serve/check/smoke-test the selected native 58D absolute checkpoint."""
+"""Serve/check/smoke-test the selected 58D checkpoint, serving absolute joint targets."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .timing import TimedPolicy, timed_server_class
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora}, --list-models")
+    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta}, --list-models")
     parser.add_argument("--port", type=int, default=config.POLICY_PORT)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check-only", action="store_true", help="Check metadata/statistics without loading weights")
@@ -39,7 +39,7 @@ def main() -> None:
     training = build_config()
     config.validate_training_contract(training)
     stats = normalize.load(config.NORM_STATS.parent)
-    print(f"Loading {config.MODEL_PROFILE.name} 58D absolute model", flush=True)
+    print(f"Loading {config.MODEL_PROFILE.name} 58D model ({config.MODEL_PROFILE.training_action_supervision} supervision; absolute output)", flush=True)
     policy = policy_config.create_trained_policy(
         training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT)
     observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": config.DEFAULT_PROMPT}

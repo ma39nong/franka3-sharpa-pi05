@@ -12,6 +12,7 @@
 | --- | --- | --- | ---: | --- |
 | `full` | `gemma_2b` + `gemma_300m` | 30 Hz／58D absolute | 18765 | `.deployment/local.env` 的 `SHARPA_CHECKPOINT`、`SHARPA_NORM_STATS` |
 | `lora` | `gemma_2b_lora` + `gemma_300m_lora` | 30 Hz／58D absolute | 18766 | `.deployment/lora.env` 的 `SHARPA_LORA_*` |
+| `full-delta` | `gemma_2b` + `gemma_300m` | 30 Hz／双臂 delta、双手 absolute；服务输出 absolute | 18767 | `.deployment/full_delta.env` 的 `SHARPA_FULL_DELTA_*` |
 
 ```bash
 bash deploy/fr3_sharpa_runtime/serve.sh --list-models
@@ -23,6 +24,8 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 ```
 
 `--model` 和 `--list-models` 是 shell 入口参数。端口可分别通过 `SHARPA_FULL_PORT`、`SHARPA_LORA_PORT` 设置。LoRA 复用机器配置，但不回退使用全量权重、统计或日志。旧 LoRA 专用脚本保留为兼容别名。
+
+全量 delta 权重已接入独立配置，工作机配置与命令见 [全量 Delta 部署](../fr3_sharpa_full/DELTA.md)；该配置已通过真实 GPU 假观测推理，现场运行待验证。
 
 新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，真实加载与工作机实机验证待完成。
 

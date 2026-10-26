@@ -11,30 +11,44 @@ class ModelProfile:
     default_port: int
     vlm_rank: int | None = None
     expert_rank: int | None = None
+    extra_delta_transform: bool = False
+
+    @property
+    def finetune_mode(self):
+        return "lora" if self.vlm_rank is not None else "full"
+
+    @property
+    def training_action_supervision(self):
+        return "delta_arm_joint_target_absolute_hand" if self.extra_delta_transform else "absolute"
+
+    @property
+    def env_prefix(self):
+        return {"full": "SHARPA", "lora": "SHARPA_LORA", "full-delta": "SHARPA_FULL_DELTA"}[self.name]
 
     @property
     def checkpoint_env(self):
-        return "SHARPA_LORA_CHECKPOINT" if self.name == "lora" else "SHARPA_CHECKPOINT"
+        return self.env_prefix + "_CHECKPOINT"
 
     @property
     def norm_stats_env(self):
-        return "SHARPA_LORA_NORM_STATS" if self.name == "lora" else "SHARPA_NORM_STATS"
+        return self.env_prefix + "_NORM_STATS"
 
     @property
     def port_env(self):
-        return "SHARPA_LORA_PORT" if self.name == "lora" else "SHARPA_FULL_PORT"
+        return "SHARPA_FULL_PORT" if self.name == "full" else self.env_prefix + "_PORT"
 
     @property
     def trace_env(self):
-        return "SHARPA_LORA_EXECUTION_TRACE_DIR" if self.name == "lora" else "SHARPA_EXECUTION_TRACE_DIR"
+        return self.env_prefix + "_EXECUTION_TRACE_DIR"
 
     @property
     def default_checkpoint(self):
-        return None if self.name == "lora" else "/media/user/8C0F29AFFD6CD874/sharpa_tomato_ckpt_4000"
+        return "/media/user/8C0F29AFFD6CD874/sharpa_tomato_ckpt_4000" if self.name == "full" else None
 
     @property
     def trace_subdir(self):
-        return ".local/state/fr3_sharpa_lora/execution_traces" if self.name == "lora" else ".local/state/fr3_sharpa_runtime/execution_traces"
+        folder = {"full": "fr3_sharpa_runtime", "lora": "fr3_sharpa_lora", "full-delta": "fr3_sharpa_full_delta"}[self.name]
+        return f".local/state/{folder}/execution_traces"
 
 
 MODEL_PROFILES = {
@@ -42,6 +56,8 @@ MODEL_PROFILES = {
                          "gemma_2b", "gemma_300m", 18765),
     "lora": ModelProfile("lora", "pi05_fr3_sharpa_lora_absolute_30hz_deploy",
                          "gemma_2b_lora", "gemma_300m_lora", 18766, 16, 32),
+    "full-delta": ModelProfile("full-delta", "pi05_fr3_sharpa_1016_2_fullft_delta_30hz_deploy",
+                               "gemma_2b", "gemma_300m", 18767, extra_delta_transform=True),
 }
 
 
@@ -49,7 +65,7 @@ def get_model_profile(name):
     try:
         return MODEL_PROFILES[name]
     except KeyError:
-        raise ValueError(f"Unknown SHARPA_MODEL_PROFILE {name!r}; select full or lora") from None
+        raise ValueError(f"Unknown SHARPA_MODEL_PROFILE {name!r}; select {', '.join(MODEL_PROFILES)}") from None
 
 
 def validate_parameter_layout(entries, profile):
@@ -59,7 +75,7 @@ def validate_parameter_layout(entries, profile):
     Rank/alpha are recipe assumptions, not inferred from tensor names.
     """
     lora_keys = [key for key in entries if "lora" in key.lower()]
-    if profile.name == "full":
+    if profile.finetune_mode == "full":
         if lora_keys:
             raise ValueError("Full-finetune deployment cannot load LoRA parameter branches")
         return
@@ -89,7 +105,8 @@ def registry_metadata():
     return [{"name": p.name, "config_name": p.config_name,
              "paligemma_variant": p.paligemma_variant, "action_expert_variant": p.action_expert_variant,
              "action_hz": 30, "action_dim": 58, "action_horizon": 50,
-             "training_action_supervision": "absolute", "runtime_actions": "absolute_joint_position",
+             "training_action_supervision": p.training_action_supervision,
+             "model_finetune_mode": p.finetune_mode, "runtime_actions": "absolute_joint_position",
              "default_port": p.default_port, "checkpoint_env": p.checkpoint_env,
              "norm_stats_env": p.norm_stats_env,
              "vlm_rank": p.vlm_rank, "expert_rank": p.expert_rank} for p in MODEL_PROFILES.values()]

@@ -201,7 +201,7 @@ def test_shared_model_registry_is_available_without_weights(script):
                              cwd=ROOT, env=clean_environment(), text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     registry = {model["name"]: model for model in json.loads(result.stdout)}
-    assert set(registry) == {"full", "lora"}
+    assert set(registry) == {"full", "lora", "full-delta"}
     assert registry["full"]["default_port"] == 18765
     assert registry["lora"]["checkpoint_env"] == "SHARPA_LORA_CHECKPOINT"
     assert registry["lora"]["training_action_supervision"] == "absolute"

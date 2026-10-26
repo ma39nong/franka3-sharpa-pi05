@@ -24,7 +24,7 @@
 
 所有速度使用相同推理服务、prepare 和设备执行代码。无需按 LoRA/full 创建两套机器人部署目录。客户端核对物理动作契约和 checkpoint/统计身份，训练方式仅为服务端模型信息。
 
-当前同一分支注册 `full` 和 `lora`，由共享 shell 入口的 `--model` 选择，默认仍为全量。全量支持已验证的 AB4 normal 4000 步权重；LoRA 预设 30 Hz／58D absolute、VLM rank 16／Expert rank 32，尚无新 checkpoint，真实加载待验证。权重、统计、端口和日志配置分别保存，硬件执行共用。LoRA 若已合并为基础模型矩阵，参数结构可以与全量模型相同。无论训练方式，都必须分别确认频率、关节顺序和绝对/增量语义。
+当前同一分支注册 `full`、`lora` 和 `full-delta`，由共享 shell 入口的 `--model` 选择，默认仍为全量。全量支持已验证的 AB4 normal 4000 步权重；LoRA 预设 30 Hz／58D absolute、VLM rank 16／Expert rank 32，尚无新 checkpoint，真实加载待验证。权重、统计、端口和日志配置分别保存，硬件执行共用。LoRA 若已合并为基础模型矩阵，参数结构可以与全量模型相同。无论训练方式，都必须分别确认频率、关节顺序和绝对/增量语义。
 
 ## Home 与滚动执行
 
@@ -57,3 +57,7 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --execute --enable-hardware --speed sl
 ```
 
 `fast` 目前仍为串行观测/推理/播放，不代表具备 RTG、非零速度跨段拼接或 Ruckig 平滑；SDK 下发也没有改为 100 Hz。这些能力属于后续 Sharpa 调度/规划实现，不能仅通过改速度档位宣称完成。旧平台的设计保留在 [历史参考](../../docs/reference_wuji_architecture.md)，不将其设备协议、关节切片或实机限值复制到 Sharpa。
+
+## 全量 Delta 适配
+
+`full-delta` 使用同一模型结构，加载器启用 `extra_delta_transform=True`；在反归一化后，仅双臂加回本次 chunk 起始实测关节角，双手保持 absolute。执行端仍只接受 absolute，Home 与首帧衔接共用当前实现。权重身份、独立配置和 GPU 验证见 [全量 Delta 部署](../fr3_sharpa_full/DELTA.md)。

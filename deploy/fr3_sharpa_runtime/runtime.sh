@@ -3,8 +3,8 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/deploy/fr3_sharpa_runtime/model_env.sh" "$@"
 set -- "${SHARPA_MODEL_ARGS[@]}"
-# LoRA model validation must happen before any hardware session is entered.
-if [[ "$SHARPA_MODEL_PROFILE" == lora ]]; then
+# Explicit alternate-model validation must happen before any hardware session is entered.
+if [[ "$SHARPA_MODEL_PROFILE" != full ]]; then
   previous=""
   for argument in "$@"; do
     if [[ "$argument" == --execute || "$argument" == --mode=execute || ( "$previous" == --mode && "$argument" == execute ) ]]; then

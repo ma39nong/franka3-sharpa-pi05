@@ -8,8 +8,8 @@ from .model_profiles import get_model_profile
 
 MODEL_PROFILE = get_model_profile(os.environ.get("SHARPA_MODEL_PROFILE", "full"))
 CONFIG_NAME = MODEL_PROFILE.config_name
-# LoRA deliberately ignores generic/full checkpoint settings from local.env.
-# It has no default weight, so a missing LoRA path never falls back to full.
+# Alternate profiles deliberately ignore absolute checkpoint settings from local.env.
+# They have no default weights; missing paths never fall back to the absolute model.
 CHECKPOINT_ENV = MODEL_PROFILE.checkpoint_env
 NORM_STATS_ENV = MODEL_PROFILE.norm_stats_env
 _checkpoint_value = os.environ.get(CHECKPOINT_ENV, MODEL_PROFILE.default_checkpoint)
@@ -58,9 +58,10 @@ def validate_training_contract(training):
         raise ValueError(f"Training action_hz={training.data.action_hz} does not match deployment {ACTION_HZ} Hz")
     if (training.model.paligemma_variant != MODEL_PROFILE.paligemma_variant
             or training.model.action_expert_variant != MODEL_PROFILE.action_expert_variant
-            or training.data.extra_delta_transform):
-        label = "full-finetune" if MODEL_PROFILE.name == "full" else "LoRA"
-        raise ValueError(f"Deployment requires {label} Gemma variants and absolute actions (no delta transform)")
+            or training.data.extra_delta_transform != MODEL_PROFILE.extra_delta_transform):
+        label = "full-finetune" if MODEL_PROFILE.finetune_mode == "full" else "LoRA"
+        action_label = "arm delta, hands absolute" if MODEL_PROFILE.extra_delta_transform else "absolute actions (no delta transform)"
+        raise ValueError(f"Deployment requires {label} Gemma variants and {action_label}")
     if training.model.action_dim != ACTION_DIM or training.model.action_horizon != ACTION_HORIZON:
         raise ValueError("Training action shape does not match the 50x58 deployment contract")
 
@@ -71,6 +72,8 @@ def validate_policy_metadata(metadata):
                 "action_horizon": ACTION_HORIZON, "action_hz": ACTION_HZ,
                 "action_representation": "absolute_joint_position", "warmed_up": True,
                 "action_order": ACTION_ORDER, "camera_mapping": CAMERA_MAPPING}
+    if MODEL_PROFILE.extra_delta_transform:
+        expected["training_action_supervision"] = MODEL_PROFILE.training_action_supervision
     # Robot execution depends on physical actions and checkpoint identity,
     # not on whether the model was trained with adapters or full parameters.
     manifest = CHECKPOINT / "params/manifest.ocdbt"
