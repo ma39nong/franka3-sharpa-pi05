@@ -28,7 +28,7 @@
 
 ## Home 与滚动执行
 
-默认读取指定 poses.yaml 的 powder_weighing 双臂 Home，双手读取 hand_home.json 的固定 Home（由左手实测角按同名关节映射）。模型每轮仍预测 50 帧，执行前 15 帧后重新观测推理，未执行预测不跨轮复用。`--execute-steps` 控制每轮动作数，`--num-chunks` 控制轮数（0 持续运行），不限于前两轮。详细来源和快照同步步骤见 README。
+默认直接从当前实测状态和图像开始推理，不执行 Home 或独立首帧 prepare。显式 `--home` 才读取 poses.yaml 的 powder_weighing 双臂 Home 和 hand_home.json 固定双手 Home，先到位再重新观测推理。模型每轮仍预测 50 帧，执行前 15 帧后重新观测推理，未执行预测不跨轮复用。`--execute-steps` 控制每轮动作数，`--num-chunks` 控制轮数（0 持续运行），不限于前两轮。详细来源和快照同步步骤见 README。
 
 ## 当前三档速度
 

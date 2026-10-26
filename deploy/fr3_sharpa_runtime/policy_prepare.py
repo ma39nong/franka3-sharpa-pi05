@@ -123,11 +123,13 @@ class SlowApproach:
 def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                            *, num_chunks=1, speed_rad_s=0.03,
                            execute_speed_scale=1.0, trace_writer=None, execute_steps=50,
-                           initial_target=None, home_metadata=None, prediction_clip_rad=0.05):
-    """Prepare once, then reobserve/infer/execute; zero chunks means until Ctrl-C.
+                           initial_target=None, home_metadata=None, prediction_clip_rad=0.05,
+                           prepare_initial=True):
+    """Optionally prepare, then infer/execute; zero chunks means until Ctrl-C.
 
     Retain full predictions for audit, execute only the requested prefix, then
     reobserve. An explicit initial target prepares Home without a model call.
+    With prepare_initial=False, infer directly from the initial live observation.
     """
     if type(num_chunks) is not int or num_chunks < 0:
         raise ValueError("num_chunks must be a nonnegative integer (0 = continuous)")
@@ -135,6 +137,9 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
         raise ValueError("execute_steps must be an integer in [1, 50]")
     if not np.isfinite(prediction_clip_rad) or prediction_clip_rad < 0:
         raise ValueError("prediction_clip_rad must be finite and nonnegative")
+    if not prepare_initial and initial_target is not None:
+        raise ValueError("An initial Home target requires prepare_initial=True")
+    initialization = "current" if not prepare_initial else "home" if initial_target is not None else "policy"
     results = []
     count = 0
     prepared = None
@@ -150,25 +155,27 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
             trace_writer.event(name, chunk_index=count, **fields)
 
     try:
-        if initial_target is None:
-            event("initial_inference")
-            metadata, initial_actions, _ = infer(initial_observation)
-            target = as_finite_action_chunk(initial_actions)[0]
-        else:
-            target = target_chunk(initial_target)[0]
-        tolerance = HOME_TOLERANCE_RAD if initial_target is not None else 0.049
-        event("prepare", target=target.tolist(), speed_rad_s=speed_rad_s,
-              tolerance_rad=tolerance, home=home_metadata)
-        prepared = transport.request({"operation": "prepare", "target": target.tolist(),
-                                      "speed_rad_s": speed_rad_s,
-                                      "tolerance_rad": tolerance})
-        if home_metadata is not None:
-            prepared["home"] = home_metadata
-        if prepared.get("status") != "PASS":
-            raise RuntimeError("Prepare did not pass; chunks blocked")
-        event("prepare_complete", report=prepared)
+        event("initialization", mode=initialization)
+        if prepare_initial:
+            if initial_target is None:
+                event("initial_inference")
+                metadata, initial_actions, _ = infer(initial_observation)
+                target = as_finite_action_chunk(initial_actions)[0]
+            else:
+                target = target_chunk(initial_target)[0]
+            tolerance = HOME_TOLERANCE_RAD if initial_target is not None else 0.049
+            event("prepare", target=target.tolist(), speed_rad_s=speed_rad_s,
+                  tolerance_rad=tolerance, home=home_metadata)
+            prepared = transport.request({"operation": "prepare", "target": target.tolist(),
+                                          "speed_rad_s": speed_rad_s,
+                                          "tolerance_rad": tolerance})
+            if home_metadata is not None:
+                prepared["home"] = home_metadata
+            if prepared.get("status") != "PASS":
+                raise RuntimeError("Prepare did not pass; chunks blocked")
+            event("prepare_complete", report=prepared)
         completed = prepared
-        next_observation = None
+        next_observation = None if prepare_initial else initial_observation
         while num_chunks == 0 or count < num_chunks:
             trace_path = None
             event("observation")
@@ -211,11 +218,12 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                     command_duration_s=command_duration,
                     end_to_end_duration_s=time.monotonic()-command_started,
                     execution_report=completed)
-        report = {"mode": "execute", "status": "COMPLETE", "prepare": prepared, "chunks": results,
+        report = {"mode": "execute", "status": "COMPLETE", "initialization": initialization,
+                  "prepare": prepared, "chunks": results,
                   "checkpoint": metadata["checkpoint"], "norm_stats": metadata["norm_stats"],
                   "action_shape": [50, 58], "execute_steps": execute_steps,
                   "action_hz": FPS, "num_chunks": count,
-                  "published": bool(prepared.get("published", False) or any(r.get("published", False) for r in results))}
+                  "published": bool((prepared or {}).get("published", False) or any(r.get("published", False) for r in results))}
         if trace_writer is not None:
             trace_writer.finish_run(report)
         return report
@@ -225,5 +233,6 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
             if trace_path is not None:
                 trace_writer.fail_chunk(trace_path, error=str(error), stage=stage)
             trace_writer.finish_run({"status": status, "stage": stage, "num_chunks": count,
+                                     "initialization": initialization,
                                      "prepare": prepared, "error": str(error) or type(error).__name__})
         raise

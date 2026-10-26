@@ -40,7 +40,7 @@ LoRA 入口不使用全量 `SHARPA_CHECKPOINT`／`SHARPA_NORM_STATS`／日志配
 cd /实际的/部署仓库
 bash deploy/fr3_sharpa_runtime/serve.sh --model lora --help
 bash deploy/fr3_sharpa_runtime/runtime.sh --model lora \
-  --check --initialization home --execute-steps 15 --speed slow --num-chunks 1
+  --check --initialization current --execute-steps 15 --speed slow --num-chunks 1
 ```
 
 此时 `checkpoint: null` 是预期状态，不表示模型已就绪。`serve.sh --check-only` 需要真实 checkpoint，尚不能通过。
@@ -90,8 +90,11 @@ bash deploy/fr3_sharpa_runtime/serve.sh --model lora
 ```bash
 bash deploy/fr3_sharpa_runtime/runtime.sh --model lora \
   --execute --enable-hardware --sharpa-backend sdk_direct \
-  --initialization home --home-task powder_weighing \
   --prepare-speed-rad-s 0.03 --execute-steps 15 --speed slow --num-chunks 1
 ```
+
+默认执行命令从当前状态开始。需要先回固定双臂／双手 Home 时，在该执行命令末尾加 `--home`（等效 `--initialization home`）；Home 后会继续观测、推理和执行。原命令若还带 `--initialization home`，请删除后再用于中途恢复。
+
+Ctrl-C 仍按现有流程失能确认并清理硬件；再次执行前先运行 `bash deploy/fr3_sharpa_runtime/hardware.sh up`。重新启动读取此时的状态和图像，不恢复上次未执行的动作，也不保证失能期间保持抓取。
 
 缺少或误选权重会在进入硬件会话管理器之前失败。完成真实单轮验证后，才按实际任务需要调整为 `--num-chunks 0` 持续重推。停止和硬件清理行为与全量版本相同，见 [共享 runtime 说明](../fr3_sharpa_runtime/README.md)。

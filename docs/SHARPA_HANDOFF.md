@@ -26,13 +26,13 @@ GitLab 地址需要相应访问权限。硬件仓库的 `portable_deps/litchi_ha
 | 硬件依赖包 | `portable_deps/litchi_hardware`、其 Pixi ros2 环境与锁文件、Sharpa 供应商库，以及硬件工程安装所要求的其他 portable_deps | 现场部署 |
 | 本机硬件配置 | 硬件仓库 `docker/.env`、workcell 配置、`data_collection/config/cameras.yaml`、左右设备身份及 SDK 绑定信息 | 现场部署 |
 | 双臂 Home | `poses.yaml`，包含 `tasks.powder_weighing.home.left/right` 各 7 个具名关节角，单位 rad | 固定 Home 部署 |
-| 固定双手 Home | `.deployment/hand_home.json`；`unit: rad`，`tasks.powder_weighing.left/right` 各含 22 个 `joint_names` 和对应 `positions` | 当前默认固定 Home 部署 |
+| 固定双手 Home | `.deployment/hand_home.json`；`unit: rad`，`tasks.powder_weighing.left/right` 各含 22 个 `joint_names` 和对应 `positions` | 显式 `--home` 回位时使用 |
 | 数据与任务文本 | 有名称/频率元数据的 LeRobot 数据和 `meta/tasks.jsonl`；服务器路径不是下载地址 | 真实样本研究、效果评估 |
 | 原始训练记录 | 28 服务器已找到 AB4 UI run.json、训练 JSON、源码快照和日志；见下方记录路径。仍需交接这些文件及其数据/环境依赖 | 重训复现 |
 
 `train_state/` 用于训练恢复；当前推理加载 `params/` 和配套 stats，不需要 optimizer state。不要将另一实验的 stats 配给当前 checkpoint。
 
-固定双手 Home 当前来自 2026-10-23 的现场采集：左手实测角用于左手，右手按同名关节使用相同数值，不做符号翻转。这是本次现场标定约定，不代表任何 Sharpa 装置都可直接采用。文件缺失时当前默认 Home 会失败；双臂快照同步工具不会自动生成该文件，也不会代替另一台设备的标定。
+固定双手 Home 当前来自 2026-10-23 的现场采集：左手实测角用于左手，右手按同名关节使用相同数值，不做符号翻转。这是本次现场标定约定，不代表任何 Sharpa 装置都可直接采用。文件缺失时显式 Home 模式会失败；双臂快照同步工具不会自动生成该文件，也不会代替另一台设备的标定。
 
 ## 从零建立模型环境
 
@@ -224,3 +224,7 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 ## 同仓库选择全量或 LoRA
 
 `chunk-base-test` 现在共存两种模型配置；默认全量部署流程继续有效。共享入口 `serve.sh` 和 `runtime.sh` 可添加 `--model full` 或 `--model lora`，两端选择须一致；`serve.sh --list-models` 可离线查看模型注册。机器配置和 Home 共用，LoRA 独立使用 `.deployment/lora.env`，默认端口 18766。新的 30 Hz／58D absolute LoRA 尚无 checkpoint，权重接入、GPU smoke 和现场步骤见 [LoRA 部署说明](../deploy/fr3_sharpa_lora/README.md)。
+
+## 中途恢复执行
+
+当前 SDK direct 默认从启动后的实测状态和相机图像推理，不自动回 Home。需要回位时在执行命令后加 `--home`，到位停稳后继续任务；旧 `--initialization home` 等效。中途 Ctrl-C 的失能确认和容器清理流程保持不变，重启前需重新运行 `hardware.sh up`；从当前状态恢复的命令应去掉 `--home`、`--initialization home` 和 `--prepare-policy-first`。每次重启重新观测推理，旧 chunk 不复用。

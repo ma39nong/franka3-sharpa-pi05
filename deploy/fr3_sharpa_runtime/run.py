@@ -128,7 +128,7 @@ def observation_after_completion(args, report):
 
 
 def execute_policy_prepare(args):
-    """Explicit hardware path: Home/first target, then repeated prediction prefixes."""
+    """Live-state execution, with optional Home/policy prepare before prediction prefixes."""
     import shlex
     from .motion_worker import MotionWorker
     from .policy_prepare import prepare_and_run_chunks
@@ -145,7 +145,8 @@ def execute_policy_prepare(args):
              f"export PYTHONPATH={shlex.quote(repo)}:{shlex.quote(str(GELLO_REPO))}:{shlex.quote(str(core))}:\"${{PYTHONPATH:-}}\"; "
              f"exec python -m {worker_module} --enable-hardware")
     home_arms = home_metadata = None
-    if args.sharpa_backend == "sdk_direct" and getattr(args, "initialization", "policy") == "home":
+    initialization = getattr(args, "initialization", "current") if args.sharpa_backend == "sdk_direct" else "policy"
+    if initialization == "home":
         from .home_pose import load_home
         home_arms, home_metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
     worker = None
@@ -184,8 +185,9 @@ def execute_policy_prepare(args):
                     current = live_observation(args.ros_overlay, args.prompt)
             raise RuntimeError("Observation expired during inference; no new target/chunk will be sent")
         initial = live_observation(args.ros_overlay, args.prompt)
-        # Home mode first settles at the fixed pose; policy mode retains its warmup inference.
-        first = infer(initial) if home_arms is None else None
+        # Only legacy policy prepare consumes an inference before the chunk loop.
+        # Current mode uses this fresh observation for its first executable prediction.
+        first = infer(initial) if initialization == "policy" else None
         initial_used = False
         def cached_first_infer(observation):
             nonlocal initial_used
@@ -210,6 +212,7 @@ def execute_policy_prepare(args):
             trace_writer=trace_writer,
             execute_steps=getattr(args, "execute_steps", 50),
             initial_target=initial_target, home_metadata=home_metadata,
+            prepare_initial=initialization != "current",
             prediction_clip_rad=getattr(args, "prediction_clip_rad", 0.05))
         if trace_writer is not None:
             result["execution_traces"] = trace_writer.paths
@@ -364,15 +367,18 @@ def main() -> None:
                         help="Execute first N of 50 predicted actions, then reobserve/reinfer (default 15)")
     parser.add_argument("--prediction-clip-rad", type=float, default=0.05,
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
-    parser.add_argument("--initialization", choices=("home", "policy"), default="home",
-                        help="sdk_direct: fixed arm and hand Home, or legacy policy first target")
+    initialization = parser.add_mutually_exclusive_group()
+    initialization.add_argument("--initialization", choices=("current", "home", "policy"),
+                                help="sdk_direct: current live state (default), fixed Home, or legacy policy first target")
+    initialization.add_argument("--home", dest="initialization", action="store_const", const="home",
+                                help="sdk_direct: go to fixed arm/hand Home, then reobserve and execute")
     parser.add_argument("--home-poses", type=Path, default=Path(os.environ.get(
         "SHARPA_HOME_POSES", str(Path(__file__).resolve().parents[2] / ".deployment/operator_poses.yaml"))))
     parser.add_argument("--home-task", default="powder_weighing")
     parser.add_argument("--hand-home", type=Path, default=Path(__file__).resolve().parents[2] / ".deployment/hand_home.json",
                         help="Named 22D targets for both hands; required in fixed Home mode")
     parser.add_argument("--num-chunks", type=int, default=1,
-                        help="Number of replanning rounds after prepare; 0 repeats until Ctrl-C")
+                        help="Number of replanning rounds; 0 repeats until Ctrl-C")
     parser.add_argument("--policy-url", default=config.POLICY_URL)
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
@@ -387,7 +393,12 @@ def main() -> None:
     if not np.isfinite(args.prediction_clip_rad) or args.prediction_clip_rad < 0:
         parser.error("--prediction-clip-rad must be finite and nonnegative")
     if args.prepare_policy_first and args.sharpa_backend == "sdk_direct":
+        if args.initialization not in (None, "policy"):
+            parser.error("--prepare-policy-first conflicts with --home or --initialization current/home")
         args.initialization = "policy"
+    args.initialization = args.initialization or "current"
+    if args.sharpa_backend == "litchibot" and args.initialization == "home":
+        parser.error("--home/--initialization home requires sdk_direct")
     if args.execute_steps is None:
         args.execute_steps = 15 if args.sharpa_backend == "sdk_direct" else 50
     if not 1 <= args.execute_steps <= config.ACTION_HORIZON:
@@ -419,7 +430,9 @@ def main() -> None:
                           "num_chunks": args.num_chunks, "action_hz": config.ACTION_HZ,
                           "execute_steps": args.execute_steps, "initialization": args.initialization,
                           "home_poses": str(args.home_poses), "home_task": args.home_task,
-                          "hand_initialization": "fixed_named_hand_home",
+                          "hand_initialization": ("fixed_named_hand_home" if args.initialization == "home"
+                                                  else "policy_first_target" if args.initialization == "policy"
+                                                  else "current_measured_positions"),
                           "hand_home": str(args.hand_home),
                           "action_shape": [config.ACTION_HORIZON, config.ACTION_DIM],
                           "checkpoint": str(config.CHECKPOINT) if config.CHECKPOINT is not None else None,
@@ -435,7 +448,7 @@ def main() -> None:
             parser.error("execute requires --enable-hardware and live ROS observations; recorded samples are forbidden")
         if args.sharpa_backend == "sdk_direct":
             if args.prepare_config is not None:
-                parser.error("sdk_direct uses --initialization home/policy; --prepare-config belongs to the legacy backend")
+                parser.error("sdk_direct uses --initialization current/home/policy; --prepare-config belongs to the legacy backend")
             args.prepare_policy_first = True
         elif args.prepare_config is None and not args.prepare_policy_first:
             parser.error("legacy execute requires --prepare-config or --prepare-policy-first")

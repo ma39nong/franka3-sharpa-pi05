@@ -1,22 +1,16 @@
-# Policy-first prepare
+# 当前状态启动与可选 Prepare
 
-当前 prepare 使用 `sdk_direct` 后端：
-
-1. 获取当前 FR3、Sharpa 和相机 observation。
-2. 对 policy 首帧绝对 58D target 做低速关节空间插值。
-3. FR3 命令仍经过 Safety Gateway；Sharpa 命令经过 `SharpaSdkDirectExecutor`。
-4. 检查 joint limits、slew、feedback freshness、timestamp 和 watchdog。
-5. 到达并稳定后重新采集 observation，再推理并执行完整 50 帧 chunk。
+SDK direct 默认 `--initialization current`：采集当前双臂、双手实测关节状态和三路图像，推理 50 帧，低速衔接到首帧并执行前 15 帧，再重新观测推理。启动时不读取固定 Home，不先发送 Home 或独立首帧 prepare。
 
 ```bash
-./runtime.sh --execute --enable-hardware \
-  --prepare-speed-rad-s 0.03 \
-  --execute-speed-scale 0.1 \
-  --num-chunks 0
+bash deploy/fr3_sharpa_runtime/runtime.sh --execute --enable-hardware \
+  --prepare-speed-rad-s 0.03 --speed slow --num-chunks 0
 ```
 
-旧 configured-pose、permit 和 handoff 说明保留在 legacy 实现中，不是当前 sdk_direct 路径。
+需要先回固定位置时，在同一执行命令末尾添加 `--home`。它等效于 `--initialization home`：双臂和双手一起低速到达固定 Home，停稳后重新观测并继续任务。Home 配置和到位判据见 [README](README.md)。
 
-`--execute` 默认选择 sdk_direct 和 policy-first prepare。prepare 只在起始时执行一次并要求实测到位；其后每段重新观测、重新推理，低速衔接新首帧，再执行完整 50 帧。0 表示运行到 Ctrl-C，正整数指定 chunk 数量。
+显式 `--initialization policy` 或旧 `--prepare-policy-first` 保留模型首帧 prepare：先推理出首帧目标，低速到位，再重新观测推理执行。该模式与 `--home`、显式 `--initialization current` 互斥。
 
-首帧衔接与慢放均作用于绝对关节目标，不重新叠加当前状态。手部跳变量在实际下发帧上检查，关节限位、反馈时效、SDK watchdog 和 FR3 网关保留。该路径是关节插值，不包含碰撞规划。
+Ctrl-C 后仍执行双手失能确认和硬件清理，不自动回位。恢复任务时先 `bash deploy/fr3_sharpa_runtime/hardware.sh up`，再使用不带 Home／policy prepare 选项的执行命令，重新采集当时的状态与图像。失能期间是否仍握住物体由设备实际状态决定。
+
+三种启动模式都保留动作范围、slew、反馈时效、watchdog 和 FR3 网关检查。首帧衔接和可选 prepare 都是关节空间插值。模型动作保持 absolute，不重复叠加当前状态。`--execute-steps` 默认 15，`--num-chunks 0` 持续到 Ctrl-C。

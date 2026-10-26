@@ -80,7 +80,7 @@ cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 bash deploy/fr3_sharpa_runtime/hardware.sh check
 bash deploy/fr3_sharpa_runtime/serve.sh --check-only
 bash deploy/fr3_sharpa_runtime/runtime.sh \
-  --check --initialization home --execute-steps 15 --speed slow --num-chunks 0
+  --check --initialization current --execute-steps 15 --speed slow --num-chunks 0
 
 # 以下命令启动现场硬件服务
 bash deploy/fr3_sharpa_runtime/hardware.sh up
@@ -114,8 +114,6 @@ bash deploy/fr3_sharpa_runtime/runtime.sh \
   --execute \
   --enable-hardware \
   --sharpa-backend sdk_direct \
-  --initialization home \
-  --home-task powder_weighing \
   --prepare-speed-rad-s 0.03 \
   --execute-steps 15 \
   --speed slow \
@@ -124,11 +122,14 @@ bash deploy/fr3_sharpa_runtime/runtime.sh \
 
 执行过程与参数：
 
-- 双臂读取 poses.yaml 快照中的 `tasks.powder_weighing.home`，双手读取 `.deployment/hand_home.json` 的固定目标，一起低速到位并稳定。**当前版本双手不是保持启动时姿态。**
+- 默认从启动后的实测双臂、双手状态与三路图像直接推理，不先回 Home，也不执行独立的模型首帧 prepare。模型每段首帧仍从实测姿态低速衔接。
+- 需要先回位时，在同一执行命令后添加 `--home`：双臂读取 `tasks.powder_weighing.home`，双手读取 `.deployment/hand_home.json`，一起低速到位并稳定，再重新观测推理。旧的 `--initialization home` 等效。
 - 每轮模型预测 50×58，只执行索引 0–14 的 15 个动作，丢弃后 35 个，再采集真实观测并重新推理。完整预测和执行步数写入日志。
 - `--num-chunks 0` 持续运行，不限于 chunk1/chunk2；任意正整数表示运行对应轮数。Ctrl-C 或观测、推理、执行失败会结束循环。没有自动判断番茄任务完成的功能。
 - `--speed slow` 对应时间倍率 0.1，15 帧主体为 141 个 30 Hz 下发点，约 4.70 秒；不含首帧衔接、观测和推理。medium=0.5、fast=1.0；不指定速度时默认 fast。`--speed` 不与 `--execute-speed-scale` 混用。
-- prepare 速度为 0.03 rad/s，采用关节空间插值，不包含环境碰撞规划。当前代码还默认启用手部预测小幅越界裁剪 `--prediction-clip-rad 0.05`，其范围及审计含义见 [runtime 说明](deploy/fr3_sharpa_runtime/README.md#预测动作小幅越界裁剪)。
+- 首帧衔接及显式 Home prepare 的速度为 0.03 rad/s，采用关节空间插值，不包含环境碰撞规划。当前代码还默认启用手部预测小幅越界裁剪 `--prediction-clip-rad 0.05`，其范围及审计含义见 [runtime 说明](deploy/fr3_sharpa_runtime/README.md#预测动作小幅越界裁剪)。
+
+中途 Ctrl-C 后恢复时，先重新运行 `bash deploy/fr3_sharpa_runtime/hardware.sh up`，再使用上述不带 Home 选项的执行命令；每次重启读取当前状态，不复用旧 chunk。
 
 ### 停止顺序
 

@@ -53,14 +53,15 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 
 `setup_local.py` 还会从硬件仓库现有的 `config/modes/teleop_control.yaml` 生成独立的 `.deployment/teleop_openpi.yaml`：只增加 `openpi` 允许来源，保留原有来源、限位、速度、超时及接触检查设置。Compose 将此文件只读挂载给网关，不修改硬件仓库文件。SDK direct 在连接灵巧手前检查网关及其 `allowed_sources`，来源未获准时终止。
 
-## 固定 Home 与每轮执行步数
+## 从当前状态启动、可选 Home 与每轮执行步数
 
 固定 Home 到位容差为 **0.02 rad**（全部 58 个关节），仍要求相邻反馈变化不超过 0.005 rad 并连续稳定 0.5 秒。反馈新鲜度、原生限位和速度检查继续生效。
 
-sdk_direct 默认 `--initialization home --home-task powder_weighing --execute-steps 15`。
-先把双臂移动到用户指定 poses.yaml 的 `tasks.powder_weighing.home`，双手读取 `.deployment/hand_home.json` 的固定关节目标；Home 到位并稳定后才采集新观测进行任务推理。双臂 Home 使用原文件完整精度，不使用截图里的四舍五入值。
+sdk_direct 默认 `--initialization current --execute-steps 15`。启动后采集当前双臂、双手实测关节状态和三路图像，直接推理执行，不读取 Home 文件，不发送 Home 或模型首帧 prepare 请求。每段首帧仍由现有执行器从最新实测姿态低速衔接。
 
-手部 Home 已于 2026-10-23 14:23（北京时间）采集：左手 22 个实测关节角作为左手固定 Home；右手按同名关节使用相同的 rad 数值，不做符号翻转。`--hand-home` 默认指向 `.deployment/hand_home.json`，与双臂共用一次 58D prepare、到位和稳定检查。每次启动读取这份固定配置，不重新将当时的位置当作 Home；Ctrl-C 不自动回位，下次启动再执行完整 Home。该手部配置独立于双臂快照，同步 poses.yaml 不会覆盖它。文件缺失或关节名称/单位错误时，固定 Home 启动失败，不回退为保持实测姿态。
+需要先回固定位置时，在执行命令后加 `--home`（等效 `--initialization home`）：先把双臂移动到 poses.yaml 的 `tasks.powder_weighing.home`，双手移动到 `.deployment/hand_home.json` 固定目标；到位并稳定后才采集新观测进行任务推理。`--home` 是执行前回位选项，回位后继续任务执行。双臂 Home 使用原文件完整精度。
+
+手部 Home 已于 2026-10-23 14:23（北京时间）采集：左手 22 个实测关节角作为左手固定 Home；右手按同名关节使用相同的 rad 数值，不做符号翻转。`--hand-home` 默认指向 `.deployment/hand_home.json`，与双臂共用一次 58D prepare、到位和稳定检查。只有显式选择 Home 模式才读取这份固定配置；Ctrl-C 不自动回位，下次默认从当前状态推理。该手部配置独立于双臂快照，同步 poses.yaml 不会覆盖它。文件缺失或关节名称/单位错误时，固定 Home 启动失败，不回退为保持实测姿态。
 
 源文件 `/home/descfly/franka_teleop_data/operator_gui/poses.yaml` 是 root 专属读权限，部署读取 `.deployment/operator_poses.yaml` 快照。初次配置或 GUI 更新 Home 后运行以下命令同步；`--via-docker` 只用无网络、只读挂载读取原文件，不启动设备，也不修改权限：
 
@@ -69,7 +70,7 @@ source deploy/fr3_sharpa_runtime/env.sh
 "$SHARPA_PYTHON" -m deploy.fr3_sharpa_runtime.home_pose --via-docker
 ```
 
-快照配套 source.json 记录原始路径和 SHA256，初始化日志包含该来源信息。不同位置可通过 `--home-poses` 和 `--home-task` 指定。显式 `--initialization policy` 才使用原来的模型首帧 prepare。
+快照配套 source.json 记录原始路径和 SHA256，初始化日志包含该来源信息。不同位置可通过 `--home-poses` 和 `--home-task` 指定。显式 `--initialization policy` 才使用原来的模型首帧 prepare；`--prepare-policy-first` 仍是该旧模式的别名，不能与 `--home` 或显式 `--initialization current` 混用。
 
 每次模型仍预测完整 50×58；执行端只执行索引 0–14，然后丢弃剩余 35 帧、重新观测和推理。模型 horizon 不变。可用 `--execute-steps 1..50` 修改；`--execute-steps 50` 才执行全部预测。日志保留完整预测及计划/实际执行步数，末帧误差对照最后实际执行的动作。
 
@@ -145,7 +146,15 @@ bash deploy/fr3_sharpa_runtime/runtime.sh \
   --execute --enable-hardware --speed slow --execute-steps 15 --num-chunks 1
 ```
 
-流程：读取固定双臂 Home、双手使用固定 Home → 低速到位并稳定 → 采集三路 RGB 和状态并推理 50 帧 → 从实测姿态衔接首帧 → 执行前 15 帧 → 新观测、新推理并重复。prepare 默认 0.03 rad/s，采用关节空间直线插值，没有环境碰撞规划。
+默认流程：采集当前三路 RGB 和实测关节状态 → 推理 50 帧 → 从实测姿态衔接首帧 → 执行前 15 帧 → 新观测、新推理并重复。显式 `--home` 则在这之前增加固定双臂／双手 Home 到位与停稳。
+
+```bash
+# 与上面的执行命令相同，但先回 Home，再开始任务
+bash deploy/fr3_sharpa_runtime/runtime.sh \
+  --execute --enable-hardware --speed slow --execute-steps 15 --num-chunks 1 --home
+```
+
+中途 Ctrl-C 后仍会失能确认并清理所属硬件容器。重新开始时先 `bash deploy/fr3_sharpa_runtime/hardware.sh up`，再运行不带 `--home`／`--initialization home`／`--prepare-policy-first` 的执行命令。此时使用重新采集的实际状态；失能期间的抓取是否保持取决于现场设备。首帧衔接与显式 Home prepare 默认 0.03 rad/s，使用关节空间直线插值。
 
 | 档位 | 时间倍率 | 15 帧主体下发点 | 30 Hz 主体时长 |
 | --- | ---: | ---: | ---: |

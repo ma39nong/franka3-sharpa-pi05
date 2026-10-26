@@ -126,7 +126,7 @@ assert str(c.NORM_STATS) == '/full/norm_stats.json'
     assert result.returncode == 0, result.stderr
 
 
-def test_lora_wrapper_reads_its_own_defaults_and_preserves_home_prefix(lora_checkpoint, tmp_path):
+def test_lora_wrapper_reads_its_own_defaults_and_starts_from_current_state(lora_checkpoint, tmp_path):
     checkpoint, _ = lora_checkpoint
     output = write_defaults(checkpoint, output=tmp_path / "lora.env", port=18767)
     before = output.read_bytes()
@@ -142,8 +142,8 @@ def test_lora_wrapper_reads_its_own_defaults_and_preserves_home_prefix(lora_chec
     assert report["checkpoint"] == str(checkpoint)
     assert report["policy_url"] == "ws://127.0.0.1:18767"
     assert report["model_profile"] == "lora"
-    assert report["execute_steps"] == 15 and report["initialization"] == "home"
-    assert report["hand_initialization"] == "fixed_named_hand_home"
+    assert report["execute_steps"] == 15 and report["initialization"] == "current"
+    assert report["hand_initialization"] == "current_measured_positions"
     assert report["hardware_output"] is False
 
 
@@ -180,7 +180,7 @@ def test_unified_runtime_selects_model_without_changing_execution(model, lora_ch
     assert report["model_profile"] == model
     assert report["policy_url"].endswith(":18765" if model == "full" else ":18766")
     assert report["checkpoint"] == ("/full/checkpoint" if model == "full" else str(checkpoint))
-    assert report["execute_steps"] == 15 and report["initialization"] == "home"
+    assert report["execute_steps"] == 15 and report["initialization"] == "current"
     assert report["num_chunks"] == 2 and report["execute_speed_scale"] == 0.5
     assert report["hardware_output"] is False
 
