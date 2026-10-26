@@ -57,7 +57,7 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 
 ### 启动前：需要时同步双臂 Home
 
-GUI 修改过双臂 Home 后，先同步到部署快照；没有更新时可跳过。同步不会覆盖 `.deployment/hand_home.json` 的固定双手配置。
+仅在选择 home 模式且 GUI 修改过双臂 Home 后，需要先同步到部署快照；current 模式不需要这一步。同步不会覆盖 `.deployment/hand_home.json` 的固定双手配置。
 
 ```bash
 cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
@@ -72,15 +72,18 @@ source deploy/fr3_sharpa_runtime/env.sh
 
 ### 终端一：检查配置并启动硬件依赖
 
-先结束已有遥操任务和旧 `sharpa_driver`，避免与 sdk_direct 同时占用设备。前三条命令只检查配置，不连接设备；`hardware.sh check` 成功时可能没有输出。
+先结束已有遥操任务、相机采集和旧 `sharpa_driver`，避免同时占用设备。以下检查命令不连接设备；`hardware.sh check` 成功时可能没有输出。
 
 ```bash
 cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 
 bash deploy/fr3_sharpa_runtime/hardware.sh check
-bash deploy/fr3_sharpa_runtime/serve.sh --check-only
-bash deploy/fr3_sharpa_runtime/runtime.sh \
+bash deploy/fr3_sharpa_full/serve.sh --check-only
+# 分别显示 current 与 home 配置；这两条都不会执行运动
+bash deploy/fr3_sharpa_full/runtime.sh \
   --check --initialization current --execute-steps 15 --speed slow --num-chunks 0
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --check --initialization home --execute-steps 15 --speed slow --num-chunks 0
 
 # 以下命令启动现场硬件服务
 bash deploy/fr3_sharpa_runtime/hardware.sh up
@@ -103,9 +106,11 @@ bash deploy/fr3_sharpa_full/serve.sh
 Warmup OK: actions=(50, 58), full, absolute, 30 Hz
 ```
 
-### 终端三：启动机器人持续执行
+### 终端三：选择 current 或 home（二选一）
 
-**以下命令连接设备并发送运动指令。**首次现场验证应先将最后的 `--num-chunks 0` 改成 `--num-chunks 1`，完成单轮检查后再持续运行。
+**以下两条命令都会连接设备并发送运动指令，选择其中一条执行，不要同时运行。**两种模式共用终端一和终端二，区别仅是执行前是否先回固定 Home。首次现场验证，将所选命令的 `--num-chunks 0` 改为 `--num-chunks 1`；确认单轮后再持续运行。
+
+**A．current：从当前位置开始，不先回 Home。**适合从当前现场开始或中断后重新推理。采集当前双臂、双手状态及三路图像，再低速衔接到预测首帧；不会读取固定 Home 目标。
 
 ```bash
 cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
@@ -114,37 +119,49 @@ bash deploy/fr3_sharpa_full/runtime.sh \
   --execute \
   --enable-hardware \
   --sharpa-backend sdk_direct \
+  --initialization current \
   --prepare-speed-rad-s 0.03 \
   --execute-steps 15 \
   --speed slow \
   --num-chunks 0
 ```
 
-执行过程与参数：
-
-- 默认从启动后的实测双臂、双手状态与三路图像直接推理，不先回 Home，也不执行独立的模型首帧 prepare。模型每段首帧仍从实测姿态低速衔接。
-- 需要先回位时，在同一执行命令后添加 `--home`：双臂读取 `tasks.powder_weighing.home`，双手读取 `.deployment/hand_home.json`，一起低速到位并稳定，再重新观测推理。旧的 `--initialization home` 等效。
-- 每轮模型预测 50×58，只执行索引 0–14 的 15 个动作，丢弃后 35 个，再采集真实观测并重新推理。完整预测和执行步数写入日志。
-- `--num-chunks 0` 持续运行，不限于 chunk1/chunk2；任意正整数表示运行对应轮数。Ctrl-C 或观测、推理、执行失败会结束循环。没有自动判断番茄任务完成的功能。
-- `--speed slow` 对应时间倍率 0.1，15 帧主体为 141 个 30 Hz 下发点，约 4.70 秒；不含首帧衔接、观测和推理。medium=0.5、fast=1.0；不指定速度时默认 fast。`--speed` 不与 `--execute-speed-scale` 混用。
-- 首帧衔接及显式 Home prepare 的速度为 0.03 rad/s，采用关节空间插值，不包含环境碰撞规划。当前代码还默认启用手部预测小幅越界裁剪 `--prediction-clip-rad 0.05`，其范围及审计含义见 [runtime 说明](deploy/fr3_sharpa_runtime/README.md#预测动作小幅越界裁剪)。
-
-需要先回 Home 再持续执行时，使用：
+**B．home：先回固定双臂、双手 Home，再开始任务。**双臂使用 `tasks.powder_weighing.home`，双手使用 `.deployment/hand_home.json`；到位并稳定后重新采集观测、推理和执行。缺少 Home 配置时会报错。`--home` 是 `--initialization home` 的别名，以下统一使用完整参数。
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
+
 bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --speed slow --num-chunks 0 --home
+  --execute \
+  --enable-hardware \
+  --sharpa-backend sdk_direct \
+  --initialization home \
+  --prepare-speed-rad-s 0.03 \
+  --execute-steps 15 \
+  --speed slow \
+  --num-chunks 0
 ```
 
-中途 Ctrl-C 后，等双手失能确认和硬件清理结束。若推理终端仍在运行，在执行终端按顺序重新启动硬件、从当前状态继续：
+两种模式都每轮预测 50×58，只执行前 15 个动作，然后重新观测、重新推理。`--num-chunks 0` 表示持续循环，不限于 chunk1/chunk2；正整数表示指定轮数，没有自动识别任务完成的逻辑。
+
+共有参数说明：
+
+- `--speed slow` 对应时间倍率 0.1，15 个动作的主体为 141 个 30 Hz 下发点，约 4.70 秒，不含首帧衔接、观测及推理。medium=0.5、fast=1.0；不指定速度时默认 fast。
+- `--prepare-speed-rad-s 0.03` 同时用于首帧衔接和 home 模式的回位；采用关节空间插值，不包含环境碰撞规划。current 模式也保留首帧低速衔接。
+- 手部预测的小幅越界裁剪默认 `--prediction-clip-rad 0.05`，范围与审计含义见 [runtime 说明](deploy/fr3_sharpa_runtime/README.md#预测动作小幅越界裁剪)。
+
+### 中途停止后重新启动
+
+在终端三按 Ctrl-C 后，等待双手失能读回确认和硬件会话清理结束。终端二的推理服务若仍在运行，可保持不动；若已停止，先重新启动终端二。
+
+在终端一重新启动硬件依赖：
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 bash deploy/fr3_sharpa_runtime/hardware.sh up
-bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --speed slow --num-chunks 0
 ```
 
-恢复命令不带 `--home`、`--initialization home` 或 `--prepare-policy-first`。每次重启读取当前实测状态和图像，不复用旧 chunk；若推理服务已停止，先重新启动终端二。失能期间是否保持抓取取决于设备实际状态。
+然后在终端三重新选择上面的 **A（current）** 或 **B（home）** 完整命令。从中途现场继续时选择 current；需要先回固定初始位置时选择 home。新一轮读取当前实测状态和图像，不恢复上次剩余的旧动作。失能期间是否保持抓取取决于设备实际状态。
 
 ### 停止顺序
 
@@ -178,8 +195,8 @@ cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 source deploy/fr3_sharpa_runtime/env.sh
 "$SHARPA_PYTHON" -m pytest deploy/fr3_sharpa_runtime/tests -q
 bash deploy/fr3_sharpa_runtime/hardware.sh check
-bash deploy/fr3_sharpa_runtime/serve.sh --check-only
-bash deploy/fr3_sharpa_runtime/serve.sh --smoke-only
+bash deploy/fr3_sharpa_full/serve.sh --check-only
+bash deploy/fr3_sharpa_full/serve.sh --smoke-only
 ```
 
 当前 4000 步权重已通过真实 GPU 加载及假观测推理，输出有限的 `(50, 58)`。这证明模型加载与动作接口可用，不代表现场任务成功。执行记录默认位于 `~/.local/state/fr3_sharpa_runtime/execution_traces/`。

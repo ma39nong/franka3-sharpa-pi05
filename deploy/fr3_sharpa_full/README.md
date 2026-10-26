@@ -6,14 +6,14 @@
 
 沿用工作机已有 `.deployment/local.env`，不需要迁移或重新生成。权重使用 `SHARPA_CHECKPOINT`，统计使用 checkpoint 自带的唯一 `assets/**/norm_stats.json` 或显式 `SHARPA_NORM_STATS`；端口默认 18765，可用 `SHARPA_FULL_PORT` 设置。日志沿用 `SHARPA_EXECUTION_TRACE_DIR`，默认 `~/.local/state/fr3_sharpa_runtime/execution_traces/`。
 
-当前模型：30 Hz、58D absolute、horizon 50，`gemma_2b` + `gemma_300m`。每轮默认执行前 15 帧，再重新观测推理。默认直接从当前实测关节状态与相机图像推理执行，不自动回 Home；显式添加 `--home` 才先到双臂 powder_weighing Home 和固定双手 Home，再重新观测执行。
+当前模型：30 Hz、58D absolute、horizon 50，`gemma_2b` + `gemma_300m`。每轮默认执行前 15 帧，再重新观测推理。日常启动明确选择 `--initialization current` 或 `--initialization home`，具体命令见下方终端三。省略该参数时默认 current。
 
 ## 离线检查
 
 从仓库根目录运行；`--check` 不需要机器人或模型权重：
 
 ```bash
-bash deploy/fr3_sharpa_full/runtime.sh --check --speed slow --num-chunks 1
+bash deploy/fr3_sharpa_full/runtime.sh --check --initialization current --execute-steps 15 --speed slow --num-chunks 1
 ```
 
 以下两条需要工作机真实 checkpoint；第二条需要 GPU，仅使用假观测：
@@ -23,58 +23,103 @@ bash deploy/fr3_sharpa_full/serve.sh --check-only
 bash deploy/fr3_sharpa_full/serve.sh --smoke-only --report .deployment/full_smoke.json
 ```
 
-## 工作机启动
+## 三个终端启动（全量模型）
 
-先按现有流程检查并启动共享硬件：
+以下命令用于当前已配置的工作机，自动读取 `.deployment/local.env`，不需要手动激活 Python 环境。新机器先按 [交接说明](../../docs/SHARPA_HANDOFF.md)配置。Home 来源、快照同步及其他现场细节见 [根 README](../../README.md#完整启动持续执行与停止)。
+
+### 终端一：检查配置并启动硬件依赖
+
+先结束已有遥操任务、相机采集和旧 sharpa_driver，避免争用设备。先运行检查，确认无误后再运行硬件启动命令。
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
+
 bash deploy/fr3_sharpa_runtime/hardware.sh check
+bash deploy/fr3_sharpa_full/serve.sh --check-only
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --check --initialization current --execute-steps 15 --speed slow --num-chunks 0
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --check --initialization home --execute-steps 15 --speed slow --num-chunks 0
+
+# 以下命令启动现场硬件服务
 bash deploy/fr3_sharpa_runtime/hardware.sh up
+docker ps --format 'table {{.Names}}\t{{.Status}}'
 ```
 
-模型终端：
+`hardware.sh check` 成功时可能没有输出；配置检查通过不代表实时设备已就绪。
+
+### 终端二：启动全量模型推理服务
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 bash deploy/fr3_sharpa_full/serve.sh
 ```
 
-执行终端，以下命令会驱动机器人：
+等待 `Warmup OK: actions=(50, 58), full, absolute, 30 Hz` 和监听 `127.0.0.1:18765` 的信息，保持此终端运行，再启动执行端。
+
+### 终端三：选择 current 或 home（二选一）
+
+**以下两条命令都会连接设备并发送运动指令，选择其中一条执行，不要同时运行。**两种模式共用终端一和终端二，区别仅是执行前是否先回固定 Home。首次现场验证，将所选命令的 `--num-chunks 0` 改为 `--num-chunks 1`；确认单轮后再持续运行。
+
+**A．current：从当前位置开始，不先回 Home。**适合从当前现场开始或中断后重新推理。采集当前双臂、双手状态及三路图像，再低速衔接到预测首帧；不会读取固定 Home 目标。
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
+
 bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --sharpa-backend sdk_direct \
-  --prepare-speed-rad-s 0.03 --execute-steps 15 --speed slow --num-chunks 1
+  --execute \
+  --enable-hardware \
+  --sharpa-backend sdk_direct \
+  --initialization current \
+  --prepare-speed-rad-s 0.03 \
+  --execute-steps 15 \
+  --speed slow \
+  --num-chunks 0
 ```
 
-确认单轮后，按任务需要设置 `--num-chunks 0` 连续运行。执行终端 Ctrl-C 会先请求双手失能并读回确认（默认最多 120 秒、每手 120 次），随后清理其所属硬件会话；确认失败会在终端明确输出 ERROR/FAIL。参数和异常情况见 [退出确认说明](../fr3_sharpa_runtime/README.md)。模型服务需在模型终端单独停止。
-
-从当前状态持续执行：
+**B．home：先回固定双臂、双手 Home，再开始任务。**双臂使用 `tasks.powder_weighing.home`，双手使用 `.deployment/hand_home.json`；到位并稳定后重新采集观测、推理和执行。缺少 Home 配置时会报错。`--home` 是 `--initialization home` 的别名，以下统一使用完整参数。
 
 ```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
+
 bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --speed slow --num-chunks 0
+  --execute \
+  --enable-hardware \
+  --sharpa-backend sdk_direct \
+  --initialization home \
+  --prepare-speed-rad-s 0.03 \
+  --execute-steps 15 \
+  --speed slow \
+  --num-chunks 0
 ```
 
-先回 Home，再持续执行：
+两种模式都每轮预测 50×58，只执行前 15 个动作，然后重新观测、重新推理。`--num-chunks 0` 表示持续循环，不限于 chunk1/chunk2；正整数表示指定轮数，没有自动识别任务完成的逻辑。
+
+### 中途停止后重新启动
+
+在终端三按 Ctrl-C 后，等待双手失能读回确认和硬件会话清理结束。终端二的推理服务若仍在运行，可保持不动；若已停止，先重新启动终端二。
+
+在终端一重新启动硬件依赖：
 
 ```bash
-bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --speed slow --num-chunks 0 --home
-```
-
-中途 Ctrl-C 后，等待失能确认与硬件清理结束；保持模型服务运行，再按顺序恢复：
-
-```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 bash deploy/fr3_sharpa_runtime/hardware.sh up
-bash deploy/fr3_sharpa_full/runtime.sh \
-  --execute --enable-hardware --speed slow --num-chunks 0
 ```
 
-若模型服务也已停止，先重新启动模型终端。
+然后在终端三重新选择上面的 **A（current）** 或 **B（home）** 完整命令。从中途现场继续时选择 current；需要先回固定初始位置时选择 home。新一轮读取当前实测状态和图像，不恢复上次剩余的旧动作。失能期间是否保持抓取取决于设备实际状态。
 
-默认执行命令从当前状态开始。需要先回固定双臂／双手 Home 时，在该执行命令末尾加 `--home`（等效 `--initialization home`）；Home 后会继续观测、推理和执行。原命令若还带 `--initialization home`，请删除后再用于中途恢复。
+### 停止
 
-Ctrl-C 仍按现有流程失能确认并清理硬件；再次执行前先运行 `bash deploy/fr3_sharpa_runtime/hardware.sh up`。重新启动读取此时的状态和图像，不恢复上次未执行的动作，也不保证失能期间保持抓取。
+先在终端三按 Ctrl-C，等待双手失能读回确认（默认最多 120 秒、每手 120 次）和所属硬件会话清理。确认失败会明确显示 ERROR/FAIL。再在终端二按 Ctrl-C 关闭模型服务。
+
+若只启动了硬件，或清理失败留下部署容器，在终端一运行：
+
+```bash
+cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
+bash deploy/fr3_sharpa_runtime/hardware.sh stop
+```
+
+该命令不是双手 SDK 失能命令，不能用容器已停止代替双手失能确认。参数及异常情况见 [公共 runtime 退出说明](../fr3_sharpa_runtime/README.md)。
 
 ## 目录与兼容性
 
