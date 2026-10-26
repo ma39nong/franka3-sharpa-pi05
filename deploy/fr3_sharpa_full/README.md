@@ -48,6 +48,30 @@ bash deploy/fr3_sharpa_full/runtime.sh \
 
 确认单轮后，按任务需要设置 `--num-chunks 0` 连续运行。执行终端 Ctrl-C 会先请求双手失能并读回确认（默认最多 120 秒、每手 120 次），随后清理其所属硬件会话；确认失败会在终端明确输出 ERROR/FAIL。参数和异常情况见 [退出确认说明](../fr3_sharpa_runtime/README.md)。模型服务需在模型终端单独停止。
 
+从当前状态持续执行：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --execute --enable-hardware --speed slow --num-chunks 0
+```
+
+先回 Home，再持续执行：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --execute --enable-hardware --speed slow --num-chunks 0 --home
+```
+
+中途 Ctrl-C 后，等待失能确认与硬件清理结束；保持模型服务运行，再按顺序恢复：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --execute --enable-hardware --speed slow --num-chunks 0
+```
+
+若模型服务也已停止，先重新启动模型终端。
+
 默认执行命令从当前状态开始。需要先回固定双臂／双手 Home 时，在该执行命令末尾加 `--home`（等效 `--initialization home`）；Home 后会继续观测、推理和执行。原命令若还带 `--initialization home`，请删除后再用于中途恢复。
 
 Ctrl-C 仍按现有流程失能确认并清理硬件；再次执行前先运行 `bash deploy/fr3_sharpa_runtime/hardware.sh up`。重新启动读取此时的状态和图像，不恢复上次未执行的动作，也不保证失能期间保持抓取。

@@ -94,7 +94,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 
 ```bash
 cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
-bash deploy/fr3_sharpa_runtime/serve.sh
+bash deploy/fr3_sharpa_full/serve.sh
 ```
 
 等待出现以下预热成功信息，以及服务监听 `127.0.0.1:18765` 的信息，再运行执行端。保持终端二运行。
@@ -110,7 +110,7 @@ Warmup OK: actions=(50, 58), full, absolute, 30 Hz
 ```bash
 cd /home/descfly/LTT/franka3-sharpa-pi05-chunk-base-test
 
-bash deploy/fr3_sharpa_runtime/runtime.sh \
+bash deploy/fr3_sharpa_full/runtime.sh \
   --execute \
   --enable-hardware \
   --sharpa-backend sdk_direct \
@@ -129,7 +129,22 @@ bash deploy/fr3_sharpa_runtime/runtime.sh \
 - `--speed slow` 对应时间倍率 0.1，15 帧主体为 141 个 30 Hz 下发点，约 4.70 秒；不含首帧衔接、观测和推理。medium=0.5、fast=1.0；不指定速度时默认 fast。`--speed` 不与 `--execute-speed-scale` 混用。
 - 首帧衔接及显式 Home prepare 的速度为 0.03 rad/s，采用关节空间插值，不包含环境碰撞规划。当前代码还默认启用手部预测小幅越界裁剪 `--prediction-clip-rad 0.05`，其范围及审计含义见 [runtime 说明](deploy/fr3_sharpa_runtime/README.md#预测动作小幅越界裁剪)。
 
-中途 Ctrl-C 后恢复时，先重新运行 `bash deploy/fr3_sharpa_runtime/hardware.sh up`，再使用上述不带 Home 选项的执行命令；每次重启读取当前状态，不复用旧 chunk。
+需要先回 Home 再持续执行时，使用：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --execute --enable-hardware --speed slow --num-chunks 0 --home
+```
+
+中途 Ctrl-C 后，等双手失能确认和硬件清理结束。若推理终端仍在运行，在执行终端按顺序重新启动硬件、从当前状态继续：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up
+bash deploy/fr3_sharpa_full/runtime.sh \
+  --execute --enable-hardware --speed slow --num-chunks 0
+```
+
+恢复命令不带 `--home`、`--initialization home` 或 `--prepare-policy-first`。每次重启读取当前实测状态和图像，不复用旧 chunk；若推理服务已停止，先重新启动终端二。失能期间是否保持抓取取决于设备实际状态。
 
 ### 停止顺序
 
