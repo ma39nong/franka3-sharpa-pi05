@@ -65,6 +65,16 @@ class SharpaRuntime:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
+            experiment = observation.get("_inference_context")
+            if experiment is not None:
+                from .rolling import CONTEXT_KEY, prepare_context
+                experiment = prepare_context(experiment, metadata)
+                mode = experiment["options"]["inpainting"]
+                if mode not in metadata.get("inpainting_modes", []):
+                    raise ValueError(f"Server does not support inpainting mode {mode}")
+                if mode != "off" and not metadata.get("inpainting_warmed_up"):
+                    raise ValueError("Experimental sampler has not warmed up")
+                clean[CONTEXT_KEY] = experiment
             start = time.monotonic_ns()
             payload = msgpack_numpy.Packer().pack(clean)
             timing["observation_msgpack_ms"] = (time.monotonic_ns()-start)/1e6
@@ -81,6 +91,17 @@ class SharpaRuntime:
         timing["server"] = result.get("diagnostic_timing", {})
         timing["existing_server_timing"] = result.get("server_timing", {})
         timing["existing_policy_timing"] = result.get("policy_timing", {})
+        if experiment is not None:
+            diagnostic = result.get("inference_experiment", {})
+            if (diagnostic.get("run_id") != experiment["run_id"]
+                    or diagnostic.get("chunk_index") != experiment["chunk_index"]):
+                raise RuntimeError("Missing or mismatched rolling response context")
+            reference = experiment.get("reference")
+            origin = reference["completed_monotonic_ns"] if reference else timing["policy_request_send_monotonic_ns"]
+            age = time.monotonic_ns() - origin
+            if not 0 <= age <= experiment["options"]["reference_max_age_s"] * 1e9:
+                raise RuntimeError("Rolling inference response expired; no targets will be sent")
+            metadata = {**metadata, "inference_experiment": diagnostic}
         actions = as_finite_action_chunk(result["actions"])
         # Fresh session for this single chunk; this version never splices chunks.
         session_id = f"openpi-{uuid.uuid4().hex}"

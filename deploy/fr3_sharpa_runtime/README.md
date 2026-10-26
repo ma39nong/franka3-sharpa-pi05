@@ -230,3 +230,7 @@ source deploy/fr3_sharpa_runtime/env.sh
 ```
 
 旧 guarded 路径说明见 [LEGACY.md](LEGACY.md)。历史 `--preflight-only` 仍检查 guarded driver，不能用它代替 sdk_direct 的现场验收。
+
+## 可选论文推理实验
+
+`--inference-preset paper-rolling` 提供默认关闭的实验路径，50点模型中消费26点、保留4点，独立选择去噪内部 Inpainting 和三次插值压缩。参考基于轨迹进度，非异步实时 chunking。旧命令仍为50/15；说明及工控机命令见 [推理实验文档](../../docs/pi05_paper_adaptation/README.md)。

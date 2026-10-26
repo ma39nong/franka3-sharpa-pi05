@@ -7,7 +7,7 @@ class TimedPolicy:
         self.policy = policy
         self.received_ns = None
 
-    def infer(self, obs):
+    def infer(self, obs, **kwargs):
         timing = {"server_receive_monotonic_ns": self.received_ns,
                   "policy_inference_start_monotonic_ns": time.monotonic_ns()}
         original = {}
@@ -30,7 +30,7 @@ class TimedPolicy:
                 return result
             setattr(self.policy, attr, timed)
         try:
-            result = self.policy.infer(obs)
+            result = self.policy.infer(obs, **kwargs)
         finally:
             for attr, function in original.items():
                 setattr(self.policy, attr, function)

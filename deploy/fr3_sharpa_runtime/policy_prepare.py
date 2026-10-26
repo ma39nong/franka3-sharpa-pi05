@@ -124,7 +124,7 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                            *, num_chunks=1, speed_rad_s=0.03,
                            execute_speed_scale=1.0, trace_writer=None, execute_steps=50,
                            initial_target=None, home_metadata=None, prediction_clip_rad=0.05,
-                           prepare_initial=True):
+                           prepare_initial=True, rolling_options=None, clock_ns=time.monotonic_ns):
     """Optionally prepare, then infer/execute; zero chunks means until Ctrl-C.
 
     Retain full predictions for audit, execute only the requested prefix, then
@@ -139,6 +139,12 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
         raise ValueError("prediction_clip_rad must be finite and nonnegative")
     if not prepare_initial and initial_target is not None:
         raise ValueError("An initial Home target requires prepare_initial=True")
+    rolling = None
+    if rolling_options is not None:
+        from .rolling import RollingReference
+        if execute_steps != 26:
+            raise ValueError("paper-rolling requires execute_steps=26")
+        rolling = RollingReference(rolling_options, clock_ns=clock_ns)
     initialization = "current" if not prepare_initial else "home" if initial_target is not None else "policy"
     results = []
     count = 0
@@ -182,6 +188,9 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
             observation = acquire_after(completed) if next_observation is None else next_observation
             next_observation = None
             event("inference")
+            if rolling is not None:
+                from .rolling import CONTEXT_KEY
+                observation = {**observation, CONTEXT_KEY: rolling.context(count)}
             metadata, actions, adapted_chunk = infer(observation)
             actions = as_finite_action_chunk(actions)
             if trace_writer is not None:
@@ -191,13 +200,29 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                     adapted_chunk=adapted_chunk, execute_steps=execute_steps)
             event("execute", predicted_steps=50, execute_steps=execute_steps, prediction_clip_rad=prediction_clip_rad)
             command_started = time.monotonic()
-            completed = transport.request({"operation": "chunk", "actions": actions.tolist(),
-                                           "execute_steps": execute_steps,
-                                           "prediction_clip_rad": prediction_clip_rad,
-                                           "execute_speed_scale": execute_speed_scale,
-                                           "approach_speed_rad_s": speed_rad_s})
+            request = {"operation": "chunk", "actions": actions.tolist(),
+                       "execute_steps": execute_steps,
+                       "prediction_clip_rad": prediction_clip_rad,
+                       "execute_speed_scale": execute_speed_scale,
+                       "approach_speed_rad_s": speed_rad_s}
+            if rolling is not None:
+                from .compression import compression_candidate
+                candidate, compression = compression_candidate(
+                    actions, observation["observation/state"], rolling_options)
+                request.update(execution_targets=candidate.tolist(), compression=compression,
+                               record_command_frames=True)
+                diagnostic = metadata.get("inference_experiment", {})
+                reference_stamp = diagnostic.get("reference_completed_monotonic_ns")
+                if reference_stamp is not None and not 0 <= clock_ns() - reference_stamp <= rolling_options.reference_max_age_s * 1e9:
+                    raise RuntimeError("Rolling reference expired before execution")
+                if trace_writer is not None:
+                    trace_writer.record_experiment(trace_path, context=observation["_inference_context"],
+                        diagnostics=diagnostic, execution_targets=candidate, compression=compression)
+            completed = transport.request(request)
             if completed.get("status") != "PASS":
                 raise RuntimeError("Chunk failed; further inference stopped")
+            if rolling is not None:
+                rolling.commit(actions, metadata, completed, count)
             command_duration = time.monotonic() - command_started
             if trace_writer is not None:
                 # Mark transmission complete even if the following sensor
@@ -228,6 +253,8 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
             trace_writer.finish_run(report)
         return report
     except BaseException as error:
+        if rolling is not None:
+            rolling.clear("interrupted_or_failed")
         if trace_writer is not None:
             status = "INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAILED"
             if trace_path is not None:

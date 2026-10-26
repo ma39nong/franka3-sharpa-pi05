@@ -10,6 +10,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
+from openpi.models.inpainting import correct_inpainting
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
@@ -221,7 +222,10 @@ class Pi0(_model.BaseModel):
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
-    ) -> _model.Actions:
+        initial_actions: at.Float[at.Array, "b n ad"] | None = None,
+        correction_matrix: at.Float[at.Array, "u o"] | None = None,
+    ) -> _model.Actions | tuple[_model.Actions, at.Int[at.Array, "2"]]:
+        """Sample actions; an explicit reference additionally returns correction counters."""
         observation = _model.preprocess_observation(None, observation, train=False)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
@@ -230,6 +234,16 @@ class Pi0(_model.BaseModel):
         if noise is None:
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
+        if initial_actions is not None:
+            if initial_actions.shape != (batch_size, 4, self.action_dim):
+                raise ValueError("Inpainting requires four reference steps in model action space")
+            if correction_matrix is not None and correction_matrix.shape != (
+                (self.action_horizon - 4) * self.action_dim, 4 * self.action_dim
+            ):
+                raise ValueError("Inpainting matrix must cover all free horizon dimensions")
+        elif correction_matrix is not None:
+            raise ValueError("A correction matrix requires initial_actions")
+
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
@@ -237,7 +251,7 @@ class Pi0(_model.BaseModel):
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
         def step(carry):
-            x_t, time = carry
+            x_t, time = carry[:2]
             suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
                 observation, x_t, jnp.broadcast_to(time, batch_size)
             )
@@ -268,12 +282,20 @@ class Pi0(_model.BaseModel):
             assert prefix_out is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
+            if initial_actions is not None:
+                corrected, counts = correct_inpainting(
+                    x_t + dt * v_t, initial_actions, noise, time + dt,
+                    correction_matrix=correction_matrix)
+                return corrected, time + dt, carry[2] + counts
             return x_t + dt * v_t, time + dt
 
         def cond(carry):
-            x_t, time = carry
+            _, time = carry[:2]
             # robust to floating-point error
             return time >= -dt / 2
 
+        if initial_actions is not None:
+            x_0, _, counts = jax.lax.while_loop(cond, step, (noise, 1.0, jnp.zeros(2, dtype=jnp.int32)))
+            return x_0, counts
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0

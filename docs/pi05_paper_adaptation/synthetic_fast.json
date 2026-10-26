@@ -1,0 +1,244 @@
+{
+  "test_level": "synthetic_cpu_only",
+  "seed": 42,
+  "speed_scale": 1.0,
+  "checkpoint": null,
+  "norm_stats": null,
+  "limitations": "Toy vector field and synthetic covariance; no GPU model, dynamics, contact or task success validation.",
+  "rows": [
+    {
+      "mode": "default_50_15",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 15,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.001731686294078827,
+          "toy_target_rmse_rad": 0.00246468186378479,
+          "max_command_speed_rad_s": 0.1002893038094044,
+          "max_command_acceleration_rad_s2": 4.504823265597227
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.0036206208169460297,
+          "toy_target_rmse_rad": 0.0024674932938069105,
+          "max_command_speed_rad_s": 0.1144805084913973,
+          "max_command_acceleration_rad_s2": 5.534159112721722
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.002412008587270975,
+          "toy_target_rmse_rad": 0.002454327419400215,
+          "max_command_speed_rad_s": 0.12192692141979936,
+          "max_command_acceleration_rad_s2": 5.443644616752884
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.003123731352388859,
+          "toy_target_rmse_rad": 0.0024907533079385757,
+          "max_command_speed_rad_s": 0.1014311425387863,
+          "max_command_acceleration_rad_s2": 4.870169889181887
+        }
+      },
+      "bridge_frames": 16,
+      "command_frames": 91,
+      "synthetic_elapsed_s": 3.406666666666665,
+      "compressed_rounds": 0,
+      "inpainting_applied_steps": 0,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 56.979376007802784
+    },
+    {
+      "mode": "rolling_off",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 26,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.002108469605445862,
+          "toy_target_rmse_rad": 0.0021144619677215815,
+          "max_command_speed_rad_s": 0.1002893038094044,
+          "max_command_acceleration_rad_s2": 4.994035977870262
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.0026258816942572594,
+          "toy_target_rmse_rad": 0.0021277263294905424,
+          "max_command_speed_rad_s": 0.11054783128202,
+          "max_command_acceleration_rad_s2": 5.724995769560377
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.002159834373742342,
+          "toy_target_rmse_rad": 0.0021215472370386124,
+          "max_command_speed_rad_s": 0.12016070075333081,
+          "max_command_acceleration_rad_s2": 5.445916950702597
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.0027412837371230125,
+          "toy_target_rmse_rad": 0.002144609112292528,
+          "max_command_speed_rad_s": 0.09630259126424792,
+          "max_command_acceleration_rad_s2": 5.4225792177021885
+        }
+      },
+      "bridge_frames": 14,
+      "command_frames": 144,
+      "synthetic_elapsed_s": 5.173333333333326,
+      "compressed_rounds": 0,
+      "inpainting_applied_steps": 0,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 4.447449988219887
+    },
+    {
+      "mode": "soft",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 26,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.0020025894045829773,
+          "toy_target_rmse_rad": 0.0020966501906514168,
+          "max_command_speed_rad_s": 0.1002893038094044,
+          "max_command_acceleration_rad_s2": 4.994035977870262
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.002578508108854294,
+          "toy_target_rmse_rad": 0.00211188942193985,
+          "max_command_speed_rad_s": 0.11054783128202,
+          "max_command_acceleration_rad_s2": 5.724995769560377
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.0018169507384300232,
+          "toy_target_rmse_rad": 0.0021062432788312435,
+          "max_command_speed_rad_s": 0.10352740064263329,
+          "max_command_acceleration_rad_s2": 5.19104297272859
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.002218044362962246,
+          "toy_target_rmse_rad": 0.002130220178514719,
+          "max_command_speed_rad_s": 0.09630259126424792,
+          "max_command_acceleration_rad_s2": 5.4225792177021885
+        }
+      },
+      "bridge_frames": 14,
+      "command_frames": 144,
+      "synthetic_elapsed_s": 5.173333333333326,
+      "compressed_rounds": 0,
+      "inpainting_applied_steps": 24,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 602.2367040277459
+    },
+    {
+      "mode": "correlation",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 26,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.00189945288002491,
+          "toy_target_rmse_rad": 0.00199494999833405,
+          "max_command_speed_rad_s": 0.1002893038094044,
+          "max_command_acceleration_rad_s2": 4.994035977870262
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.002578508108854294,
+          "toy_target_rmse_rad": 0.002010196214541793,
+          "max_command_speed_rad_s": 0.11054783128202,
+          "max_command_acceleration_rad_s2": 5.724996607750694
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.0020213723182678223,
+          "toy_target_rmse_rad": 0.0020048310980200768,
+          "max_command_speed_rad_s": 0.10352740064263329,
+          "max_command_acceleration_rad_s2": 5.19104297272859
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.0023319851607084274,
+          "toy_target_rmse_rad": 0.002027238719165325,
+          "max_command_speed_rad_s": 0.09630259126424792,
+          "max_command_acceleration_rad_s2": 5.4225792177021885
+        }
+      },
+      "bridge_frames": 13,
+      "command_frames": 143,
+      "synthetic_elapsed_s": 5.139999999999993,
+      "compressed_rounds": 0,
+      "inpainting_applied_steps": 24,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 1893.8728629727848
+    },
+    {
+      "mode": "soft_cubic",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 26,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.0020025894045829773,
+          "toy_target_rmse_rad": 0.0020966501906514168,
+          "max_command_speed_rad_s": 0.10486331535503271,
+          "max_command_acceleration_rad_s2": 4.9783928319812185
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.002578508108854294,
+          "toy_target_rmse_rad": 0.00211188942193985,
+          "max_command_speed_rad_s": 0.1164234057068829,
+          "max_command_acceleration_rad_s2": 6.641649082303094
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.0018169507384300232,
+          "toy_target_rmse_rad": 0.0021062432788312435,
+          "max_command_speed_rad_s": 0.08629085496067974,
+          "max_command_acceleration_rad_s2": 4.073244519531742
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.002218044362962246,
+          "toy_target_rmse_rad": 0.002130220178514719,
+          "max_command_speed_rad_s": 0.10066028684377706,
+          "max_command_acceleration_rad_s2": 5.269114114344157
+        }
+      },
+      "bridge_frames": 14,
+      "command_frames": 114,
+      "synthetic_elapsed_s": 4.173333333333329,
+      "compressed_rounds": 5,
+      "inpainting_applied_steps": 24,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 637.514054949861
+    },
+    {
+      "mode": "correlation_cubic",
+      "rounds": 5,
+      "consumed_model_steps_per_round": 26,
+      "synthetic_noise_sha256": "b95ada95916f765c0c678cd602d4d44f20a3bf9e7e4c1d2a3ce5e252d7141177",
+      "groups": {
+        "left_arm": {
+          "max_boundary_jump_rad": 0.00189945288002491,
+          "toy_target_rmse_rad": 0.00199494999833405,
+          "max_command_speed_rad_s": 0.10486331535503271,
+          "max_command_acceleration_rad_s2": 4.978394508361853
+        },
+        "left_hand": {
+          "max_boundary_jump_rad": 0.002578508108854294,
+          "toy_target_rmse_rad": 0.002010196214541793,
+          "max_command_speed_rad_s": 0.11642242781817955,
+          "max_command_acceleration_rad_s2": 6.64167087525134
+        },
+        "right_arm": {
+          "max_boundary_jump_rad": 0.0020213723182678223,
+          "toy_target_rmse_rad": 0.0020048310980200768,
+          "max_command_speed_rad_s": 0.08629068732261631,
+          "max_command_acceleration_rad_s2": 4.073244519531742
+        },
+        "right_hand": {
+          "max_boundary_jump_rad": 0.0023319851607084274,
+          "toy_target_rmse_rad": 0.002027238719165325,
+          "max_command_speed_rad_s": 0.1006603147834543,
+          "max_command_acceleration_rad_s2": 5.26911327615384
+        }
+      },
+      "bridge_frames": 13,
+      "command_frames": 113,
+      "synthetic_elapsed_s": 4.139999999999996,
+      "compressed_rounds": 5,
+      "inpainting_applied_steps": 24,
+      "skipped_propagations": 0,
+      "cpu_computation_ms": 1898.8111200160347
+    }
+  ]
+}

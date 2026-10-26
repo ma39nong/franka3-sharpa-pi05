@@ -65,7 +65,8 @@ class Policy(BasePolicy):
             self._rng = rng or jax.random.key(0)
 
     @override
-    def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict, *, noise: np.ndarray | None = None,
+              initial_actions: np.ndarray | None = None, correction_matrix: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -87,12 +88,25 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
 
+        if initial_actions is not None:
+            if self._is_pytorch_model:
+                raise ValueError("Rolling inpainting is supported only by the JAX sampler")
+            reference = np.asarray(initial_actions, dtype=np.float32)
+            if reference.shape != (4, self._model.action_dim) or not np.isfinite(reference).all():
+                raise ValueError("Expected four finite normalized action references")
+            sample_kwargs["initial_actions"] = jnp.asarray(reference)[None, ...]
+            if correction_matrix is not None:
+                sample_kwargs["correction_matrix"] = jnp.asarray(correction_matrix)
+        elif correction_matrix is not None:
+            raise ValueError("correction_matrix requires initial_actions")
+
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
-        outputs = {
-            "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
-        }
+        sampled = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
+        counts = None
+        if initial_actions is not None:
+            sampled, counts = sampled
+        outputs = {"state": inputs["state"], "actions": sampled}
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
@@ -100,6 +114,9 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         outputs = self._output_transform(outputs)
+        if counts is not None:
+            applied, skipped = np.asarray(counts).tolist()
+            outputs["inpainting_diagnostics"] = {"applied_steps": applied, "skipped_propagations": skipped}
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }

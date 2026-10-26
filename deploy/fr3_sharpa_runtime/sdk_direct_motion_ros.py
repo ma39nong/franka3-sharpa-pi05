@@ -57,6 +57,7 @@ def main() -> None:
     session_id = f"openpi-sdk-direct-{uuid.uuid4().hex}"
     sequence = 0
     clipping_report = None
+    experimental_audit = None
 
     def publish_frame(values: np.ndarray) -> None:
         nonlocal sequence
@@ -146,6 +147,7 @@ def main() -> None:
                 break
             request = json.loads(line)
             clipping_report = None
+            experimental_audit = None
             operation = request.get("operation")
             if operation == "ready":
                 print(json.dumps({"status": "PASS", "operation": "ready",
@@ -188,33 +190,61 @@ def main() -> None:
             elif operation == "chunk":
                 actions = as_finite_action_chunk(np.asarray(request["actions"], dtype=np.float32))
                 execute_steps = request.get("execute_steps", 50)
-                actions, clipping_report = clip_hand_predictions(
-                    actions, execute_steps=execute_steps,
-                    max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
-                if clipping_report["corrected_values"]:
-                    print(f"[prediction-clip] {clipping_report['corrected_values']} values corrected; "
-                          f"max={clipping_report['max_applied_correction_rad']:.6f} rad", file=sys.stderr, flush=True)
-                selected = action_prefix(actions, execute_steps)
-                validation_actions = actions.copy()
-                validation_actions[execute_steps:] = selected[-1]
-                validate_action_ranges(validation_actions, check_slew=False)
-                speed_scale = float(request.get("execute_speed_scale", args.execute_speed_scale))
-                if not np.isfinite(speed_scale) or not 0.0 < speed_scale <= 1.0:
-                    raise ValueError("execute_speed_scale must be finite and in (0, 1]")
-                current = fresh_feedback()
-                validate_action_ranges(target_chunk(current.state), check_slew=False)
-                frames, bridge_frames = chunk_command_frames(
-                    actions, current.state, speed_scale=speed_scale,
-                    execute_steps=execute_steps,
-                    approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
+                experiment_report = None
+                original_actions = actions.copy()
+                if "execution_targets" in request:
+                    from .compression import plan_execution, recheck_compression
+                    if execute_steps != 26:
+                        raise ValueError("Rolling execution requires 26 consumed model steps")
+                    speed_scale = float(request.get("execute_speed_scale", args.execute_speed_scale))
+                    current = fresh_feedback()
+                    validate_action_ranges(target_chunk(current.state), check_slew=False)
+                    compression = dict(request["compression"])
+                    candidate = request["execution_targets"]
+                    # Recheck hand variation against feedback obtained immediately before planning.
+                    candidate, compression = recheck_compression(actions, candidate, compression, current.state)
+                    frames, bridge_frames, selected, clipping_report, experiment_report = plan_execution(
+                        actions, candidate, compression, current.state, speed_scale=speed_scale,
+                        approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)),
+                        range_validator=validate_action_ranges,
+                        prediction_clip_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
+                else:
+                    actions, clipping_report = clip_hand_predictions(
+                        actions, execute_steps=execute_steps,
+                        max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
+                    if clipping_report["corrected_values"]:
+                        print(f"[prediction-clip] {clipping_report['corrected_values']} values corrected; "
+                              f"max={clipping_report['max_applied_correction_rad']:.6f} rad", file=sys.stderr, flush=True)
+                    selected = action_prefix(actions, execute_steps)
+                    validation_actions = actions.copy()
+                    validation_actions[execute_steps:] = selected[-1]
+                    validate_action_ranges(validation_actions, check_slew=False)
+                    speed_scale = float(request.get("execute_speed_scale", args.execute_speed_scale))
+                    if not np.isfinite(speed_scale) or not 0.0 < speed_scale <= 1.0:
+                        raise ValueError("execute_speed_scale must be finite and in (0, 1]")
+                    current = fresh_feedback()
+                    validate_action_ranges(target_chunk(current.state), check_slew=False)
+                    frames, bridge_frames = chunk_command_frames(
+                        actions, current.state, speed_scale=speed_scale,
+                        execute_steps=execute_steps,
+                        approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
+
                 # A policy inference/observation boundary may exceed the
                 # hand driver's 0.25 s continuous-stream watchdog.  This is
                 # an explicit new command phase; continuity protection resumes
                 # from the first frame below and remains active within it.
+                if experiment_report is not None:
+                    experimental_audit = {"compression": experiment_report, "execution_targets": selected.tolist(),
+                        "command_frames": frames.tolist(), "sent_command_count": 0,
+                        "command_timestamps_monotonic_ns": [], "consumed_model_steps": 26,
+                        "bridge_frames": bridge_frames, "planning_complete_monotonic_ns": time.monotonic_ns()}
                 executor.resume_stream()
                 def send_chunk_frame(frame):
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
                     publish_frame(frame)
+                    if experimental_audit is not None:
+                        experimental_audit["sent_command_count"] += 1
+                        experimental_audit["command_timestamps_monotonic_ns"].append(time.monotonic_ns())
 
                 play_command_frames(frames, send_chunk_frame, fresh_feedback)
                 end_feedback = fresh_feedback()
@@ -232,7 +262,15 @@ def main() -> None:
                                   "completion": "commands_sent", "end_error_rad": error_by_group,
                                   "execute_speed_scale": speed_scale,
                                   "completed_ros_ns": node.get_clock().now().nanoseconds,
-                                  "completed_monotonic_ns": time.monotonic_ns()}),
+                                  "completed_monotonic_ns": time.monotonic_ns(),
+                                  **({"compression": experiment_report,
+                                      "execution_target_count": len(selected),
+                                      "execution_targets": selected.tolist(),
+                                      "original_prediction": original_actions.tolist(),
+                                      "execution_plan_audit": experimental_audit,
+                                      "command_frames": frames.tolist(),
+                                      "alignment": "trajectory_phase_not_wall_clock"}
+                                     if experiment_report is not None else {})}),
                       file=protocol, flush=True)
             elif operation == "close":
                 break
@@ -246,6 +284,8 @@ def main() -> None:
         detail = "".join(traceback.format_exception(type(error), error, error.__traceback__))
         if clipping_report is not None:
             detail += "\nPrediction clipping audit: " + json.dumps(clipping_report, allow_nan=False)
+        if experimental_audit is not None:
+            detail += "\nExperimental execution audit: " + json.dumps(experimental_audit, allow_nan=False)
         print(json.dumps({"status": "FAIL", "published": sequence > 0,
                           "reason": str(error), "detail": detail}), file=protocol, flush=True)
         raise SystemExit(1)
