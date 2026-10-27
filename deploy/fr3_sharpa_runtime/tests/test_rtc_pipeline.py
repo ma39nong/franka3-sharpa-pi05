@@ -25,7 +25,12 @@ def test_late_guided_result_is_rejected_and_failure_recorded(monkeypatch, tmp_pa
     simulate(monkeypatch, tmp_path, 1.0, True)
 
 
-def simulate(monkeypatch, tmp_path, scale, late):
+@pytest.mark.parametrize("failure", ["observation_timeout", "worker_failure"])
+def test_observation_wait_is_bounded_and_preserves_worker_error(monkeypatch, tmp_path, failure):
+    simulate(monkeypatch, tmp_path, 1.0, False, failure=failure)
+
+
+def simulate(monkeypatch, tmp_path, scale, late, *, failure=None):
     clock = [1.0]
     log = []
 
@@ -39,6 +44,8 @@ def simulate(monkeypatch, tmp_path, scale, late):
                 self.plan = RTCTimeline(payload["actions"], clock[0], payload["execute_speed_scale"])
                 return {"status": "PASS"}
             if op == "stream_status":
+                if failure == "worker_failure" and self.plan.phase(clock[0]) >= 20:
+                    raise RuntimeError("original device feedback failure")
                 # Samples are still consumed while a future is outstanding.
                 sent.append(self.plan.sample(clock[0]))
                 return {"status": "PASS", **self.plan.status(clock[0])}
@@ -87,7 +94,13 @@ def simulate(monkeypatch, tmp_path, scale, late):
     def sleep(delay):
         clock[0] += delay
 
-    def observe():
+    def observe(**options):
+        if failure and options:
+            assert 0 < options["timeout_s"] < 35 / 30
+            options["on_diagnostic"]({"event": "observation_wait", "topics": {"cam0": {"missing": True}}})
+            while True:
+                clock[0] += 0.01
+                options["on_poll"]()
         return {"observation/state": prediction()[0], "_captured_monotonic_ns": int(clock[0] * 1e9)}
 
     monkeypatch.setattr(rtc_runtime, "ThreadPoolExecutor", Pool)
@@ -108,7 +121,17 @@ def simulate(monkeypatch, tmp_path, scale, late):
     call = lambda: rtc_runtime.run_rtc(
         Runtime(), observe, Worker(), first, observe(), args, clock=lambda: clock[0], sleep=sleep
     )
-    if late:
+    if failure:
+        error = TimeoutError if failure == "observation_timeout" else RuntimeError
+        match = "observation deadline" if failure == "observation_timeout" else "original device feedback failure"
+        with pytest.raises(error, match=match):
+            call()
+        report = json.loads(next(tmp_path.glob("rtc-*/run.json")).read_text())
+        assert report["accepted_chunks"] == 1 and report["stage"] == "observing"
+        assert report["last_observation_diagnostic"]["topics"]["cam0"]["missing"]
+        assert "stream_snapshot" not in log and "stream_install" not in log
+        assert clock[0] < 1 + 50 / 30  # Stop before old motion is exhausted.
+    elif late:
         with pytest.raises(TimeoutError, match="guided prefix"):
             call()
         report = json.loads(next(tmp_path.glob("rtc-*/run.json")).read_text())

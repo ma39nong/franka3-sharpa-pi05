@@ -3,6 +3,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 
 
 class ObservationWorker:
@@ -20,25 +21,45 @@ class ObservationWorker:
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
 
-    def snapshot(self, timeout_s=None):
+    def snapshot(self, timeout_s=None, *, on_poll=None, on_diagnostic=None):
+        bounded = timeout_s is not None
         if timeout_s is None:
             timeout_s = 5.0 if self.snapshot_ready else 15.0
         with self.lock:
             if self.process.poll() is not None:
                 raise RuntimeError(f"ROS observation worker exited {self.process.returncode}")
-            self.process.stdin.write(json.dumps({"timeout_s": timeout_s}) + "\n")
+            deadline = time.monotonic() + timeout_s + (0 if bounded else 10)
+            self.process.stdin.write(json.dumps({"timeout_s": timeout_s,
+                                                "diagnostics": on_diagnostic is not None}) + "\n")
             self.process.stdin.flush()
             try:
-                line = self.responses.get(timeout=timeout_s+10)
-            except queue.Empty:
+                while True:
+                    if on_poll is not None:
+                        on_poll()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("ROS observation worker response timed out")
+                    try:
+                        line = self.responses.get(timeout=min(0.01, remaining))
+                    except queue.Empty:
+                        continue
+                    if line is None:
+                        raise RuntimeError("ROS observation worker closed without a response")
+                    payload = json.loads(line)
+                    if payload.get("event") == "observation_wait":
+                        if on_diagnostic is not None:
+                            on_diagnostic(payload)
+                        continue
+                    if "error" not in payload:
+                        self.snapshot_ready = True
+                    return line
+            except BaseException:
                 # Do not accept a late reply as the next request's observation.
-                self.close()
-                raise TimeoutError("ROS observation worker response timed out")
-            if line is None:
-                raise RuntimeError("ROS observation worker closed without a response")
-            if "error" not in json.loads(line):
-                self.snapshot_ready = True
-            return line
+                # Reap in close(), after the caller has stopped motion. Waiting
+                # for ROS shutdown here would consume the remaining old chunk.
+                if self.process.poll() is None:
+                    self.process.terminate()
+                raise
 
     def close(self):
         if self.process.poll() is None:

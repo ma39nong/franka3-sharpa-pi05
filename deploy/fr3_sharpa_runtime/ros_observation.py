@@ -41,6 +41,22 @@ def timing_issues(entries, now_ros, now_mono):
     return issues
 
 
+def observation_diagnostics(latest, *, now_ros, now_mono, reason):
+    stamps = [stamp_ns(value[0]) for value in latest.values()]
+    return {
+        "event": "observation_wait", "reason": reason,
+        "captured_monotonic_ns": now_mono, "now_ros_ns": now_ros,
+        "topics": {key: ({"missing": True} if key not in latest else {
+            "missing": False,
+            "source_age_ms": (now_ros - stamp_ns(latest[key][0])) / 1e6,
+            "received_age_ms": (now_mono - latest[key][1]) / 1e6,
+            "stamp_ns": stamp_ns(latest[key][0]),
+        }) for key in TOPICS},
+        "source_span_ms": (max(stamps) - min(stamps)) / 1e6 if stamps else None,
+        "issues": timing_issues(latest, now_ros, now_mono),
+    }
+
+
 def select_aligned_observation(latest, histories, *, now_ros, now_mono):
     """Select original samples at/before a common source time; never retimestamp."""
     issues = timing_issues(latest, now_ros, now_mono)
@@ -187,15 +203,28 @@ class ObservationProvider:
             finally:
                 self.rclpy.shutdown()
 
-    def snapshot(self, timeout_s: float = 5.0) -> dict:
+    def snapshot(self, timeout_s: float = 5.0, *, on_diagnostic=None) -> dict:
         if self.closed:
             raise RuntimeError("Observation provider is closed")
         rclpy, node, latest = self.rclpy, self.node, self.latest
         deadline = time.monotonic() + timeout_s
         timing_failure = "No complete snapshot received"
+        next_diagnostic = 0.0
+
+        def diagnose(*, final=False):
+            nonlocal next_diagnostic
+            now = time.monotonic()
+            if on_diagnostic is not None and (final or now >= next_diagnostic):
+                on_diagnostic(observation_diagnostics(
+                    latest, now_ros=node.get_clock().now().nanoseconds,
+                    now_mono=time.monotonic_ns(), reason=timing_failure))
+                next_diagnostic = now + 0.1
+
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=min(0.05, max(0.0, deadline - time.monotonic())))
             if len(latest) != len(TOPICS):
+                timing_failure = f"Missing ROS observations: {sorted(set(TOPICS) - set(latest))}"
+                diagnose()
                 continue
             # Keep receiving real updates until the existing timing checks pass.
             # No timestamps or frames are synthesized, shifted or duplicated.
@@ -206,12 +235,15 @@ class ObservationProvider:
                     latest, self.histories, now_ros=now_ros, now_mono=now_mono)
             except ValueError as error:
                 timing_failure = str(error)
+                diagnose()
                 continue
             if not self.cameras_ready(now_mono):
                 timing_failure = f"Waiting for three camera streams stable for {self.startup_stable_s:g}s"
+                diagnose()
                 continue
             break
         else:
+            diagnose(final=True)
             missing = sorted(set(TOPICS) - set(latest))
             if missing:
                 raise TimeoutError(f"Missing ROS observations: {missing}")
@@ -267,7 +299,8 @@ def persistent_main():
                 request = json.loads(line)
                 if request.get("command") == "close":
                     break
-                write_snapshot(provider.snapshot(float(request.get("timeout_s", 5.0))))
+                diagnostic = (lambda data: print(json.dumps(data), flush=True)) if request.get("diagnostics") else None
+                write_snapshot(provider.snapshot(float(request.get("timeout_s", 5.0)), on_diagnostic=diagnostic))
             except Exception as error:
                 print(json.dumps({"error": str(error)}), flush=True)
     finally:

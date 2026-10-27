@@ -98,6 +98,7 @@ class RTCTimeline:
         return {
             "generation": self.generation,
             "phase": phase,
+            "sampled_monotonic_s": now,
             "consumed_since_install": phase - self.skipped,
             "skipped": self.skipped,
             "source_sha256": self.digest,

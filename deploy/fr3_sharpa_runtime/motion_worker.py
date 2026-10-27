@@ -39,8 +39,13 @@ class MotionWorker:
                 self._previous_sigterm = signal.signal(signal.SIGTERM, terminate)
 
     def request(self, payload):
-        self.process.stdin.write(json.dumps(payload, allow_nan=False)+"\n")
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(json.dumps(payload, allow_nan=False)+"\n")
+            self.process.stdin.flush()
+        except BrokenPipeError:
+            # An exiting worker may already have queued the original FAIL.
+            # Drain that report before falling back to the generic EOF error.
+            pass
         while True:
             stream = self._protocol_read or self.process.stdout
             line = stream.readline()

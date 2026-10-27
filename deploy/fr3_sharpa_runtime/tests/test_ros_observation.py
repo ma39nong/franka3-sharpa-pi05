@@ -77,6 +77,25 @@ def test_snapshot_timeout_reports_last_timing_failure(monkeypatch):
         probe.snapshot(timeout_s=0.05)
 
 
+def test_wait_diagnostics_retain_actual_topic_ages_and_span(monkeypatch):
+    probe, _, _ = _timing_probe(monkeypatch, 250, recover=False)
+    diagnostics = []
+    provider = probe.ObservationProvider()
+    try:
+        with pytest.raises(TimeoutError):
+            provider.snapshot(timeout_s=0.05, on_diagnostic=diagnostics.append)
+    finally:
+        provider.close()
+    assert diagnostics
+    last = diagnostics[-1]
+    assert last["topics"]["cam0"]["source_age_ms"] == 250
+    assert last["topics"]["cam0"]["received_age_ms"] == 0
+    assert last["source_span_ms"] == 250
+    assert "cam0" in last["reason"]
+    missing = probe.observation_diagnostics({}, now_ros=1, now_mono=1, reason="missing")
+    assert all(item["missing"] for item in missing["topics"].values())
+
+
 def test_persistent_provider_reuses_node_and_closes_only_at_exit(monkeypatch):
     probe, _, _ = _timing_probe(monkeypatch, 90, recover=True)
     import sys

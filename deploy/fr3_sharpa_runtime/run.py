@@ -56,9 +56,9 @@ def _start_observation_worker(overlay: Path):
     return _observation_worker
 
 
-def live_observation(overlay: Path, prompt: str) -> dict:
+def live_observation(overlay: Path, prompt: str, **snapshot_options) -> dict:
     """Reuse the runtime's read-only ROS node across snapshot requests."""
-    line = _start_observation_worker(overlay).snapshot()
+    line = _start_observation_worker(overlay).snapshot(**snapshot_options)
     boundary_return_ns = time.monotonic_ns()
     start = time.monotonic_ns()
     snapshot = json.loads(line)
@@ -215,7 +215,7 @@ def execute_policy_prepare(args):
                     raise RuntimeError("Home failed before RTC")
                 initial = observation_after_completion(args, prepared)
             from .rtc_runtime import run_rtc
-            return run_rtc(runtime, lambda: live_observation(args.ros_overlay, args.prompt),
+            return run_rtc(runtime, lambda **options: live_observation(args.ros_overlay, args.prompt, **options),
                            worker, infer(initial), initial, args)
         result = prepare_and_run_chunks(cached_first_infer,
             lambda completed: observation_after_completion(args, completed), worker, initial,
