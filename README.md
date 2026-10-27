@@ -33,44 +33,150 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 
 权重接入步骤见 [LoRA 部署说明](deploy/fr3_sharpa_lora/README.md)。
 
-## 全量 Delta：RTC 原速启动
+## Delta 权重：串行与 RTC 完整启动
 
-在工作机部署仓库根目录运行，沿用已配置的 `.deployment/full_delta.env` 权重和统计。以下执行命令会驱动机器人；RTC 真机验证仍待完成。
+以下命令全部在**工作机的部署仓库根目录**执行，读取工作机桌面上的 Delta 权重；不是开发机上的路径。Delta 的串行和 RTC 使用同一个 checkpoint、同一份统计、同一套硬件服务，只切换执行方式。不要将下方 Delta 执行端连到后面的 absolute 模型服务。
 
-终端一，启动硬件：
+| 方案 | 模型服务 | 执行入口／选择 | 默认端口 |
+| --- | --- | --- | ---: |
+| 原 absolute 串行 | `serve.sh` | `runtime.sh --broker-mode serial` | 18765 |
+| Delta 串行 | `serve_delta.sh`（可加 `--enable-rtc`） | `runtime_delta.sh --broker-mode serial` | 18767 |
+| Delta RTC | `serve_delta.sh --enable-rtc` | `runtime_delta.sh --broker-mode rtc --speed fast` | 18767 |
+
+### 第一次配置或更换 Delta 权重
+
+已配置好且没有更换权重时跳过。将下面示例路径替换成工作机上的实际步骤目录，**这一层下直接包含完整 `params/` 和配套 `assets/`**；部署不需要 `train_state/`。
 
 ```bash
+source deploy/fr3_sharpa_runtime/env.sh
+"$SHARPA_PYTHON" -m deploy.fr3_sharpa_full.setup_delta \
+  --checkpoint "$HOME/桌面/实际Delta步骤目录"
+```
+
+生成 `.deployment/full_delta.env`。已有配置且明确要更换权重时，在命令末尾加 `--force`。若手动设置过 `SHARPA_FULL_DELTA_NORM_STATS`，更换权重时也要更新或取消该覆盖，避免读取旧统计。不要修改原 absolute 的 `SHARPA_CHECKPOINT` 来切换 Delta。
+
+### 终端一：检查并启动硬件
+
+检查配置的命令不会运动；最后一条启动硬件服务。
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh check
+bash deploy/fr3_sharpa_full/serve_delta.sh --check-only
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --check --initialization current --broker-mode serial \
+  --speed slow --execute-steps 15 --num-chunks 2
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --check --initialization current --broker-mode rtc \
+  --speed fast --execute-steps 15 --num-chunks 2
 bash deploy/fr3_sharpa_runtime/hardware.sh up
 ```
 
-终端二，启动支持 RTC 和串行请求的模型服务：
+### 终端二：启动同一份 Delta 模型服务
+
+需要对比串行和 RTC 时，统一启动下面这个服务，两种执行方式都能使用：
 
 ```bash
 bash deploy/fr3_sharpa_full/serve_delta.sh --enable-rtc
 ```
 
-等待普通和 RTC guided 预热完成。终端三，**RTC 使用 fast，即 1.0 倍模型原速**：
+等待普通 `Warmup OK`、`RTC guided Warmup OK`，以及服务监听 `127.0.0.1:18767`。保持终端运行；切换执行端的 serial／RTC 不需要重新启动模型服务。
+
+如果只使用原来的 Delta 串行流程，仍可运行 `bash deploy/fr3_sharpa_full/serve_delta.sh`，不带 `--enable-rtc`；但这个普通服务不能接受 RTC 执行请求。不要同时启动两个占用 18767 的模型服务。
+
+### 终端三 A：Delta 串行，选择速度
+
+**以下执行命令都会驱动机器人，只运行其中一条。**从相近初始场景比较 slow／medium／fast；每次有限轮数执行结束或 Ctrl-C 后，等待失能确认和清理，再重新 `hardware.sh up` 开始下一次。
+
+从当前状态开始，slow：
 
 ```bash
 bash deploy/fr3_sharpa_full/runtime_delta.sh \
-  --execute --enable-hardware \
-  --initialization current \
-  --broker-mode rtc --speed fast \
-  --execute-steps 15 --num-chunks 2
+  --execute --enable-hardware --initialization current \
+  --broker-mode serial --speed slow \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
 ```
 
-`current` 从当前状态开始；先回 Home 时将 `--initialization current` 换成 `--home`。确认有限轮数正常后，可将 `--num-chunks 2` 改为 0 持续执行，速度仍为 fast。每次结束或 Ctrl-C 后等待失能确认和清理完成，再重新 `hardware.sh up` 开始下一次执行。
+从当前状态开始，medium：
 
-非 RTC 使用 `--broker-mode serial`，可单独选择 slow／medium／fast；下方既有的 slow 命令均为默认串行流程。RTC 中 `--execute-steps 15` 是消费 15 个模型节点后开始下次异步推理，等待结果时旧块继续播放，不等同于串行只执行前 15 帧。完整说明见 [RTC.md](deploy/fr3_sharpa_full/RTC.md)。
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --initialization current \
+  --broker-mode serial --speed medium \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
+```
 
-## 当前配置
+从当前状态开始，fast（1.0 倍原速）：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --initialization current \
+  --broker-mode serial --speed fast \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
+```
+
+需要先回 Home 再开始串行执行，例如 slow：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --home \
+  --broker-mode serial --speed slow \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
+```
+
+串行每轮预测 50 帧，执行索引 0–14，再重新观测推理；不带 `--broker-mode` 的旧命令等效于 `serial`。slow／medium／fast 分别为 0.1／0.5／1.0 倍速，设备下发均为 30 Hz。
+
+### 终端三 B：Delta RTC，明确使用 fast 原速
+
+RTC 真机验证仍待完成。RTC 的现场命令统一写 `--speed fast`，即 1.0 倍模型原始时间轴；首次接入仍保留低速衔接。它不是“RTC slow”，也不是提高到超过模型原速。
+
+从当前状态开始，执行两个预测块：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --initialization current \
+  --broker-mode rtc --speed fast \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
+```
+
+先回固定双臂、双手 Home，再以 RTC 原速执行：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --home \
+  --broker-mode rtc --speed fast \
+  --prepare-speed-rad-s 0.03 --execute-steps 15 --num-chunks 2
+```
+
+RTC 中 `--execute-steps 15` 是消费 15 个模型节点后请求下一次异步推理，等待结果时旧块继续播放，不等同于串行严格只执行前 15 帧。`--num-chunks 2` 包含首块普通预测和后续 guided 预测；RTC 有限轮数必须至少为 2。
+
+### 连续执行、中断恢复与停止
+
+确认有限轮数正常后，将所选命令的 `--num-chunks 2` 改为 `--num-chunks 0` 持续运行。RTC 保持 `--speed fast`；串行按需要选择三档。`--initialization current` 和 `--home` 二选一，不能同时传。
+
+中途在执行终端 Ctrl-C 后，先等双手失能读回确认及硬件会话清理完成。若模型终端仍在运行，保持不动；若已停止，先重新启动终端二。然后重新启动硬件：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up
+```
+
+再运行上面对应的完整执行命令。希望从中断后的当前状态继续时选择 current；需要先回位时选择 Home。重启后重新观测推理，不复用上次剩余动作。失能期间是否保持抓取取决于设备实际状态。
+
+完全结束时，先结束执行端并等待清理，再 Ctrl-C 停止模型服务；若清理失败或仅启动硬件未运行执行端，可重试：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh stop
+```
+
+Delta 串行日志默认在 `~/.local/state/fr3_sharpa_full_delta/execution_traces/`；RTC 日志在其 `rtc-<id>/` 子目录。详细配置、记录和验证边界见 [Delta 说明](deploy/fr3_sharpa_full/DELTA.md)及 [RTC 说明](deploy/fr3_sharpa_full/RTC.md)。
+
+## 原 absolute 权重配置
 
 | 项目 | 配置 |
 | --- | --- |
 | 模型 | `gemma_2b` + `gemma_300m`，无 LoRA |
 | 输入 | 三路 RGB、58 维实测关节位置、英文任务文本 |
 | 输出 | 每次预测 50 帧 × 58 维，默认执行前 15 帧后重新观测推理 |
-| 初始姿态 | poses.yaml 的 powder_weighing 双臂 Home，双手采用由左手实测角映射的固定 Home |
+| 初始姿态 | 默认 current；显式 Home 才使用 powder_weighing 双臂 Home 和固定双手 Home |
 | 关节顺序 | 左臂 7、左手 22、右臂 7、右手 22 |
 | 相机 | 头部 cam0、左腕 cam2、右腕 cam1 |
 | 模型动作与设备下发 | 30 Hz，名义间隔约 33.33 ms |
@@ -84,9 +190,13 @@ bash deploy/fr3_sharpa_full/runtime_delta.sh \
 
 归一化统计自动读取该 checkpoint 的 `assets/tomato_sharpa_ab4_normal_rgb_absolute_v1_30hz/norm_stats.json`。更换路径时，在两个终端设置相同的 `SHARPA_CHECKPOINT`；不要替换为其他实验的统计。
 
-## 完整启动、持续执行与停止
+<a id="完整启动持续执行与停止"></a>
+
+## 原 absolute 权重：串行完整启动、持续执行与停止
 
 **第一次拉取仓库请先阅读 [新机器部署与研究交接](docs/SHARPA_HANDOFF.md)。**下列命令面向当前已配置的机器，不是从零安装步骤。换机器请替换每段 `cd` 的仓库路径，并先生成自己的 `.deployment/local.env`。权重、SDK、现场配置、双臂 Home 和固定双手 Home 不会随 git clone 下载。
+
+本节为原 absolute 权重的串行启动流程，使用 `serve.sh`／`runtime.sh` 和端口 18765。Delta 的串行与 RTC 请使用上面的完整命令。
 
 本机启动脚本会自动读取 `.deployment/local.env` 并使用选定的 Python，不需要手动激活虚拟环境。请使用新的终端，或确认未遗留覆盖本机配置的 `SHARPA_*` 环境变量。
 
