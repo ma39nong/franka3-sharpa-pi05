@@ -19,10 +19,17 @@ def main() -> None:
     modes.add_argument("--check-only", action="store_true", help="Check metadata/statistics without loading weights")
     modes.add_argument("--smoke-only", action="store_true", help="Load GPU model, infer dummy observations and exit; no hardware")
     parser.add_argument("--report", type=Path, help="Save checkpoint/smoke validation as JSON")
+    parser.add_argument("--enable-rtc", action="store_true", help="Warm and enable Sharpa 58D JAX soft-prefix guidance")
     args = parser.parse_args()
+    if args.enable_rtc and config.MODEL_PROFILE.finetune_mode != "full":
+        parser.error("RTC currently supports full/full-delta checkpoints only")
     from .model_loader import checkpoint_contract, build_config
 
     metadata = checkpoint_contract()
+    if args.enable_rtc:
+        from openpi_client import rtc
+        metadata.update(rtc_supported=True, rtc_warmed_up=False, rtc_action_dim=58,
+                        rtc_protocol_version=rtc.PROTOCOL_VERSION, rtc_algorithm="soft_prefix_guidance")
     if args.check_only:
         print(json.dumps(metadata, indent=2))
         if args.report:
@@ -40,14 +47,30 @@ def main() -> None:
     config.validate_training_contract(training)
     stats = normalize.load(config.NORM_STATS.parent)
     print(f"Loading {config.MODEL_PROFILE.name} 58D model ({config.MODEL_PROFILE.training_action_supervision} supervision; absolute output)", flush=True)
+    from .rtc_stream import canonical_prefix
     policy = policy_config.create_trained_policy(
-        training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT)
+        training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT,
+        rtc_action_repack=canonical_prefix if args.enable_rtc else None)
     observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": config.DEFAULT_PROMPT}
     for key in ("observation/image", "observation/left_wrist_image", "observation/right_wrist_image"):
         observation[key] = np.zeros((224, 224, 3), dtype=np.uint8)
     result = policy.infer(observation)
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])
+    if args.enable_rtc:
+        import hashlib
+        context = rtc.validate_context({
+            "protocol_version": rtc.PROTOCOL_VERSION, "token": "sharpa-rtc-warmup",
+            "source_number": 1, "source_sha256": hashlib.sha256(actions.tobytes()).hexdigest(),
+            "previous_actions": actions, "inference_delay_steps": 5,
+            "prefix_attention_horizon": 25, "prefix_attention_schedule": "exp", "max_guidance_weight": 5.0})
+        for _ in range(2):
+            guided = policy.infer(observation, rtc_context=context)
+            as_finite_action_chunk(guided["actions"])
+            rtc.validate_receipt(guided.get("rtc"), context)
+        metadata.update(rtc_warmed_up=True, rtc_smoke_action_shape=[50, 58],
+                        rtc_warm_infer_ms=guided["policy_timing"]["infer_ms"])
+        print(f"RTC guided Warmup OK: 58D, {metadata['rtc_warm_infer_ms']:.1f} ms warmed model sampling", flush=True)
     metadata.update(warmed_up=True, smoke_action_shape=list(actions.shape), smoke_finite=True)
     print(f"Warmup OK: actions=(50, 58), {config.MODEL_PROFILE.name}, absolute, 30 Hz", flush=True)
     if args.report:

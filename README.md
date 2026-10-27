@@ -1,5 +1,7 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
+本分支 `sharpa-rtc` 新增可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](deploy/fr3_sharpa_full/RTC.md)。主部署分支尚未合并此功能。
+
 双 FR3 机械臂、双 Sharpa 灵巧手的视觉语言动作模型工程。当前部署使用 **π0.5 全量微调、30 Hz、原生 58 维绝对关节目标**。
 
 ## 全量与 LoRA 统一入口

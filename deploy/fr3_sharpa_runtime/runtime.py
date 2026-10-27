@@ -48,7 +48,18 @@ class SharpaRuntime:
         self.policy_url = policy_url
         self.adapter = SharpaActionAdapter()
 
-    def infer_chunk(self, observation: dict):
+    def inspect_metadata(self, *, require_rtc=False):
+        from openpi_client import msgpack_numpy
+        from websockets.sync.client import connect
+        with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=1) as ws:
+            metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
+        config.validate_policy_metadata(metadata)
+        if require_rtc:
+            from .rtc_stream import require_capabilities
+            require_capabilities(metadata)
+        return metadata
+
+    def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120):
         config.require_checkpoint()
         entered_ns = time.monotonic_ns()
         # Import here so the pure adapter remains importable in Pixi ROS2.
@@ -66,12 +77,17 @@ class SharpaRuntime:
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
             start = time.monotonic_ns()
+            if rtc_context is not None:
+                from openpi_client import rtc
+                from .rtc_stream import require_capabilities
+                require_capabilities(metadata)
+                clean = rtc.make_request(clean, rtc_context)
             payload = msgpack_numpy.Packer().pack(clean)
             timing["observation_msgpack_ms"] = (time.monotonic_ns()-start)/1e6
             timing["policy_request_send_monotonic_ns"] = time.monotonic_ns()
             ws.send(payload)
             timing["policy_request_sent_monotonic_ns"] = time.monotonic_ns()
-            response = ws.recv(timeout=120)
+            response = ws.recv(timeout=response_timeout)
             timing["response_receive_monotonic_ns"] = time.monotonic_ns()
         if isinstance(response, str):
             raise RuntimeError(f"Policy server error: {response}")
@@ -81,6 +97,12 @@ class SharpaRuntime:
         timing["server"] = result.get("diagnostic_timing", {})
         timing["existing_server_timing"] = result.get("server_timing", {})
         timing["existing_policy_timing"] = result.get("policy_timing", {})
+        if rtc_context is not None:
+            from openpi_client import rtc
+            rtc.validate_receipt(result.get("rtc"), rtc_context)
+        elif "rtc" in result:
+            raise ValueError("Unexpected RTC receipt for ordinary inference")
+        self.last_receipt = result.get("rtc")
         actions = as_finite_action_chunk(result["actions"])
         # Fresh session for this single chunk; this version never splices chunks.
         session_id = f"openpi-{uuid.uuid4().hex}"

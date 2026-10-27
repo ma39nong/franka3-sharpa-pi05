@@ -1,5 +1,7 @@
 # Sharpa 全量微调部署
 
+本分支 `sharpa-rtc` 新增可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。主部署分支尚未合并此功能。
+
 这是全量模型的日常入口，与 `../fr3_sharpa_lora/` 对称。两者共存于 `chunk-base-test`，相机、Home/prepare、三档速度、SDK 和执行循环共用 `../fr3_sharpa_runtime/` 的实现。
 
 ## Absolute 与 Delta

@@ -1,5 +1,7 @@
 # Sharpa 30 Hz 全量 Delta 部署
 
+本分支 `sharpa-rtc` 新增可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。主部署分支尚未合并此功能。
+
 本配置对应 28 服务器提供的 4000 步全量权重。入口放在 `fr3_sharpa_full/` 中，与 absolute 版本共享运行层。`full` 仍为默认 absolute；`full-delta` 是独立加载配置，默认端口 18767。
 
 ## 动作定义

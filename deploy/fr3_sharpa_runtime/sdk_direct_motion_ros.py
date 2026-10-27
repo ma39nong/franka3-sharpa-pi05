@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import traceback
+from pathlib import Path
 
 import numpy as np
 
@@ -57,6 +58,21 @@ def main() -> None:
     session_id = f"openpi-sdk-direct-{uuid.uuid4().hex}"
     sequence = 0
     clipping_report = None
+    stream = None
+    stream_tick = None
+    stream_log = None
+    stream_last_command = None
+
+    def stream_event(name, **fields):
+        if stream_log is not None:
+            stream_log.write(json.dumps({"event": name, "monotonic_s": time.monotonic(), **fields}, allow_nan=False) + "\n")
+            stream_log.flush()
+
+    def stream_actions(request):
+        actions, clipping = clip_hand_predictions(request["actions"], execute_steps=50,
+            max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
+        validate_action_ranges(actions, check_slew=False)
+        return actions, clipping
 
     def publish_frame(values: np.ndarray) -> None:
         nonlocal sequence
@@ -138,7 +154,24 @@ def main() -> None:
         while rclpy.ok():
             # Keep ROS feedback subscriptions alive while the IPC client is
             # idle between ready/prepare/chunk requests.
-            readable, _, _ = select.select([sys.stdin], [], [], 0.01)
+            if stream is not None:
+                now = time.monotonic()
+                if now >= stream_tick:
+                    if now - stream_tick > DT_NS / 1e9:
+                        raise RuntimeError("RTC 30Hz deadline missed; stopped")
+                    current = fresh_feedback()
+                    command = stream.sample(now)
+                    transition = target_chunk(command)
+                    transition[0] = stream_last_command
+                    validate_action_ranges(transition)  # Includes the actual splice slew.
+                    executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
+                    publish_frame(command)
+                    stream_last_command = command.copy()
+                    stream_event("frame", generation=stream.generation, phase=stream.phase(now),
+                                 command=command.tolist(), measured=current.state.tolist())
+                    stream_tick += DT_NS / 1e9
+            timeout = 0.01 if stream is None else max(0, min(0.01, stream_tick - time.monotonic()))
+            readable, _, _ = select.select([sys.stdin], [], [], timeout)
             if not readable:
                 continue
             line = sys.stdin.readline()
@@ -147,7 +180,62 @@ def main() -> None:
             request = json.loads(line)
             clipping_report = None
             operation = request.get("operation")
-            if operation == "ready":
+            if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "close"}:
+                raise ValueError("Cannot mix serial motion operations with an active RTC stream")
+            if operation == "stream_start":
+                from .rtc_stream import RTCTimeline
+                actions, clipping_report = stream_actions(request)
+                current = fresh_feedback()
+                # Only the initial handover uses the existing slow approach.
+                frames, _ = chunk_command_frames(actions, current.state, execute_steps=1,
+                    approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
+                executor.resume_stream()
+                def send_initial(frame):
+                    executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
+                    publish_frame(frame)
+                play_command_frames(frames, send_initial, fresh_feedback)
+                now = time.monotonic()
+                stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]))
+                stream_tick = now
+                stream_last_command = actions[0].copy()
+                path = Path(request["events_path"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                stream_log = path.open("x", encoding="utf-8")
+                stream_event("start", generation=stream.generation, clipping=clipping_report)
+                print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now)}), file=protocol, flush=True)
+            elif operation == "stream_status":
+                if stream is None:
+                    raise ValueError("No active RTC stream")
+                print(json.dumps({"status": "PASS", **stream.status(time.monotonic())}), file=protocol, flush=True)
+            elif operation == "stream_snapshot":
+                if stream is None:
+                    raise ValueError("No active RTC stream")
+                context = stream.snapshot(time.monotonic(), delay_steps=request["delay_steps"],
+                    schedule=request["schedule"], weight=request["weight"])
+                context["previous_actions"] = context["previous_actions"].tolist()
+                stream_event("snapshot", context=context)
+                print(json.dumps({"status": "PASS", "context": context}), file=protocol, flush=True)
+            elif operation == "stream_install":
+                if stream is None:
+                    raise ValueError("No active RTC stream")
+                actions, clipping_report = stream_actions(request)
+                result = stream.install(actions, request["receipt"], time.monotonic())
+                # Validate the actual last command -> first new command before acknowledging.
+                transition = target_chunk(stream.sample(time.monotonic()))
+                transition[0] = stream_last_command
+                validate_action_ranges(transition)
+                stream_event("install", **result, receipt=request["receipt"], clipping=clipping_report)
+                print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
+            elif operation == "stream_stop":
+                if stream is None:
+                    raise ValueError("No active RTC stream")
+                result = stream.status(time.monotonic())
+                stream_event("stop", **result)
+                stream = None
+                stream_log.close()
+                stream_log = None
+                print(json.dumps({"status": "PASS", "published": True, **result}), file=protocol, flush=True)
+            elif operation == "ready":
                 print(json.dumps({"status": "PASS", "operation": "ready",
                                   "feedback_topics": ["/sharpa/left/joint_states",
                                                        "/sharpa/right/joint_states"]}),
@@ -250,6 +338,11 @@ def main() -> None:
                           "reason": str(error), "detail": detail}), file=protocol, flush=True)
         raise SystemExit(1)
     finally:
+        try:
+            if stream_log is not None:
+                stream_log.close()
+        except OSError as error:
+            print(f"WARNING: RTC log close failed: {error}", file=sys.stderr, flush=True)
         from .shutdown import protect_disable_confirmation
         with protect_disable_confirmation():
             feedback_stop.set()

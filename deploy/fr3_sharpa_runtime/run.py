@@ -149,9 +149,11 @@ def execute_policy_prepare(args):
     if initialization == "home":
         from .home_pose import load_home
         home_arms, home_metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
+    if getattr(args, "broker_mode", "serial") == "rtc":
+        SharpaRuntime(args.policy_url).inspect_metadata(require_rtc=True)
     worker = None
     trace_writer = (ExecutionTraceWriter(args.execution_trace_dir)
-                    if args.sharpa_backend == "sdk_direct" else None)
+                    if args.sharpa_backend == "sdk_direct" and getattr(args, "broker_mode", "serial") == "serial" else None)
     try:
         if args.sharpa_backend == "sdk_direct":
             # Direct SDK owns the Wave devices and publishes their feedback before
@@ -205,6 +207,16 @@ def execute_policy_prepare(args):
         if home_arms is not None:
             from .home_pose import home_target
             initial_target = home_target(home_arms, initial["observation/state"])
+        if getattr(args, "broker_mode", "serial") == "rtc":
+            if initial_target is not None:
+                prepared = worker.request({"operation": "prepare", "target": initial_target.tolist(),
+                    "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": 0.02})
+                if prepared.get("status") != "PASS":
+                    raise RuntimeError("Home failed before RTC")
+                initial = observation_after_completion(args, prepared)
+            from .rtc_runtime import run_rtc
+            return run_rtc(runtime, lambda: live_observation(args.ros_overlay, args.prompt),
+                           worker, infer(initial), initial, args)
         result = prepare_and_run_chunks(cached_first_infer,
             lambda completed: observation_after_completion(args, completed), worker, initial,
             num_chunks=args.num_chunks, speed_rad_s=args.prepare_speed_rad_s,
@@ -367,6 +379,12 @@ def main() -> None:
                         help="Execute first N of 50 predicted actions, then reobserve/reinfer (default 15)")
     parser.add_argument("--prediction-clip-rad", type=float, default=0.05,
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
+    parser.add_argument("--broker-mode", choices=("serial", "rtc"), default="serial",
+                        help="serial keeps existing behavior; rtc overlaps inference and accepted motion")
+    parser.add_argument("--rtc-initial-delay-steps", type=int, default=5)
+    parser.add_argument("--rtc-delay-buffer-size", type=int, default=10)
+    parser.add_argument("--rtc-prefix-attention-schedule", choices=("ones", "zeros", "linear", "exp"), default="exp")
+    parser.add_argument("--rtc-max-guidance-weight", type=float, default=5.0)
     initialization = parser.add_mutually_exclusive_group()
     initialization.add_argument("--initialization", choices=("current", "home", "policy"),
                                 help="sdk_direct: current live state (default), fixed Home, or legacy policy first target")
@@ -405,6 +423,19 @@ def main() -> None:
         parser.error("--execute-steps must be in [1, 50]")
     if args.sharpa_backend == "litchibot" and args.execute_steps != 50:
         parser.error("legacy litchibot requires --execute-steps 50; prefix execution uses sdk_direct")
+    if args.broker_mode == "rtc":
+        from .rtc_stream import RTCSettings
+        try:
+            RTCSettings(args.rtc_initial_delay_steps, args.rtc_delay_buffer_size,
+                        args.rtc_prefix_attention_schedule, args.rtc_max_guidance_weight)
+        except ValueError as error:
+            parser.error(str(error))
+        if args.sharpa_backend != "sdk_direct" or config.MODEL_PROFILE.finetune_mode != "full":
+            parser.error("RTC currently supports only sdk_direct full/full-delta JAX deployments")
+        if args.initialization == "policy":
+            parser.error("RTC supports current or Home initialization, not legacy policy prepare")
+        if args.num_chunks == 1 or args.num_chunks < 0 or not 1 <= args.execute_steps <= 24:
+            parser.error("RTC needs --num-chunks 0 or >=2 and --execute-steps in [1, 24] (replan interval)")
     from .profiles import resolve_speed
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name
@@ -422,7 +453,7 @@ def main() -> None:
                 or not np.isfinite(args.prepare_speed_rad_s) or args.prepare_speed_rad_s <= 0
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
-        print(json.dumps({"mode": "check", "hardware_output": False,
+        print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
                           "prepare_speed_rad_s": args.prepare_speed_rad_s,
@@ -445,6 +476,8 @@ def main() -> None:
         if args.mode != "dry-run":
             parser.error("Use a mode flag or --mode, not both")
         args.mode = "execute" if args.execute else "prepare" if args.prepare else "handoff-verify" if args.handoff_verify else "preflight-only"
+    if args.broker_mode == "rtc" and args.mode != "execute":
+        parser.error("--broker-mode rtc is for execute or offline --check only")
     if args.mode == "execute":
         if not args.enable_hardware or args.episode_parquet:
             parser.error("execute requires --enable-hardware and live ROS observations; recorded samples are forbidden")
