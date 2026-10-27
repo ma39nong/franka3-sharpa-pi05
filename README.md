@@ -1,6 +1,6 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
-`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](deploy/fr3_sharpa_full/RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
+`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端用 `--broker-mode serial/rtc` 选择机制。**RTC 启动统一显式使用 `--broker-mode rtc --speed fast`，表示 1.0 倍模型原速；非 RTC 串行保留 slow／medium／fast 三档。**旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](deploy/fr3_sharpa_full/RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
 
 双 FR3 机械臂、双 Sharpa 灵巧手的视觉语言动作模型工程。当前部署使用 **π0.5 全量微调、30 Hz、原生 58 维绝对关节目标**。
 
@@ -32,6 +32,36 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model lora --check --speed slow
 新的 LoRA checkpoint 尚未提供，目前只完成代码和配置测试，真实加载与工作机实机验证待完成。
 
 权重接入步骤见 [LoRA 部署说明](deploy/fr3_sharpa_lora/README.md)。
+
+## 全量 Delta：RTC 原速启动
+
+在工作机部署仓库根目录运行，沿用已配置的 `.deployment/full_delta.env` 权重和统计。以下执行命令会驱动机器人；RTC 真机验证仍待完成。
+
+终端一，启动硬件：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up
+```
+
+终端二，启动支持 RTC 和串行请求的模型服务：
+
+```bash
+bash deploy/fr3_sharpa_full/serve_delta.sh --enable-rtc
+```
+
+等待普通和 RTC guided 预热完成。终端三，**RTC 使用 fast，即 1.0 倍模型原速**：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware \
+  --initialization current \
+  --broker-mode rtc --speed fast \
+  --execute-steps 15 --num-chunks 2
+```
+
+`current` 从当前状态开始；先回 Home 时将 `--initialization current` 换成 `--home`。确认有限轮数正常后，可将 `--num-chunks 2` 改为 0 持续执行，速度仍为 fast。每次结束或 Ctrl-C 后等待失能确认和清理完成，再重新 `hardware.sh up` 开始下一次执行。
+
+非 RTC 使用 `--broker-mode serial`，可单独选择 slow／medium／fast；下方既有的 slow 命令均为默认串行流程。RTC 中 `--execute-steps 15` 是消费 15 个模型节点后开始下次异步推理，等待结果时旧块继续播放，不等同于串行只执行前 15 帧。完整说明见 [RTC.md](deploy/fr3_sharpa_full/RTC.md)。
 
 ## 当前配置
 

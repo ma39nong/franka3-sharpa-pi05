@@ -6,7 +6,8 @@ RTC 与串行部署统一保存在 `chunk-base-test`，工作目录 `/home/user/
 
 - `--broker-mode serial`：默认值；保留每轮预测 50、执行前 15、停下来重新观测推理的流程。
 - `--broker-mode rtc`：首次普通推理后持续播放已接纳的块；播放过程中观测并异步请求 guided 推理，接纳新块时跳过已过期节点。
-- `--speed slow/medium/fast`：仍控制播放速度；三种模式都以 30 Hz 下发设备命令。RTC 用实际模型节点消费速度计算延迟跳步，slow 不按 fast 计算。自定义倍率沿用原播放器 `1/ceil(1/scale)` 的实际节点消费倍率。
+- **RTC 现场命令统一使用 `--broker-mode rtc --speed fast`**：fast 表示 1.0 倍模型原始时间轴，不是额外加速；模型节点与设备下发均为 30 Hz。首次受控接近仍保留低速衔接。
+- 非 RTC 串行模式仍可用 `--speed slow/medium/fast` 选择 0.1／0.5／1.0 倍速。速度与 broker 是两个参数，本页 RTC 命令均显式写出 fast。
 
 RTC 下 `--execute-steps 15` 表示每接纳一块后，消费 15 个模型节点就请求下一块。等待结果时旧块继续播放，因此不是严格“只发前 15 帧”。有限 `--num-chunks` 计数接纳的预测块，必须至少为 2，或者设 0 持续执行；最后一块消费指定间隔后结束。RTC 不包含 RTG cubic 拼接，也没有复用 Wuji 的设备参数或取消现有硬件边界。
 
@@ -27,7 +28,7 @@ bash deploy/fr3_sharpa_full/serve_delta.sh --enable-rtc
 ```bash
 bash deploy/fr3_sharpa_full/runtime_delta.sh \
   --check --broker-mode rtc --initialization current \
-  --speed slow --execute-steps 15 --num-chunks 2
+  --speed fast --execute-steps 15 --num-chunks 2
 ```
 
 工作机 GPU 离线验证，假观测，不连接机器人：
@@ -51,15 +52,23 @@ bash deploy/fr3_sharpa_full/runtime_delta.sh \
   --initialization current --speed slow --execute-steps 15 --num-chunks 2
 ```
 
-RTC，从当前状态执行两个预测块：
+RTC，按模型原速从当前状态执行两个预测块：
 
 ```bash
 bash deploy/fr3_sharpa_full/runtime_delta.sh \
   --execute --enable-hardware --broker-mode rtc \
-  --initialization current --speed slow --execute-steps 15 --num-chunks 2
+  --initialization current --speed fast --execute-steps 15 --num-chunks 2
 ```
 
-回 Home 后再运行 RTC 时，删除 `--initialization current`，换成 `--home`。单次试验结束或 Ctrl-C 后仍使用原失能确认和硬件清理；下一次先重新 `hardware.sh up`。模型服务保持独立运行。同一套机器人一次只启动一个执行端。
+需要先回 Home、再按原速运行 RTC 时，使用：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_delta.sh \
+  --execute --enable-hardware --broker-mode rtc \
+  --home --speed fast --execute-steps 15 --num-chunks 2
+```
+
+确认有限轮数正常后，将 `--num-chunks 2` 改为 `--num-chunks 0` 持续执行，仍保留 `--speed fast`。单次试验结束或 Ctrl-C 后仍使用原失能确认和硬件清理；下一次先重新 `hardware.sh up`。模型服务保持独立运行。同一套机器人一次只启动一个执行端。
 
 RTC 参数默认值：`--rtc-initial-delay-steps 5`、`--rtc-delay-buffer-size 10`、`--rtc-prefix-attention-schedule exp`、`--rtc-max-guidance-weight 5`。延迟历史以 5 个模型节点为种子，之后记录成功安装的实际跳步，取历史最大值作为下次模型条件。硬件 30 Hz deadline、新鲜反馈、关节范围、实际下发帧 slew、网关和停止/失能确认仍生效。旧块耗尽、回执不匹配、实际延迟超过引导窗口均停止，不无限保持旧块，也不推测新动作。
 

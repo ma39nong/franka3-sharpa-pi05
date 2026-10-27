@@ -1,6 +1,6 @@
 # Sharpa 30 Hz 全量 Delta 部署
 
-`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
+`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端用 `--broker-mode serial/rtc` 选择机制。**RTC 启动统一显式使用 `--broker-mode rtc --speed fast`，表示 1.0 倍模型原速；非 RTC 串行保留 slow／medium／fast 三档。**旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
 
 本配置对应 28 服务器提供的 4000 步全量权重。入口放在 `fr3_sharpa_full/` 中，与 absolute 版本共享运行层。`full` 仍为默认 absolute；`full-delta` 是独立加载配置，默认端口 18767。
 

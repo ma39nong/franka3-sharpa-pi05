@@ -1,5 +1,7 @@
 # FR3 + Sharpa 本机部署
 
+RTC 原速部署明确使用 `--broker-mode rtc --speed fast`（1.0 倍模型时间轴），服务端需先加 `--enable-rtc` 完成 guided 预热。下方未指定 broker 的 slow／medium／fast 示例均为串行模式。完整 RTC 命令见 [RTC 启动说明](../fr3_sharpa_full/RTC.md)。
+
 当前模型：π0.5 全量微调、30 Hz、原生 58D、50 帧、全部为绝对关节目标，单位 rad。执行路径是 policy server → runtime → FR3 Safety Gateway / Sharpa SDK direct。LoRA/full 参数差异由模型加载层处理，速度档位共用同一个执行器。
 
 ## 全量与 LoRA 统一入口

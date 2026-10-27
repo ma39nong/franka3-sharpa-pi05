@@ -1,6 +1,6 @@
 # Sharpa 全量微调部署
 
-`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端 `--broker-mode serial/rtc`，速度仍用 `--speed` 独立选择。旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
+`chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端用 `--broker-mode serial/rtc` 选择机制。**RTC 启动统一显式使用 `--broker-mode rtc --speed fast`，表示 1.0 倍模型原速；非 RTC 串行保留 slow／medium／fast 三档。**旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
 
 这是全量模型的日常入口，与 `../fr3_sharpa_lora/` 对称。两者共存于 `chunk-base-test`，相机、Home/prepare、三档速度、SDK 和执行循环共用 `../fr3_sharpa_runtime/` 的实现。
 
