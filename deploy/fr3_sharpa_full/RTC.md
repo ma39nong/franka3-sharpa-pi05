@@ -1,6 +1,6 @@
-# Sharpa 全量模型 RTC（独立分支试验）
+# Sharpa 全量模型 RTC
 
-开发分支 `sharpa-rtc`，工作目录 `/home/user/sharpa-pi05-rtc`。主工作目录和 `chunk-base-test` 未合并本功能。部署前先将此分支的代码同步到工作机，继续使用工作机自己的 `.deployment/local.env`、`full_delta.env`、Home 和相机配置。
+RTC 与串行部署统一保存在 `chunk-base-test`，工作目录 `/home/user/sharpa-pi05`，通过启动参数选择，不需要切换分支。部署前先将 `chunk-base-test` 的最新代码同步到工作机，继续使用工作机自己的 `.deployment/local.env`、`full_delta.env`、Home 和相机配置。
 
 ## 两个独立选项
 
@@ -79,7 +79,7 @@ RTC 不能保证任意场景的模型行为正确，也不增加环境碰撞规�
 
 参考 `harvesting/pi05` 的 `pi05-deploy` 分支提交 `7c3d36500624e7706eaa7ae7d82dbdb1537f45fe`：模型端 soft prefix guidance、策略前缀变换、请求/回执协议。来源文件为 `src/openpi/models/pi0.py`、`src/openpi/policies/policy.py`、`policy_config.py`、`src/openpi/serving/websocket_policy_server.py`、`packages/openpi-client/src/openpi_client/rtc.py`。保留 OpenPI 的 Apache-2.0 许可。协议维度已从 Wuji 54 改为 Sharpa 58；执行层是本项目独立实现，没有复制 Wuji 设备控制代码。
 
-2026-10-27 已用昨天的 251-episode Delta step 4000 在 28 单 GPU 运行当前代码的普通和 guided 假观测预热，输出均为有限 `(50,58)`，guided 预热后模型采样约 72.8ms。权重实验名为 `tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1024_1119_1024_113613`，没有改用新 311-episode 权重。该时间不包括相机、网络、安装和硬件控制，不能推定工作机实时性能。报告位于本分支 `.deployment/rtc_reference/rtc_smoke.json`，Git 忽略。
+2026-10-27 已用昨天的 251-episode Delta step 4000 在 28 单 GPU 运行当前代码的普通和 guided 假观测预热，输出均为有限 `(50,58)`，guided 预热后模型采样约 72.8ms。权重实验名为 `tairan_tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1024_1119_1024_113613`，没有改用新 311-episode 权重。该时间不包括相机、网络、安装和硬件控制，不能推定工作机实时性能。报告位于`.deployment/rtc_audit/rtc_smoke.json`，Git 忽略。
 
 已覆盖非零新状态的 Delta 前缀重锚定、三档延迟换算、异步五块模拟、晚结果拒绝、回执与服务能力检查，以及原串行回归。ROS/SDK 真机时序、运动跟踪和任务效果仍需工作机测试。
 
