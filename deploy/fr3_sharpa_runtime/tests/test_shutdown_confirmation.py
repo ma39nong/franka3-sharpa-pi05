@@ -1,4 +1,8 @@
+import json
+import os
+from pathlib import Path
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -10,6 +14,7 @@ from deploy.fr3_sharpa_runtime.shutdown import DisableSettings
 from deploy.fr3_sharpa_runtime.shutdown import disable_and_confirm
 from deploy.fr3_sharpa_runtime.shutdown import protect_disable_confirmation
 from deploy.fr3_sharpa_runtime.shutdown import read_enable_state
+from deploy.fr3_sharpa_runtime.shutdown import save_shutdown_report
 
 
 class Hand:
@@ -153,6 +158,64 @@ def test_repeated_interrupt_is_deferred_and_original_handler_restored():
         handler(signal.SIGINT, None)
     assert signal.getsignal(signal.SIGINT) == original
     assert len(messages) == 2
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError(), ValueError("closed stream"), RuntimeError("logger failed")])
+def test_logging_failure_cannot_prevent_either_hand_disable(error):
+    def broken_output(message):
+        raise error
+
+    left, right = Hand(), Hand()
+    report = disable_and_confirm({"left": left, "right": right}, settings(), emit=broken_output)
+    assert report["status"] == "PASS"
+    assert left.requests == right.requests == 1
+    assert left.disconnected.is_set()
+    assert right.disconnected.is_set()
+    with protect_disable_confirmation(broken_output):
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+
+
+def test_actual_closed_stderr_pipe_still_disables_and_persists_result(tmp_path):
+    script = """
+import os, sys
+from deploy.fr3_sharpa_runtime.shutdown import disable_and_confirm, save_shutdown_report
+class Hand:
+    def __init__(self): self.stopped = False
+    def stop(self): self.stopped = True
+    def read_enable_state(self): return not self.stopped
+    def disconnect(self): pass
+report = disable_and_confirm({"left": Hand(), "right": Hand()})
+save_shutdown_report(report)
+# Avoid an unrelated interpreter-final-flush error after the safety work.
+sys.stderr = open(os.devnull, "w")
+"""
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[3],
+            env={**os.environ, "SHARPA_SHUTDOWN_REPORT_DIR": str(tmp_path)},
+            stderr=write_fd,
+            timeout=5,
+            check=False,
+        )
+    finally:
+        os.close(write_fd)
+    assert result.returncode == 0
+    report = json.loads(next(tmp_path.glob("shutdown-*.json")).read_text())
+    assert report["status"] == "PASS"
+    assert all(state["confirmed_disabled"] for state in report["hands"].values())
+
+
+def test_report_persistence_does_not_promote_failure_to_success(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHARPA_SHUTDOWN_REPORT_DIR", str(tmp_path))
+    report = disable_and_confirm({"left": Hand((True,)), "right": Hand()}, settings(), emit=lambda message: None)
+    path = save_shutdown_report(report)
+    stored = json.loads(path.read_text())
+    assert stored["status"] == "FAIL"
+    assert not stored["hands"]["left"]["confirmed_disabled"]
+    assert stored["hands"]["right"]["confirmed_disabled"]
 
 
 @pytest.mark.parametrize(

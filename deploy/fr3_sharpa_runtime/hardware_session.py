@@ -7,6 +7,8 @@ import signal
 import subprocess
 import sys
 
+from .shutdown import stderr
+
 
 class HardwareSession:
     def __init__(self):
@@ -65,8 +67,8 @@ class HardwareSession:
                 continue
             try:
                 # Address immutable IDs, never a service name that another launcher may have replaced.
-                subprocess.run(["docker", "stop", "--time", "30", latest["Id"]], check=True)
-                subprocess.run(["docker", "rm", latest["Id"]], check=True)
+                subprocess.run(["docker", "stop", "--time", "30", latest["Id"]], check=True, capture_output=True)
+                subprocess.run(["docker", "rm", latest["Id"]], check=True, capture_output=True)
                 released_gateway |= service == "teleop-control"
             except subprocess.SubprocessError as error:
                 errors.append(f"{service}: {error}")
@@ -78,7 +80,7 @@ class HardwareSession:
         original, latest = self.owned.get("franka-control"), after.get("franka-control")
         if released_gateway and original and latest and original["Id"] == latest["Id"]:
             try:
-                subprocess.run(["docker", "stop", "--time", "30", latest["Id"]], check=True)
+                subprocess.run(["docker", "stop", "--time", "30", latest["Id"]], check=True, capture_output=True)
             except subprocess.SubprocessError as error:
                 errors.append(f"franka-control: {error}")
         if errors:
@@ -92,9 +94,14 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
 
     def forward(number, _frame):
         nonlocal interrupted
+        if interrupted is not None:
+            return
         interrupted = number
         if child is not None and child.poll() is None:
-            os.killpg(child.pid, number)
+            try:
+                os.killpg(child.pid, number)
+            except ProcessLookupError:
+                pass
 
     previous = {number: signal.signal(number, forward) for number in (signal.SIGINT, signal.SIGTERM)}
     status = 1
@@ -111,8 +118,7 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
                     try:
                         status = child.wait(timeout=shutdown_grace_s)
                     except subprocess.TimeoutExpired:
-                        print("[sharpa-shutdown] ERROR 执行端退出超时，将终止进程组；未确认设备失能。",
-                              file=sys.stderr, flush=True)
+                        stderr("[sharpa-shutdown] ERROR 执行端退出超时，将终止进程组；未确认设备失能。")
                         os.killpg(child.pid, signal.SIGTERM)
                         try:
                             status = child.wait(timeout=5)
@@ -124,7 +130,7 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
         try:
             hardware.cleanup()
         except Exception as error:
-            print(f"ERROR: {error}; run hardware.sh stop to retry cleanup", file=sys.stderr)
+            stderr(f"ERROR: {error}; run hardware.sh stop to retry cleanup")
             status = 1
         finally:
             for number, handler in previous.items():

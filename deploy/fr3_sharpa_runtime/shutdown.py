@@ -1,9 +1,12 @@
 """Bounded disable/readback on existing hand handles; never connect or enable."""
 
 from contextlib import contextmanager
+from contextlib import suppress
 from dataclasses import dataclass
+import json
 import math
 import os
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -47,7 +50,42 @@ class DisableSettings:
 
 
 def stderr(message):
-    print(message, file=sys.stderr, flush=True)
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        # A Ctrl-C'd tee or closed terminal must never abort device cleanup.
+        try:
+            with open(os.devnull, "w") as sink:
+                os.dup2(sink.fileno(), sys.stderr.fileno())
+        except (OSError, ValueError):
+            pass
+
+
+def safe_emit(emit, message):
+    # Diagnostics are deliberately outside the disable/readback contract.
+    with suppress(Exception):
+        emit(message)
+
+
+def save_shutdown_report(report):
+    """Persist independently of console/IPC; never interrupt hand cleanup."""
+    directory = os.environ.get("SHARPA_SHUTDOWN_REPORT_DIR")
+    if not directory:
+        return None
+    path = Path(directory) / f"shutdown-{os.getpid()}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        with temporary.open("w") as stream:
+            json.dump({**report, "pid": os.getpid(), "recorded_unix_ns": time.time_ns()}, stream)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        return path
+    except (OSError, ValueError, TypeError) as error:
+        stderr(f"[sharpa-shutdown] ERROR 无法保存独立失能报告: {error}")
+        return None
 
 
 @contextmanager
@@ -58,7 +96,7 @@ def protect_disable_confirmation(emit=stderr):
         return
 
     def waiting(number, _frame):
-        emit(f"[sharpa-shutdown] 收到信号 {number}; 正在确认失能, 请等待本次有时限的退出检查。")
+        safe_emit(emit, f"[sharpa-shutdown] 收到信号 {number}; 正在确认失能, 请等待本次有时限的退出检查。")
 
     previous = {number: signal.signal(number, waiting) for number in (signal.SIGINT, signal.SIGTERM)}
     try:
@@ -79,6 +117,11 @@ def read_enable_state(hand):
 
 
 def disable_and_confirm(hands, settings=None, *, emit=stderr):
+    output = emit
+
+    def emit(message):
+        safe_emit(output, message)
+
     settings = settings or DisableSettings.from_env()
     started = time.monotonic()
     deadline = started + settings.timeout_s

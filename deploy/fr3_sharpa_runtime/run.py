@@ -141,9 +141,6 @@ def execute_policy_prepare(args):
     worker_module = ("deploy.fr3_sharpa_runtime.sdk_direct_motion_ros"
                      if args.sharpa_backend == "sdk_direct"
                      else "deploy.fr3_sharpa_runtime.guarded_motion_ros")
-    inner = (f"source {shlex.quote(str(setup))}; "
-             f"export PYTHONPATH={shlex.quote(repo)}:{shlex.quote(str(GELLO_REPO))}:{shlex.quote(str(core))}:\"${{PYTHONPATH:-}}\"; "
-             f"exec python -m {worker_module} --enable-hardware")
     home_arms = home_metadata = None
     initialization = getattr(args, "initialization", "current") if args.sharpa_backend == "sdk_direct" else "policy"
     if initialization == "home":
@@ -151,6 +148,10 @@ def execute_policy_prepare(args):
         home_arms, home_metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
     if getattr(args, "broker_mode", "serial") == "rtc":
         SharpaRuntime(args.policy_url).inspect_metadata(require_rtc=True)
+    inner = (f"source {shlex.quote(str(setup))}; "
+             f"export SHARPA_SHUTDOWN_REPORT_DIR={shlex.quote(str(args.execution_trace_dir.expanduser().resolve()))}; "
+             f"export PYTHONPATH={shlex.quote(repo)}:{shlex.quote(str(GELLO_REPO))}:{shlex.quote(str(core))}:\"${{PYTHONPATH:-}}\"; "
+             f"exec python -m {worker_module} --enable-hardware")
     worker = None
     trace_writer = (ExecutionTraceWriter(args.execution_trace_dir)
                     if args.sharpa_backend == "sdk_direct" and getattr(args, "broker_mode", "serial") == "serial" else None)
