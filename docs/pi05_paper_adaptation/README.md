@@ -2,20 +2,52 @@
 
 这些是默认关闭的实验功能，基于 `chunk-base-test@64f8f66`。支持 `full` 和 `full-delta`，复用原来的硬件、Home、SDK、安全网关、速度档和退出清理。旧命令仍预测 50、执行 15，默认从当前状态启动；本功能不新增可训练参数、不改变已有 checkpoint 或 norm stats。
 
-本地同步实验位于 `/home/user/sharpa-pi05-inpainting-sync` 的 `codex/sharpa-inpainting-sync`，将原分支 `58bc329` 的改动接入 `main@4a7fad1` 基础；没有合并或切换原工作目录的 main，也没有修改训练仓库。原 main 的 RTC、相机诊断、录制及退出失能确认保留。服务端 `--enable-rtc` 与 `--enable-inference-experiments` 互斥；执行端 paper-rolling 只允许 `--broker-mode serial`，同一次推理不能混用 RTC 与 Soft Inpainting。此目录不复制 `.deployment`、权重或设备配置；离线检查可显式指定已有 Python 环境。
+当前使用 `soft-inpainting-test` 分支，位于原工程 `/home/user/sharpa-pi05`。本分支将原实验 `58bc329` 接入 `main@4a7fad1`；main 分支保持原提交。临时 worktree 和旧 `codex/sharpa-inpainting-sync` 分支名已移除，训练仓库未修改。原 main 的 RTC、相机诊断、录制及退出失能确认保留。
 
-下方 `WP0_AUDIT.md`、`SYNTHETIC_RESULTS.md` 和两个 synthetic JSON 是原分支的历史证据，不代表同步后的新一轮模型或实机验证。
+服务端 `--enable-rtc` 与 `--enable-inference-experiments` 互斥；执行端 paper-rolling 只允许串行，单次推理不能混用 RTC 与 Soft。新增快捷入口仅提供默认参数，不修改机器的 `.deployment`、权重、归一化统计或硬件配置。旧入口与旧 RTC 命令在本分支继续可用。
 
-2026-10-28 同步版本在 CPU 上通过 332 项检查（完整 runtime 测试、Pi0 测试和客户端 RTC 协议测试）；增加了真实采样器 RTC 路径、零权重等价性和混用模式拒绝的回归。固定 seed 42、5 轮合成回放及离线 lock 校验通过。未加载真实 checkpoint、未启动训练、未连接设备。
+下方 `WP0_AUDIT.md`、`SYNTHETIC_RESULTS.md` 和两个 synthetic JSON 是原分支的历史证据，不代表当前分支的真实模型或实机验证。当前版本在 CPU 通过332项完整 runtime、Pi0 及客户端 RTC 协议测试；另验证旧 Absolute／Delta 串行、新 Absolute／Delta Soft、26点无约束对照和旧 RTC 共6组参数检查，以及服务帮助和模式互斥检查。未加载真实 checkpoint、未训练、未连接设备。
 
-只检查新目录的实验参数，不加载模型或连接设备：
+## 工程机拉取和选择新旧方式
+
+先停止当前执行端和模型服务，确认工程机工作区没有未保存改动，再在工程机仓库根目录执行。已有 `.deployment` 和虚拟环境继续使用，不需要复制整个工程；权重及统计路径以工程机自身配置为准。
 
 ```bash
-cd /home/user/sharpa-pi05-inpainting-sync
-SHARPA_PYTHON=/home/user/sharpa-pi05/.venv/bin/python \
-  bash deploy/fr3_sharpa_full/runtime_delta.sh --check \
-  --inference-preset paper-rolling --inpainting soft --speed slow
+git fetch origin
+git switch --track origin/soft-inpainting-test
+# 如果本地已存在此分支，改用：
+# git switch soft-inpainting-test
+# git pull --ff-only origin soft-inpainting-test
 ```
+
+如现有环境尚无 SciPy，按工程原有依赖安装方式更新环境；`pyproject.toml` 已显式声明它。下面 `--check` 只检查参数，不加载权重或检查全部模型依赖；实际模型预热仍需在工程机验证。
+
+新入口的两个终端必须选择相同模型；下面以已有 full-delta 权重为例，Absolute 权重将两端 `full-delta` 都改为 `full`。先只检查新旧参数（不连接设备）：
+
+```bash
+# 旧串行：默认50/15
+bash deploy/fr3_sharpa_full/runtime_delta.sh --check --speed slow
+# 新串行Soft：默认26+4，压缩关闭
+bash deploy/fr3_sharpa_full/runtime_soft.sh --model full-delta --check --speed slow
+```
+
+模型终端启动新服务，等待 `Warmup OK` 和 `Inference experiments ready`：
+
+```bash
+bash deploy/fr3_sharpa_full/serve_soft.sh --model full-delta
+```
+
+硬件准备沿用原流程。以下命令会发送运动，首次只验证一轮执行链路；首轮没有旧参考，确认后将 `--num-chunks 1` 改为 `3` 才能观察跨轮 Soft：
+
+```bash
+bash deploy/fr3_sharpa_full/runtime_soft.sh --model full-delta \
+  --execute --enable-hardware --sharpa-backend sdk_direct \
+  --initialization current --speed slow --num-chunks 1
+```
+
+`runtime_soft.sh` 默认 `paper-rolling / soft / compression=off / broker=serial`，不默认启用运动。可显式传 `--inpainting off` 做相同26点长度的无约束对照，或另行选择压缩；第一轮实验保持压缩关闭。底层仍保留200ms观测年龄与1秒实验响应有效期检查，超时会拒绝执行，应排查实际延迟，不能把参数检查通过当作实机可用的证明。
+
+回到旧串行：先停止新执行端和模型服务，再使用原来的 `serve_delta.sh` / `runtime_delta.sh` 和原参数。回到旧 RTC：先停止新执行端和模型服务，再按原 RTC 文档启动 `--enable-rtc` 服务及 `--broker-mode rtc` 执行端。不需要切分支即可使用旧入口。如希望整个代码恢复主线，停止进程并保持工作区干净后执行 `git switch main`。
 
 ## 算法与限制
 
@@ -53,7 +85,7 @@ bash deploy/fr3_sharpa_full/serve_delta.sh --enable-inference-experiments
 
 ```bash
 bash deploy/fr3_sharpa_full/runtime_delta.sh --check \
-  --inference-preset paper-rolling --inpainting soft --compression cubic --speed slow
+  --inference-preset paper-rolling --inpainting soft --compression off --speed slow
 ```
 
 执行终端，以下会发送机器人运动指令，首次只跑一轮：
@@ -62,7 +94,7 @@ bash deploy/fr3_sharpa_full/runtime_delta.sh --check \
 bash deploy/fr3_sharpa_full/runtime_delta.sh \
   --execute --enable-hardware --sharpa-backend sdk_direct \
   --initialization current --speed slow --num-chunks 1 \
-  --inference-preset paper-rolling --inpainting soft --compression cubic
+  --inference-preset paper-rolling --inpainting soft --compression off
 ```
 
 第一轮没有旧参考，验证跨轮效果需要后续现场选择有限多轮。确认后才考虑 `--num-chunks 0`。需要启动前回 Home 时使用 `--home` 替换 `--initialization current`。全量 absolute 对照使用 `serve.sh` / `runtime.sh` 替换上述 `_delta.sh` 入口，两端模型须一致。
