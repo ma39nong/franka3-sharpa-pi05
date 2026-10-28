@@ -143,3 +143,5 @@ bash deploy/fr3_sharpa_runtime/hardware.sh stop
 全量 absolute 与 full-delta 可分别沿用本目录入口，显式启用滚动参考、Soft Inpainting 和独立动作压缩。原命令默认行为不变。配置、工控机三终端命令及离线验证见 [论文推理实验说明](../../docs/pi05_paper_adaptation/README.md)。
 
 `soft-inpainting-test` 分支新增 `serve_soft.sh` / `runtime_soft.sh` 快捷入口，两端均可传 `--model full` 或 `--model full-delta`。新执行入口默认串行、Soft 开启、压缩关闭、消费26点并保留4点；仍需显式传入原有硬件执行参数。原 `serve.sh` / `runtime.sh`、Delta 及 RTC 命令继续有效；使用旧方式时无需切回 main，但应先停止实验服务，再以原命令重启。工程机拉取与完整命令见上面的实验说明。
+
+第四种独立实验：`serve_async_soft.sh` / `runtime_async_soft.sh` 提供异步执行＋Soft，默认端口为所选模型原端口加100，不叠加原RTC引导。原串行、原RTC和上述串行Soft入口均保持原样。先运行新入口 `--check`，真实权重预热和完整命令见 [异步Soft说明](../../docs/pi05_paper_adaptation/ASYNC_SOFT.md)。

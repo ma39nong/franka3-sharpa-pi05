@@ -151,3 +151,7 @@ JAX_PLATFORMS=cpu OPENBLAS_NUM_THREADS=1 "$SHARPA_PYTHON" -m deploy.fr3_sharpa_r
 新增 chunk 日志保留原始 50 点预测、请求参考、服务端是否实际使用参考、采样修正次数、协方差资产身份、候选执行目标、压缩及回退原因。成功的 worker 报告还包含最终执行目标和全部衔接/时间伸缩后的指令点，消费模型点数与实际下发数量分开保存。仍沿用事件和 run 日志；`commands_sent`/`COMPLETE` 不能解释为全部关节到位或番茄采摘成功。
 
 审计与本轮结果见 [WP0_AUDIT](WP0_AUDIT.md) 和 [合成结果](SYNTHETIC_RESULTS.md)。
+
+## 独立异步 Soft 实验
+
+同一分支新增第四种方式，现有三种入口和实现保持原样。新入口为 `deploy/fr3_sharpa_full/serve_async_soft.sh`、`runtime_async_soft.sh`，具有独立端口、时间对齐和采样器；不叠加原RTC引导，也不启用压缩。工程机命令、时序定义与离线验证边界见 [异步 Soft 说明](ASYNC_SOFT.md)。

@@ -399,3 +399,5 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 新增默认关闭的滚动参考、去噪内部 Soft Inpainting、可选相关性传播，以及 26→20 三次插值压缩。支持现有 full/full-delta，保留默认 50/15 和全部原硬件执行路径。本轮只做 CPU 离线测试；接入方式、独立开关、时间轴限制和验证边界见 [推理实验说明](docs/pi05_paper_adaptation/README.md)。
 
 `soft-inpainting-test` 在原项目目录中使用；新增 `deploy/fr3_sharpa_full/serve_soft.sh` 和 `runtime_soft.sh`，默认串行 Soft、无压缩。旧入口及 RTC 入口继续可用，`main` 不含本实验改动。切换方式时先停止当前执行端和模型服务，再按对应命令启动；不要共用同一端口启动两套服务。
+
+同一分支另有独立第四种实验入口：异步执行＋Soft Inpainting，原串行、原RTC、串行Soft实现保持原样。新增入口、端口和工程机试验说明见 [异步Soft文档](docs/pi05_paper_adaptation/ASYNC_SOFT.md)。该版本仅完成CPU离线验证，真实权重及硬件表现待验证。
