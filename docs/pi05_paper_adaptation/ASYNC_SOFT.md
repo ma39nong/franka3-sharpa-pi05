@@ -1,80 +1,71 @@
-# 异步 Soft Inpainting：独立第四种实验模式
+# 异步 Soft：50 → 30 → 26＋4 → 20
 
-本实验只在 `soft-inpainting-test` 分支新增文件。原串行、原异步 RTC、串行 Soft 的启动脚本、调度器、采样器及硬件 worker 不修改，main 保持原提交。已有权重、归一化统计、设备配置继续使用，不需要重新训练。
+本实验在 `soft-inpainting-test` 部署分支维护，训练仓库不参与这次改动。原串行、原 RTC、串行 Soft 的脚本、调度器、采样器及 worker 保持原样，main 不变。使用原 full/full-delta 权重和配套统计，无需重新训练；不兼容训练侧新论文归一化资产。
 
-这里复用 RTC 的异步执行思路，用 Soft 作为独立去噪引导；**不是把原 RTC 的 VJP 前缀引导与 Soft 同时叠加**。不使用相关性传播，不使用三次样条压缩，不声称完整复现论文。
+## 执行契约（rolling-v2）
 
-## 四种方式
+- 模型每次预测50个58维绝对动作。立即舍弃索引30..49；它们不进入执行、参考、限位检查或轨迹摘要。
+- 索引0..25共26点，经三次插值重采样为20个执行目标，保留首尾。索引26..29共4点只作下一段Soft参考，不单独追加执行。
+- 新段开始后立即后台获取新观测并推理，当前段由独立worker继续播放。旧4点用新观测实测状态重建双臂Delta并归一化，约束新预测索引0..3，10步去噪在 `t_new>0.3` 时作用6次，后期释放。双手仍Absolute。
+- **按轨迹阶段重定时**：新预测索引0对应下一段开头，参考为固定旧 `[26:30]`。不是“新预测0点对应观测时刻”的RTC时间线，因此不按推理耗时跳过新预测前缀。新计划提前完成只排队，必须等当前20目标的固定边界才激活，整个26点前缀始终压成20点。第一段没有Soft参考。
+- 设备仍30Hz下发。执行目标推进率为 `30/ceil(1/speed_scale)`，slow/medium/fast分别3/15/30目标每秒；它们现在是**压缩后目标**，不再是源模型节点。相邻目标间插值。20个目标对应20个目标周期：前19个间隔播放到末目标，最后一个周期保持末目标，然后切到下一段；整段分别约6.67/1.33/0.667秒。源轨迹进度按目标0..19映射到源0..25，不能再按旧15源节点估算重规划时刻。
+- 结果必须在固定边界之前到达worker并排队；不能提前切换，也不能用旧后20点或旧4参考延长播放。超时、过期观测、错误回执、服务重启、限位或衔接slew失败均停止并进入既有失能确认。Soft是软约束，不能保证衔接总通过。
+- 采用严格26→20：压缩产生越界就失败，不静默退回26点。保留原预测手部纠偏上限；压缩目标另做严格限位检查，排队前检查旧段末目标到新段首目标的未来衔接，实际每个30Hz命令仍检查新鲜反馈和slew。
+- `--num-chunks N` 表示完整播放N段，每段20目标；`0`表示持续运行。最后一段完整结束后停止，不再以15点阈值提前结束。
 
-| 方式 | 服务端 | 执行端 | 状态 |
-| --- | --- | --- | --- |
-| 原串行 | 原 `serve.sh` / `serve_delta.sh` | 原 `runtime.sh` / `runtime_delta.sh` | 保持原样，默认50/15 |
-| 原 RTC | 原服务加 `--enable-rtc` | 原执行端加 `--broker-mode rtc` 和原参数 | 保持原样 |
-| 串行 Soft | `serve_soft.sh` | `runtime_soft.sh` | 保持原样，默认26+4、无压缩 |
-| 新异步 Soft | `serve_async_soft.sh` | `runtime_async_soft.sh` | 独立入口，默认50步、15步后重规划 |
+本设计是异步、固定裁剪压缩和Soft的组合实验，不叠加RTC的VJP引导、不使用相关性传播，也不声称完整复现论文。观测在上一段播放期间采集，新计划为下一阶段重定时，实机需评估接触阶段误差和工程机推理是否能赶上边界。
 
-上述脚本均位于 `deploy/fr3_sharpa_full/`。新入口两端使用相同的 `--model full` 或 `--model full-delta`。切换前先停止旧执行端和模型服务，硬件准备与退出失能确认沿用原流程。不能同时启动两套机器人执行进程。
+协议为 `sharpa-async-soft-rolling-v2`，旧异步服务与新执行端会互相拒绝，更新后须重启模型服务。默认full端口18865、full-delta端口18867。仅允许回环连接。日志为原日志根目录的 `async-soft-<ID>`，记录前30点、参考、回执、排队/激活边界及实际控制帧。配套归一化、模型及服务身份检查继续有效。
 
-新服务默认使用原模型端口加100：full 为18865、full-delta 为18867，与旧服务端口分开。修改服务端 `--port` 时，执行端同时指定相同的 `--policy-url ws://127.0.0.1:端口`。只支持本机回环连接，不支持跨主机比较单调时钟。默认日志根目录沿用所选模型，但新增 `async-soft-<ID>` 子目录。
+## 三个终端直接启动
 
-## 时间与动作契约
+先在工程机拉取 `soft-inpainting-test` 最新提交。三个终端都进入自己的部署仓库根目录。以下示例使用5999的full-delta；请保持权重目录与本机实际位置一致。
 
-1. 第一段从当前观测推理，不带旧参考；初次结果仍检查200ms观测年龄。进入流之前保留原低速首帧衔接。
-2. worker 持续以30Hz下发旧轨迹。消费15个源模型节点后，协调器在后台获取新观测和推理，worker 不等待模型结果。
-3. 新预测第0点始终对应**观测采集时刻**。worker 根据该时刻在旧轨迹中的进度，补计采集到快照的时间，选择预计接入处连续4个旧轨迹点。不是固定旧 `[26:30]`，也不是把快照时刻当作观测时刻。
-4. 新采样器仅在这4个未来位置进行 `t_new>0.3` 的 Soft 约束；默认10步去噪作用6次，后期释放。旧绝对参考用**这次观测的实测状态**重建双臂Delta，再用所选权重的统计归一化。手部保持Absolute，输出仍是58D绝对关节目标。
-5. 结果提前到达时继续播放旧轨迹，等待计划衔接时刻。允许在这4个参考节点覆盖的时间区间接入；超出窗口或旧轨迹耗尽即失败，不能靠重新启用旧缓存继续。
-6. 接入时使用从观测到实际安装时刻的**小数源节点进度**跳过过期预测，不向上取整造成额外时间跳跃。已发送动作不回改，实际衔接继续执行原来的限位、反馈新鲜度、slew检查和SDK/网关保护。Soft允许偏离参考，不保证衔接必然通过。
-7. slow/medium/fast 复用原 RTC 的播放时间定义：`node_hz=30/ceil(1/speed_scale)`，分别3/15/30源节点每秒；设备下发仍30Hz。这是沿用现有播放约定的迁移实验，真实跟踪和纠偏质量待验证。
-
-`--soft-initial-delay-steps` 默认5，允许1到20个源节点；`--soft-delay-buffer-size` 默认10，使用近期推理延迟的最大值。4点衔接窗口宽度为3个源节点周期；延迟超出窗口会停止。观测采集也受旧轨迹剩余时长约束，仍保留200ms新鲜度门限。不要靠放宽现有安全阈值让测试通过。
-
-## 工程机命令
-
-先拉到本分支最新提交，并确认工程机已有该模型的权重和机器配置。在仓库根目录执行。
-
-只检查参数，不加载模型、不连接设备：
+终端一：硬件依赖。
 
 ```bash
-bash deploy/fr3_sharpa_full/runtime_async_soft.sh \
-  --model full-delta --check --speed slow --num-chunks 3
+bash deploy/fr3_sharpa_runtime/hardware.sh up
 ```
 
-模型终端先检查资产，再做实际GPU假观测smoke；两条都不连接设备，但后者加载真实权重：
+终端二：新异步Soft服务。
 
 ```bash
-bash deploy/fr3_sharpa_full/serve_async_soft.sh --model full-delta --check-only
-bash deploy/fr3_sharpa_full/serve_async_soft.sh --model full-delta --smoke-only
-```
-
-确认smoke后启动独立服务，等待 `Async Soft Warmup OK`：
-
-```bash
+export SHARPA_FULL_DELTA_CHECKPOINT=/home/descfly/桌面/sharpa_1016_2_fullft_delta_30hz/5999
 bash deploy/fr3_sharpa_full/serve_async_soft.sh --model full-delta
 ```
 
-硬件按原流程启动。以下会连接设备并发送运动，第一轮检查执行和退出链路；首轮不含跨轮Soft：
+等待 `Async Soft Warmup OK: 50x58, 50->30->26+4->20, phase-aligned Soft, no RTC guidance` 和监听信息。
+
+终端三：从当前实测姿态开始持续执行（会驱动机器人）。
 
 ```bash
+export SHARPA_FULL_DELTA_CHECKPOINT=/home/descfly/桌面/sharpa_1016_2_fullft_delta_30hz/5999
 bash deploy/fr3_sharpa_full/runtime_async_soft.sh --model full-delta \
   --execute --enable-hardware --sharpa-backend sdk_direct \
-  --initialization current --speed slow --num-chunks 1
+  --initialization current --prepare-speed-rad-s 0.03 \
+  --speed slow --num-chunks 0
 ```
 
-确认首轮后，将 `--num-chunks 1` 改为 `3` 才能验证异步更新；不要首次直接无限循环。Absolute模型两端都改为 `--model full`。Home可显式选择 `--initialization home`，沿用原 `.deployment` 中的Home配置。旧的 `--broker-mode`、`--inpainting`、`--compression` 参数不属于这个新入口，误传会拒绝。
+默认已固定26→20，无需另开压缩。`--execute-steps`只接受26，旧的15会明确报错；旧 `--soft-initial-delay-steps` / `--soft-delay-buffer-size`、`--broker-mode`、`--compression` 参数不属于此入口。若要有限段执行，将 `--num-chunks 0` 改为3。full模型两端一起改为 `--model full`。Home仍由原配置读取双臂与双手Home。
 
-## 实现边界和验证
+停止时先在终端三按一次Ctrl+C，等待双手失能读回确认和硬件清理，再停止模型服务。再次执行前按原流程 `hardware.sh up`。
 
-- `async_soft_stream.py`：独立协议、观测时间对齐、窗口检查，继承原 timeline 的只读播放数学。
-- `async_soft_sampler.py` / `async_soft_policy.py`：独立采样与转换；仅在新服务实例绑定，不替换原 `Pi0.sample_actions` 或原 Policy。
-- `async_soft_client.py` / `async_soft_serve.py`：独立能力握手、模型/统计/服务身份与回执检查，拒绝RTC与串行Soft混用。
-- `async_soft_runtime.py` / `async_soft_run.py`：独立后台推理与执行协调，不改原调度器。
-- `async_soft_motion_ros.py`：从 `sdk_direct_motion_ros.py@246cccc` 冻结复制，仅替换timeline与快照时间参数；保留原SDK、网关、反馈与退出失能确认。专门测试会检查该边界，后续升级原worker时需要单独评估迁移。
-- `async_soft_session.py`：调用原硬件归属管理与退出清理，不改它们。
+## 可选离线检查与验证范围
 
-本地CPU完整回归通过365项，其中新增33项。新增测试覆盖三档时间映射、延迟位置Soft及后期释放、模型默认采样等价性、真实转换/独立policy、真实msgpack假socket、四轮协调、提前等待、迟到/耗尽/过期/中断拒绝、真实新worker循环配合完全模拟的ROS/SDK以及部分失败时的失能确认。它们不是实际Gemma权重加载、动力学仿真或实机验证。
+下列检查不连接设备；不是新增的启动前交互确认。
 
-复现：
+```bash
+bash deploy/fr3_sharpa_full/runtime_async_soft.sh --model full-delta --check --speed slow --num-chunks 3
+bash deploy/fr3_sharpa_full/serve_async_soft.sh --model full-delta --check-only
+# 加载真实GPU权重并假观测推理，不连接设备：
+bash deploy/fr3_sharpa_full/serve_async_soft.sh --model full-delta --smoke-only
+```
+
+`--check`输出应包含 `execute_steps=26`、`effective_horizon=30`、`execution_target_count=20`、`soft_reference_count=4`、`compression=cubic`、`alignment=trajectory_phase`、`replan_trigger=segment_start`。服务实际启动自带预热。
+
+实现仅位于 `async_soft_*.py`；timeline已独立实现，不继承RTC的50点时间线。模型保持原50×58采样，仅独立服务实例绑定Soft采样器，未改原Pi0/Policy。硬件worker继续使用原SDK、网关、反馈和退出失能确认，但单独实现裁剪、严格压缩、结果排队及边界切换。session继续沿用原硬件归属管理。
+
+本轮本地CPU回归382项通过（其中异步专项50项）。离线测试覆盖：三档速度的完整跨段播放、压缩端点和时间映射、固定4点参考、舍弃尾部不影响输出、提前排队而不切换、迟到/过期/错误身份拒绝、真实JIT Soft采样与Delta转换、真实msgpack假socket、四段后台协调，以及真实worker循环搭配模拟ROS/SDK的边界切换、压缩越界/衔接失败、失能读回确认。运行：
 
 ```bash
 PYTHONPATH=src:packages/openpi-client/src:. \
@@ -83,4 +74,4 @@ JAX_PLATFORMS=cpu OPENBLAS_NUM_THREADS=1 \
   src/openpi/models/pi0_test.py packages/openpi-client/src/openpi_client/rtc_test.py -q
 ```
 
-真实GPU预热、真实留出观测回放、工程机时延、双臂/手部接触阶段、跨轮跟踪误差及采摘表现均待验证。`COMPLETE` 和 `commands_sent` 仅表示命令链路完成，不表示关节全部到位或任务成功。
+未在本轮加载工程机5999真实权重或驱动硬件；离线通过不代表跟踪、接触或采摘效果已验证。`COMPLETE` / `commands_sent`只表示命令链路完成，不表示关节全部到位或任务成功。

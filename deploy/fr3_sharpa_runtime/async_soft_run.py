@@ -92,9 +92,13 @@ def main():
     speeds.add_argument("--speed", choices=("slow", "medium", "fast"), default=None)
     speeds.add_argument("--execute-speed-scale", type=float)
     parser.add_argument("--num-chunks", type=int, default=1)
-    parser.add_argument("--execute-steps", type=int, default=15, help="Replan interval in source model nodes")
-    parser.add_argument("--soft-initial-delay-steps", type=int, default=5)
-    parser.add_argument("--soft-delay-buffer-size", type=int, default=10)
+    parser.add_argument(
+        "--execute-steps",
+        type=int,
+        choices=(26,),
+        default=26,
+        help="Fixed consumed model prefix; compressed to 20 targets",
+    )
     parser.add_argument("--prediction-clip-rad", type=float, default=0.05)
     parser.add_argument("--prepare-speed-rad-s", type=float, default=0.03)
     parser.add_argument("--policy-url", default=f"ws://127.0.0.1:{default_port()}")
@@ -122,10 +126,8 @@ def main():
     if config.MODEL_PROFILE.name not in ("full", "full-delta"):
         parser.error("Async Soft supports full/full-delta only")
     if (
-        not 1 <= args.execute_steps <= 24
+        args.execute_steps != 26
         or args.num_chunks < 0
-        or not 1 <= args.soft_initial_delay_steps <= 20
-        or not 1 <= args.soft_delay_buffer_size <= 1000
         or not np.isfinite(args.execute_speed_scale)
         or not 0 < args.execute_speed_scale <= 1
         or not np.isfinite(args.prediction_clip_rad)
@@ -153,9 +155,13 @@ def main():
                     "speed": profile.name,
                     "node_hz": 30.0 / math.ceil(1 / args.execute_speed_scale),
                     "soft_reference_count": 4,
-                    "soft_initial_delay_steps": args.soft_initial_delay_steps,
+                    "effective_horizon": 30,
+                    "execution_target_count": 20,
+                    "discarded_model_steps": 20,
+                    "alignment": "trajectory_phase",
+                    "replan_trigger": "segment_start",
                     "rtc_guidance": False,
-                    "compression": False,
+                    "compression": "cubic",
                     "correlation": False,
                     "checkpoint": str(config.CHECKPOINT) if config.CHECKPOINT else None,
                 },

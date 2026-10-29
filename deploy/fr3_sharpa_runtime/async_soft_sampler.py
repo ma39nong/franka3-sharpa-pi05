@@ -1,4 +1,4 @@
-"""New sampler only: four reference nodes at a dynamic observation-relative offset."""
+"""New sampler only: four phase-aligned reference nodes at the next segment start."""
 
 import einops
 import jax

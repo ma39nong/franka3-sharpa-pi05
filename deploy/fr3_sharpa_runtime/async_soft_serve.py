@@ -12,6 +12,7 @@ from . import config
 from .async_soft_client import default_port
 from .async_soft_stream import CAPABILITY
 from .async_soft_stream import CONTEXT_KEY
+from .async_soft_stream import digest
 from .model_loader import build_config
 from .model_loader import checkpoint_contract
 from .timing import timed_server_class
@@ -33,7 +34,8 @@ def main():
         async_soft_warmed_up=False,
         server_instance_id=uuid.uuid4().hex,
         async_soft_port=args.port,
-        async_soft_algorithm="four_node_soft_inpainting_without_rtc_guidance",
+        async_soft_algorithm="fixed_50_30_26_plus_4_to_20_phase_soft",
+        async_soft_execution_targets=20,
     )
 
     def report():
@@ -84,8 +86,10 @@ def main():
         "observation_monotonic_s": now,
         "snapshot_monotonic_s": now,
         "node_hz": 0.01,
-        "reference_start": 5,
-        "previous_actions": actions[5:9],
+        "reference_start": 0,
+        "handover_monotonic_s": now + 10000,
+        "reference_sha256": digest(actions[26:30]),
+        "previous_actions": actions[26:30],
     }
     guided = served.infer({**observation, CONTEXT_KEY: context})
     as_finite_action_chunk(guided["actions"])
@@ -96,7 +100,7 @@ def main():
         async_soft_warmup=guided["async_soft_diagnostics"],
     )
     report()
-    print("Async Soft Warmup OK: 50x58, four delayed references, no RTC guidance", flush=True)
+    print("Async Soft Warmup OK: 50x58, 50->30->26+4->20, phase-aligned Soft, no RTC guidance", flush=True)
     if not args.smoke_only:
         timed_server_class(WebsocketPolicyServer)(
             served, host="127.0.0.1", port=args.port, metadata=metadata

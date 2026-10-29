@@ -1,4 +1,4 @@
-"""Isolated async-Soft worker, copied from sdk_direct_motion_ros@246cccc.
+"""Independent async-Soft worker with strict compression and staged handovers.
 
 ROS bridge for the direct SDK prepare/execute path.
 
@@ -72,9 +72,18 @@ def main() -> None:
             stream_log.flush()
 
     def stream_actions(request):
-        actions, clipping = clip_hand_predictions(request["actions"], execute_steps=50,
+        # Discard the unused tail before range checks or clipping can affect commands.
+        from .async_soft_stream import execution_targets
+        kept = as_finite_action_chunk(request["actions"])[:30].copy()
+        padded = np.concatenate([kept, np.repeat(kept[-1:], 20, axis=0)])
+        actions, clipping = clip_hand_predictions(padded, execute_steps=30,
             max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
+        actions[30:] = actions[29]
         validate_action_ranges(actions, check_slew=False)
+        targets = execution_targets(actions)
+        # Cubic overshoot must pass actual limits; this mode never falls back to 26.
+        checked = np.concatenate([targets, np.repeat(targets[-1:], 30, axis=0)])
+        validate_action_ranges(checked, check_slew=False)
         return actions, clipping
     experimental_audit = None
 
@@ -160,11 +169,14 @@ def main() -> None:
             # idle between ready/prepare/chunk requests.
             if stream is not None:
                 now = time.monotonic()
-                if now >= stream_tick:
+                if now >= stream_tick and not stream.finished:
                     if now - stream_tick > DT_NS / 1e9:
-                        raise RuntimeError("RTC 30Hz deadline missed; stopped")
+                        raise RuntimeError("Async Soft 30Hz deadline missed; stopped")
                     current = fresh_feedback()
                     command = stream.sample(now)
+                    if stream.finished:
+                        stream_event("complete", **stream.status(now))
+                        continue
                     transition = target_chunk(command)
                     transition[0] = stream_last_command
                     validate_action_ranges(transition)  # Includes the actual splice slew.
@@ -174,7 +186,7 @@ def main() -> None:
                     stream_event("frame", generation=stream.generation, phase=stream.phase(now),
                                  command=command.tolist(), measured=current.state.tolist())
                     stream_tick += DT_NS / 1e9
-            timeout = 0.01 if stream is None else max(0, min(0.01, stream_tick - time.monotonic()))
+            timeout = 0.01 if stream is None or stream.finished else max(0, min(0.01, stream_tick - time.monotonic()))
             readable, _, _ = select.select([sys.stdin], [], [], timeout)
             if not readable:
                 continue
@@ -186,9 +198,9 @@ def main() -> None:
             experimental_audit = None
             operation = request.get("operation")
             if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "close"}:
-                raise ValueError("Cannot mix serial motion operations with an active RTC stream")
+                raise ValueError("Cannot mix serial motion operations with an active async Soft stream")
             if operation == "stream_start":
-                from .async_soft_stream import AsyncSoftTimeline as RTCTimeline
+                from .async_soft_stream import AsyncSoftTimeline
                 actions, clipping_report = stream_actions(request)
                 current = fresh_feedback()
                 # Only the initial handover uses the existing slow approach.
@@ -200,7 +212,7 @@ def main() -> None:
                     publish_frame(frame)
                 play_command_frames(frames, send_initial, fresh_feedback)
                 now = time.monotonic()
-                stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]))
+                stream = AsyncSoftTimeline(actions, now, float(request["execute_speed_scale"]), terminal=bool(request.get("terminal", False)))
                 stream_tick = now
                 stream_last_command = actions[0].copy()
                 path = Path(request["events_path"])
@@ -210,30 +222,30 @@ def main() -> None:
                 print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now)}), file=protocol, flush=True)
             elif operation == "stream_status":
                 if stream is None:
-                    raise ValueError("No active RTC stream")
+                    raise ValueError("No active async Soft stream")
                 print(json.dumps({"status": "PASS", **stream.status(time.monotonic())}), file=protocol, flush=True)
             elif operation == "stream_snapshot":
                 if stream is None:
-                    raise ValueError("No active RTC stream")
-                context = stream.snapshot(time.monotonic(), delay_steps=request["delay_steps"],
-                    observation_monotonic_s=request["observation_monotonic_s"])
+                    raise ValueError("No active async Soft stream")
+                context = stream.snapshot(time.monotonic(), observation_monotonic_s=request["observation_monotonic_s"])
                 context["previous_actions"] = context["previous_actions"].tolist()
                 stream_event("snapshot", context=context)
                 print(json.dumps({"status": "PASS", "context": context}), file=protocol, flush=True)
             elif operation == "stream_install":
                 if stream is None:
-                    raise ValueError("No active RTC stream")
+                    raise ValueError("No active async Soft stream")
                 actions, clipping_report = stream_actions(request)
-                result = stream.install(actions, request["receipt"], time.monotonic())
-                # Validate the actual last command -> first new command before acknowledging.
-                transition = target_chunk(stream.sample(time.monotonic()))
-                transition[0] = stream_last_command
+                from .async_soft_stream import execution_targets
+                # Staging is early; validate the FUTURE boundary, not the current command.
+                transition = target_chunk(execution_targets(actions)[0])
+                transition[0] = stream.targets[-1]
                 validate_action_ranges(transition)
+                result = stream.install(actions, request["receipt"], time.monotonic(), terminal=bool(request.get("terminal", False)))
                 stream_event("install", **result, receipt=request["receipt"], clipping=clipping_report)
                 print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_stop":
                 if stream is None:
-                    raise ValueError("No active RTC stream")
+                    raise ValueError("No active async Soft stream")
                 result = stream.status(time.monotonic())
                 stream_event("stop", **result)
                 stream = None
@@ -401,7 +413,7 @@ def main() -> None:
                 if stream_log is not None:
                     stream_log.close()
             except Exception as error:
-                stderr(f"WARNING: RTC log close failed: {error}")
+                stderr(f"WARNING: async Soft log close failed: {error}")
             try:
                 if ros_executor is not None:
                     ros_executor.shutdown(timeout_sec=1.0)

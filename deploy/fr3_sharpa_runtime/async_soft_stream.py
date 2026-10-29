@@ -1,5 +1,10 @@
-"""Isolated async-Soft protocol and observation-anchored timeline; no devices."""
+"""Fixed-boundary async Soft: 50 -> 30 -> 26+4 -> 20 execution targets.
 
+Prediction phases are retimed to the next segment, rather than skipped by wall
+clock latency. Four old future goals anchor new phases 0..3. No RTC guidance.
+"""
+
+import hashlib
 import math
 import re
 import uuid
@@ -7,9 +12,8 @@ import uuid
 import numpy as np
 
 from .protocol import as_finite_action_chunk
-from .rtc_stream import RTCTimeline
 
-CAPABILITY = "sharpa-async-soft-v1"
+CAPABILITY = "sharpa-async-soft-rolling-v2"
 CONTEXT_KEY = "_async_soft_context"
 RECEIPT_KEY = "async_soft_receipt"
 _FIELDS = {
@@ -17,12 +21,18 @@ _FIELDS = {
     "token",
     "source_number",
     "source_sha256",
+    "reference_sha256",
     "observation_monotonic_s",
     "snapshot_monotonic_s",
     "node_hz",
+    "handover_monotonic_s",
     "reference_start",
     "previous_actions",
 }
+
+
+def digest(values):
+    return hashlib.sha256(np.asarray(values, dtype=np.float32).tobytes()).hexdigest()
 
 
 def validate_context(value):
@@ -30,23 +40,26 @@ def validate_context(value):
         raise ValueError("Invalid async Soft context fields")
     if value["version"] != CAPABILITY or not isinstance(value["token"], str) or not value["token"]:
         raise ValueError("Invalid async Soft protocol/token")
-    for key, low, high in (("source_number", 1, 2**53), ("reference_start", 1, 45)):
-        if type(value[key]) is not int or not low <= value[key] <= high:
-            raise ValueError(f"Invalid async Soft {key}")
-    digest = value["source_sha256"]
-    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-        raise ValueError("Invalid async Soft source digest")
-    for key in ("observation_monotonic_s", "snapshot_monotonic_s", "node_hz"):
+    if type(value["source_number"]) is not int or not 1 <= value["source_number"] <= 2**53:
+        raise ValueError("Invalid async Soft source_number")
+    if type(value["reference_start"]) is not int or value["reference_start"] != 0:
+        raise ValueError("Async Soft reference_start must be zero for phase alignment")
+    for key in ("source_sha256", "reference_sha256"):
+        if not isinstance(value[key], str) or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None:
+            raise ValueError("Invalid async Soft digest")
+    for key in ("observation_monotonic_s", "snapshot_monotonic_s", "node_hz", "handover_monotonic_s"):
         if isinstance(value[key], bool) or not isinstance(value[key], int | float) or not math.isfinite(value[key]):
             raise ValueError(f"Invalid async Soft {key}")
-    captured, sampled, hz = (value[k] for k in ("observation_monotonic_s", "snapshot_monotonic_s", "node_hz"))
-    if not 0 <= captured <= sampled or sampled - captured > 0.2 or not 0 < hz <= 30:
-        raise ValueError("Async Soft snapshot observation is stale or time scale invalid")
-    if captured + value["reference_start"] / hz < sampled:
-        raise ValueError("Async Soft handover is already past at snapshot")
+    captured, sampled, hz, end = (
+        value[k] for k in ("observation_monotonic_s", "snapshot_monotonic_s", "node_hz", "handover_monotonic_s")
+    )
+    if not 0 <= captured <= sampled or sampled - captured > 0.2 or not 0 < hz <= 30 or end <= sampled:
+        raise ValueError("Async Soft snapshot observation is stale or handover invalid")
     reference = np.array(value["previous_actions"], dtype=np.float32, copy=True)
     if reference.shape != (4, 58) or not np.isfinite(reference).all():
         raise ValueError("Async Soft requires four finite absolute 58D references")
+    if digest(reference) != value["reference_sha256"]:
+        raise ValueError("Async Soft reference digest mismatch")
     return {**value, "previous_actions": reference}
 
 
@@ -56,10 +69,8 @@ def receipt(context):
 
 
 def handover_window(context):
-    return (
-        context["observation_monotonic_s"] + context["reference_start"] / context["node_hz"],
-        context["observation_monotonic_s"] + (context["reference_start"] + 3) / context["node_hz"],
-    )
+    # A staging deadline, NOT permission to execute a new segment early.
+    return context["snapshot_monotonic_s"], context["handover_monotonic_s"]
 
 
 def require_capabilities(metadata):
@@ -73,66 +84,121 @@ def require_capabilities(metadata):
         raise ValueError("Async Soft needs its own warmed service: serve_async_soft.sh")
 
 
-class AsyncSoftTimeline(RTCTimeline):
-    """Reuse read-only playback math; snapshot/install use an independent protocol.
+def execution_targets(actions):
+    """Strict cubic 26 -> 20, endpoints preserved; never fall back silently."""
+    from scipy.interpolate import interp1d
 
-    Predicted model node zero is the OBSERVATION time, not the later IPC snapshot.
-    Old commands continue until a result is ready AND the planned handover arrives.
-    """
+    source = as_finite_action_chunk(actions)[:26]
+    targets = interp1d(np.arange(26), source, kind="cubic", axis=0)(np.linspace(0, 25, 20)).astype(np.float32)
+    targets[[0, -1]] = source[[0, -1]]
+    return targets
 
-    def snapshot(self, now, *, delay_steps, observation_monotonic_s):
-        if self.pending is not None:
-            raise ValueError("Only one async Soft prediction may be outstanding")
-        if type(delay_steps) is not int or not 1 <= delay_steps <= 20:
-            raise ValueError("Async Soft delay estimate must be in [1, 20]")
-        observed = observation_monotonic_s
-        if not isinstance(observed, int | float) or not math.isfinite(observed) or not 0 <= now - observed <= 0.2:
-            raise ValueError("Async Soft snapshot observation is stale")
-        self.sample(now)
-        origin = self.phase(observed)
-        start = math.ceil((now - observed) * self.node_hz - 1e-9) + delay_steps
-        if origin + start + 3 > 49:
-            raise TimeoutError("Old trajectory has insufficient future overlap")
+
+class AsyncSoftTimeline:
+    def __init__(self, actions, now, speed_scale, *, terminal=False):
+        if not np.isfinite(speed_scale) or not 0 < speed_scale <= 1:
+            raise ValueError("Invalid async Soft speed scale")
+        self.node_hz = 30.0 / math.ceil(1.0 / speed_scale)
+        self.generation = 0
+        self.finished = False
+        self._activate(self.prepare(actions), now, terminal)
+
+    @staticmethod
+    def prepare(actions):
+        # Discarded nodes 30..49 cannot affect command generation or identity.
+        kept = as_finite_action_chunk(actions)[:30].copy()
+        padded = np.concatenate([kept, np.repeat(kept[-1:], 20, axis=0)])
+        return kept, execution_targets(padded)
+
+    def _activate(self, plan, now, terminal):
+        self.actions, self.targets = plan
+        self.digest = digest(self.actions)
+        self.generation += 1
+        self.installed_at = now
+        self.boundary = now + 20 / self.node_hz
+        self.terminal = terminal
+        self.pending = self.queued = None
+
+    def _advance(self, now):
+        if not math.isfinite(now) or now < self.installed_at:
+            raise ValueError("Async Soft clock moved backwards")
+        if now >= self.boundary:
+            if self.terminal:
+                self.finished = True
+            elif self.queued is None:
+                raise TimeoutError("Async Soft next prediction missed fixed 20-target handover")
+            else:
+                plan, terminal = self.queued
+                boundary = self.boundary
+                self._activate(plan, boundary, terminal)
+                if now >= self.boundary:
+                    raise TimeoutError("Async Soft playback skipped an entire segment")
+
+    def phase(self, now):
+        self._advance(now)
+        return min(19.0, (now - self.installed_at) * self.node_hz) * 25 / 19
+
+    def sample(self, now):
+        self._advance(now)
+        index = min(19.0, max(0.0, (now - self.installed_at) * self.node_hz))
+        i = math.floor(index)
+        return self.targets[i] + (self.targets[min(19, i + 1)] - self.targets[i]) * (index - i)
+
+    def status(self, now):
+        phase = self.phase(now)
+        return {
+            "generation": self.generation,
+            "phase": phase,
+            "sampled_monotonic_s": now,
+            "consumed_since_install": phase,
+            "source_sha256": self.digest,
+            "handover_monotonic_s": self.boundary,
+            "finished": self.finished,
+            "queued": self.queued is not None,
+            "execution_target_count": 20,
+            "consumed_model_steps": 26,
+            "discarded_model_steps": 20,
+        }
+
+    def snapshot(self, now, *, observation_monotonic_s):
+        self._advance(now)
+        if self.pending is not None or self.terminal:
+            raise ValueError("Only one outstanding prediction per nonterminal segment")
         context = validate_context(
             {
                 "version": CAPABILITY,
                 "token": uuid.uuid4().hex,
                 "source_number": self.generation,
                 "source_sha256": self.digest,
-                "observation_monotonic_s": observed,
+                "reference_sha256": digest(self.actions[26:30]),
+                "observation_monotonic_s": observation_monotonic_s,
                 "snapshot_monotonic_s": now,
                 "node_hz": self.node_hz,
-                "reference_start": start,
-                "previous_actions": np.stack([self.sample_phase(origin + start + i) for i in range(4)]),
+                "handover_monotonic_s": self.boundary,
+                "reference_start": 0,
+                "previous_actions": self.actions[26:30].copy(),
             }
         )
         self.pending = context
-        return {**context, "previous_actions": context["previous_actions"].copy()}
+        return context
 
-    def install(self, actions, acknowledgement, now):
-        if self.pending is None:
-            raise ValueError("No outstanding async Soft snapshot")
+    def install(self, actions, acknowledgement, now, *, terminal=False):
+        if self.pending is None or self.queued is not None:
+            raise ValueError("No outstanding async Soft snapshot or result already queued")
         context = self.pending
         if acknowledgement != receipt(context):
             raise ValueError("Async Soft response does not match outstanding snapshot")
         if context["source_number"] != self.generation or context["source_sha256"] != self.digest:
             raise ValueError("Async Soft source changed")
-        self.sample(now)  # Never revive an exhausted old plan.
-        earliest, latest = handover_window(context)
-        if now < earliest - 1e-9:
-            raise ValueError("Async Soft result arrived before scheduled handover")
-        if now > latest + 1e-9:
-            raise TimeoutError("Async Soft result missed the four-node handover window")
-        actions = as_finite_action_chunk(actions)
-        # Fractional phase preserves the observation clock; no ceil-induced time jump.
-        skipped = (now - context["observation_monotonic_s"]) * self.node_hz
-        generation = self.generation
-        self._install(actions, now, skipped)
+        if now < context["snapshot_monotonic_s"] or now >= self.boundary:
+            raise TimeoutError("Async Soft staging missed handover deadline")
+        self.queued = self.prepare(actions), terminal
         return {
-            "skipped": skipped,
-            "generation": self.generation,
-            "source_generation": generation,
-            "actual_delay_s": now - context["snapshot_monotonic_s"],
-            "reference_start": context["reference_start"],
-            "observation_anchored": True,
+            "queued": True,
+            "source_generation": self.generation,
+            "handover_monotonic_s": self.boundary,
+            "reference_start": 0,
+            "skipped": 0,
+            "alignment": "trajectory_phase",
+            "execution_target_count": 20,
         }

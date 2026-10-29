@@ -1,9 +1,7 @@
-"""Independent coordinator: old trajectory plays while Soft inference runs."""
+"""Pipeline fixed 20-target segments; inference overlaps the current segment."""
 
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import json
-import math
 from pathlib import Path
 import time
 import uuid
@@ -16,14 +14,13 @@ from .async_soft_stream import handover_window
 def run_async_soft(
     client, observe, worker, first, initial_observation, args, *, clock=time.monotonic, sleep=time.sleep
 ):
-    delays = deque([args.soft_initial_delay_steps], maxlen=args.soft_delay_buffer_size)
     directory = Path(args.execution_trace_dir).expanduser().resolve() / ("async-soft-" + uuid.uuid4().hex)
     directory.mkdir(parents=True)
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sharpa-async-soft")
-    future = ready = context = None
-    accepted, stage = 0, "initial_prediction"
+    future = context = None
+    accepted, stage = 1, "initial_prediction"
     started = clock()
-    hz = 30.0 / math.ceil(1.0 / args.execute_speed_scale)
+    requested_generation = None
 
     def log(event, **fields):
         with (directory / "requests.jsonl").open("a") as stream:
@@ -36,9 +33,13 @@ def run_async_soft(
             "accepted_chunks": accepted,
             "stage": stage,
             "elapsed_s": clock() - started,
-            "node_hz": hz,
+            "compression": "cubic",
+            "effective_horizon": 30,
+            "execute_steps": 26,
+            "execution_target_count": 20,
+            "soft_reference_count": 4,
+            "alignment": "trajectory_phase",
             "correlation": False,
-            "compression": False,
             "rtc_guidance": False,
             **fields,
         }
@@ -55,7 +56,7 @@ def run_async_soft(
         log(
             "initial_prediction",
             metadata=metadata,
-            actions=actions.tolist(),
+            actions=actions[:30].tolist(),
             diagnostic=diagnostic,
             observation_state=np.asarray(initial_observation["observation/state"]).tolist(),
         )
@@ -66,49 +67,53 @@ def run_async_soft(
                 "prediction_clip_rad": args.prediction_clip_rad,
                 "execute_speed_scale": args.execute_speed_scale,
                 "approach_speed_rad_s": args.prepare_speed_rad_s,
+                "terminal": args.num_chunks == 1,
                 "events_path": str(directory / "control.jsonl"),
             }
         )
-        accepted, stage = 1, "playing"
         while True:
             status = worker.request({"operation": "stream_status"})
+            if status["finished"]:
+                stopped = worker.request({"operation": "stream_stop"})
+                return save("COMPLETE", completion="commands_sent", final_stream=stopped)
             if future is not None:
-                earliest, latest = handover_window(context)
-                if clock() > latest:
-                    raise TimeoutError("Async Soft prediction missed handover window")
-                if ready is None and future.done():
-                    ready = future.result()
-                    inference_nodes = math.ceil(max(0, clock() - context["snapshot_monotonic_s"]) * hz)
-                    log("prediction_ready", inference_nodes=inference_nodes, diagnostic=ready[0][2])
-                if ready is not None and clock() >= earliest:
-                    (metadata, actions, diagnostic), acknowledgement = ready
+                if clock() >= context["handover_monotonic_s"]:
+                    raise TimeoutError("Async Soft prediction missed fixed handover")
+                if future.done():
+                    (metadata, actions, diagnostic), acknowledgement = future.result()
                     installed = worker.request(
                         {
                             "operation": "stream_install",
                             "actions": actions.tolist(),
                             "prediction_clip_rad": args.prediction_clip_rad,
                             "receipt": acknowledgement,
+                            "terminal": bool(args.num_chunks and accepted + 1 >= args.num_chunks),
                         }
                     )
                     accepted += 1
-                    delays.append(max(1, min(20, inference_nodes)))
-                    log("accepted", actions=actions.tolist(), receipt=acknowledgement, installation=installed)
-                    future = ready = context = None
+                    log(
+                        "queued",
+                        actions=actions[:30].tolist(),
+                        receipt=acknowledgement,
+                        installation=installed,
+                        diagnostic=diagnostic,
+                    )
+                    future = context = None
                     stage = "playing"
-                    continue
-            if future is None and status["consumed_since_install"] >= args.execute_steps:
-                if args.num_chunks and accepted >= args.num_chunks:
-                    stopped = worker.request({"operation": "stream_stop"})
-                    return save("COMPLETE", completion="commands_sent", final_stream=stopped)
+            # Launch once per activated segment, immediately; never wait for 15 source nodes.
+            if (
+                future is None
+                and not status["queued"]
+                and status["generation"] != requested_generation
+                and not (args.num_chunks and accepted >= args.num_chunks)
+            ):
                 stage = "observing"
-                # Reserve enough original-model nodes for delay + 4-point overlap + IPC margin.
-                remaining = (49 - status["phase"]) / hz - max(0, clock() - status["sampled_monotonic_s"])
-                deadline = clock() + remaining - (max(delays) + 4) / hz - 0.05
+                deadline = status["handover_monotonic_s"] - 0.01
 
                 def poll(deadline=deadline):
                     worker.request({"operation": "stream_status"})
                     if clock() >= deadline:
-                        raise TimeoutError("Async Soft observation deadline reached")
+                        raise TimeoutError("Async Soft observation missed fixed handover")
 
                 poll()
                 observation = observe(
@@ -120,13 +125,10 @@ def run_async_soft(
                 captured = observation["_captured_monotonic_ns"] / 1e9
                 if not 0 <= clock() - captured <= 0.2:
                     raise ValueError("Async Soft request observation is stale")
-                context = worker.request(
-                    {
-                        "operation": "stream_snapshot",
-                        "delay_steps": max(delays),
-                        "observation_monotonic_s": captured,
-                    }
-                )["context"]
+                context = worker.request({"operation": "stream_snapshot", "observation_monotonic_s": captured})[
+                    "context"
+                ]
+                requested_generation = status["generation"]
                 log("request", context=context, observation_state=np.asarray(observation["observation/state"]).tolist())
                 future = pool.submit(predict, observation, context)
                 stage = "soft_prediction"
@@ -138,5 +140,4 @@ def run_async_soft(
         )
         raise
     finally:
-        # The execution owner always closes the unchanged disable/readback lifecycle.
         pool.shutdown(wait=False, cancel_futures=True)

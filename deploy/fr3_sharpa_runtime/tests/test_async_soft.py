@@ -32,39 +32,39 @@ def trajectory(offset=0):
 
 def snapshot(scale=1.0):
     timeline = AsyncSoftTimeline(trajectory(), 10.0, scale)
-    context = timeline.snapshot(10.4, observation_monotonic_s=10.35, delay_steps=3)
+    context = timeline.snapshot(10.4, observation_monotonic_s=10.35)
     return timeline, context
 
 
 @pytest.mark.parametrize("scale", [0.1, 0.5, 1.0])
-def test_observation_clock_shifted_four_references_and_fractional_install(scale):
+def test_fixed_prefix_compression_references_and_boundary_install(scale):
     timeline, context = snapshot(scale)
     hz = 30 / math.ceil(1 / scale)
-    assert context["reference_start"] == math.ceil(0.05 * hz - 1e-9) + 3
-    origin = 0.35 * hz
-    expected = np.stack([timeline.sample_phase(origin + context["reference_start"] + i) for i in range(4)])
-    np.testing.assert_allclose(context["previous_actions"], expected)
-    earliest, _ = handover_window(context)
-    at = earliest + 0.2 / hz
-    # New prediction nodes are anchored at observation time, including acquisition delay.
-    prediction = np.stack([timeline.sample_phase(min(49, origin + i)) for i in range(50)])
-    old_at_handover = timeline.sample(at)
-    installed = timeline.install(prediction, receipt(context), at)
-    assert installed["skipped"] == pytest.approx(context["reference_start"] + 0.2)
-    np.testing.assert_allclose(timeline.sample(at), old_at_handover, atol=1e-7)
-    assert timeline.pending is None
-    assert timeline.status(at)["consumed_since_install"] == pytest.approx(0)
+    assert timeline.actions.shape == (30, 58)
+    assert timeline.targets.shape == (20, 58)
+    np.testing.assert_array_equal(timeline.targets[[0, -1]], trajectory()[[0, 25]])
+    np.testing.assert_array_equal(context["previous_actions"], trajectory()[26:30])
+    assert context["reference_start"] == 0
+    boundary = 10 + 20 / hz
+    assert handover_window(context)[1] == pytest.approx(boundary)
+    old = timeline.sample(10.4).copy()
+    staged = timeline.install(trajectory(0.026), receipt(context), 10.4, terminal=True)
+    assert staged["queued"]
+    assert staged["skipped"] == 0
+    np.testing.assert_array_equal(timeline.sample(10.4), old)
+    np.testing.assert_allclose(timeline.sample(boundary), trajectory(0.026)[0])
+    assert timeline.generation == 2
+    assert timeline.status(boundary + 20 / hz)["finished"]
 
 
 @pytest.mark.parametrize("failure", ["early", "late", "receipt", "source", "exhausted"])
 def test_invalid_install_never_replaces_old_trajectory(failure):
     timeline, context = snapshot()
-    earliest, latest = handover_window(context)
-    at, ack = earliest + 0.01, receipt(context)
+    at, ack = 10.5, receipt(context)
     if failure == "early":
-        at = earliest - 0.01
+        at = 10.3
     elif failure == "late":
-        at = latest + 0.01
+        at = context["handover_monotonic_s"]
     elif failure == "receipt":
         ack["token"] = "another-request"
     elif failure == "source":
@@ -75,19 +75,18 @@ def test_invalid_install_never_replaces_old_trajectory(failure):
     with pytest.raises((ValueError, TimeoutError)):
         timeline.install(trajectory(0.2), ack, at)
     np.testing.assert_array_equal(timeline.actions, before)
-    assert timeline.pending is not None
+    assert timeline.queued is None
 
 
 def test_snapshot_rejects_stale_observations_duplicate_requests_and_short_tail():
     timeline, context = snapshot()
     with pytest.raises(ValueError, match="outstanding"):
-        timeline.snapshot(10.41, observation_monotonic_s=10.4, delay_steps=3)
+        timeline.snapshot(10.41, observation_monotonic_s=10.4)
     timeline = AsyncSoftTimeline(trajectory(), 10, 1)
     with pytest.raises(ValueError, match="stale"):
-        timeline.snapshot(10.5, observation_monotonic_s=10, delay_steps=3)
-    with pytest.raises(TimeoutError, match="insufficient"):
-        timeline.snapshot(11.5, observation_monotonic_s=11.5, delay_steps=3)
-    assert timeline.pending is None
+        timeline.snapshot(10.5, observation_monotonic_s=10)
+    with pytest.raises(TimeoutError, match="handover"):
+        timeline.snapshot(11.5, observation_monotonic_s=11.5)
     changed = copy.deepcopy(context)
     changed["previous_actions"][0, 0] = float("nan")
     with pytest.raises(ValueError, match="finite"):
@@ -95,8 +94,24 @@ def test_snapshot_rejects_stale_observations_duplicate_requests_and_short_tail()
     changed = {**context, "reference_start": True}
     with pytest.raises(ValueError, match="reference_start"):
         validate_context(changed)
+    changed = copy.deepcopy(context)
+    changed["previous_actions"][0, 0] += 0.1
+    with pytest.raises(ValueError, match="digest"):
+        validate_context(changed)
     with pytest.raises(ValueError, match="own warmed service"):
         require_capabilities({"rtc_supported": True, "rtc_warmed_up": True})
+
+
+def test_discarded_tail_never_changes_compressed_targets_references_or_digest():
+    original = AsyncSoftTimeline(trajectory(), 10, 1)
+    changed = trajectory()
+    changed[30:] = 10000
+    new = AsyncSoftTimeline(changed, 10, 1)
+    np.testing.assert_array_equal(new.targets, original.targets)
+    assert new.digest == original.digest
+    np.testing.assert_array_equal(new.actions[26:30], original.actions[26:30])
+    with pytest.raises(TimeoutError):
+        original.sample(10 + 20 / 30)
 
 
 def tiny(monkeypatch):
@@ -120,7 +135,7 @@ def test_actual_jitted_sampler_only_guides_delayed_nodes_and_releases_late_steps
     np.testing.assert_array_equal(baseline, original)
     assert int(count) == 0
     reference = jnp.full((1, 4, 58), 0.25)
-    for start in (5, 11):
+    for start in (0, 5, 11):
         guided, count = sample(
             jax.random.key(4), obs, noise=noise, reference=reference, reference_start=jnp.int32(start)
         )
@@ -244,24 +259,25 @@ def test_async_coordinator_keeps_old_commands_running_and_rejects_failures(monke
             op = request["operation"]
             log.append(op)
             if op == "stream_start":
-                self.timeline = AsyncSoftTimeline(request["actions"], clock[0], scale)
+                self.timeline = AsyncSoftTimeline(request["actions"], clock[0], scale, terminal=request["terminal"])
                 return {"status": "PASS"}
             if op == "stream_status":
-                if failure == "worker" and self.timeline.phase(clock[0]) > 16:
+                if failure == "worker" and clock[0] > 10.03:
                     raise RuntimeError("original device feedback failure")
-                if failure == "interrupt" and self.timeline.phase(clock[0]) > 16:
+                if failure == "interrupt" and clock[0] > 10.03:
                     raise KeyboardInterrupt()
                 sent.append(self.timeline.sample(clock[0]))
                 return self.timeline.status(clock[0])
             if op == "stream_snapshot":
                 context = self.timeline.snapshot(
                     clock[0],
-                    delay_steps=request["delay_steps"],
                     observation_monotonic_s=request["observation_monotonic_s"],
                 )
                 return {"context": {**context, "previous_actions": context["previous_actions"].tolist()}}
             if op == "stream_install":
-                return self.timeline.install(request["actions"], request["receipt"], clock[0])
+                return self.timeline.install(
+                    request["actions"], request["receipt"], clock[0], terminal=request["terminal"]
+                )
             if op == "stream_stop":
                 return self.timeline.status(clock[0])
             raise AssertionError(op)
@@ -339,8 +355,9 @@ def test_async_coordinator_keeps_old_commands_running_and_rejects_failures(monke
         rows = [
             json.loads(line) for line in next(tmp_path.glob("async-soft-*/requests.jsonl")).read_text().splitlines()
         ]
-        for row in [r for r in rows if r["event"] == "accepted"]:
-            assert row["installation"]["skipped"] >= row["installation"]["reference_start"] - 1e-6
+        for row in [r for r in rows if r["event"] == "queued"]:
+            assert row["installation"]["skipped"] == 0
+            assert row["installation"]["queued"]
         assert len(sent) > 4  # Old commands were sampled while prediction was pending.
         assert result["rtc_guidance"] is False
     else:
@@ -367,6 +384,9 @@ def test_fourth_cli_is_offline_and_old_options_do_not_enable_it(model):
     )
     report = json.loads(process.stdout)
     assert report["broker_mode"] == "async-soft"
+    assert report["execute_steps"] == 26
+    assert report["execution_target_count"] == 20
+    assert report["compression"] == "cubic"
     assert report["node_hz"] == 3
     assert report["model_profile"] == model
     assert not report["hardware_output"]
@@ -382,22 +402,12 @@ def test_fourth_cli_is_offline_and_old_options_do_not_enable_it(model):
     assert rejected.returncode == 2
 
 
-def test_worker_copy_changes_only_timeline_and_observation_timestamp():
-    old = (ROOT / "deploy/fr3_sharpa_runtime/sdk_direct_motion_ros.py").read_text()
-    expected = old.replace(
-        '"""ROS bridge for the direct SDK prepare/execute path.',
-        '"""Isolated async-Soft worker, copied from sdk_direct_motion_ros@246cccc.\n\nROS bridge for the direct SDK prepare/execute path.',
-        1,
-    )
-    expected = expected.replace(
-        "from .rtc_stream import RTCTimeline", "from .async_soft_stream import AsyncSoftTimeline as RTCTimeline", 1
-    )
-    expected = expected.replace(
-        'schedule=request["schedule"], weight=request["weight"])',
-        'observation_monotonic_s=request["observation_monotonic_s"])',
-        1,
-    )
-    assert (ROOT / "deploy/fr3_sharpa_runtime/async_soft_motion_ros.py").read_text() == expected
+def test_worker_isolated_and_strict_compression():
+    text = (ROOT / "deploy/fr3_sharpa_runtime/async_soft_motion_ros.py").read_text()
+    assert "from .async_soft_stream import AsyncSoftTimeline" in text
+    assert "from .rtc_stream import RTCTimeline" not in text
+    assert "targets = execution_targets(actions)" in text
+    assert "transition[0] = stream.targets[-1]" in text
 
 
 @pytest.mark.parametrize("fail_after", [None, 2])
@@ -413,7 +423,9 @@ def test_isolated_worker_retains_confirmed_shutdown_on_partial_execution(monkeyp
     verify_worker(monkeypatch, capsys, fail_after)
 
 
-def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch):
+@pytest.mark.parametrize("scale", [0.1, 0.5, 1.0])
+@pytest.mark.parametrize("failure", [None, "late", "splice", "overshoot"])
+def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch, scale, failure):
     import io
     from types import ModuleType
 
@@ -497,6 +509,8 @@ def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch):
         def shutdown(self, **kwargs):
             pass
 
+    hz = 30 / math.ceil(1 / scale)
+
     class Input:
         count = 0
 
@@ -506,21 +520,47 @@ def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch):
                 payload = {
                     "operation": "stream_start",
                     "actions": trajectory().tolist(),
-                    "execute_speed_scale": 1,
+                    "execute_speed_scale": scale,
                     "events_path": str(events),
                 }
             elif self.count == 2:
-                payload = {"operation": "stream_snapshot", "delay_steps": 1, "observation_monotonic_s": clock[0]}
+                payload = {"operation": "stream_snapshot", "observation_monotonic_s": clock[0]}
             elif self.count == 3:
                 rows = [json.loads(line) for line in protocol.getvalue().splitlines()]
                 context = next(row["context"] for row in rows if "context" in row)
-                clock[0] = handover_window(context)[0] + 0.0001
-                payload = {"operation": "stream_install", "actions": trajectory().tolist(), "receipt": receipt(context)}
+                clock[0] += 0.0001
+                payload = {
+                    "operation": "stream_install",
+                    "actions": trajectory(0.2 if failure == "splice" else 0.026).tolist(),
+                    "receipt": receipt(context),
+                    "terminal": True,
+                }
             elif self.count == 4:
+                payload = {"operation": "stream_status"}
+            elif self.count == 5:
                 payload = {"operation": "stream_stop"}
             else:
                 payload = {"operation": "close"}
+            if self.count == 1 and failure == "overshoot":
+                raw = trajectory()
+                raw[:, 0] = 0
+                raw[1:3, 0] = 0.4
+                payload["actions"] = raw.tolist()
             return json.dumps(payload) + "\n"
+
+    def select_ready(*args):
+        count = sys.stdin.count
+        waiting = (failure == "late" and count == 2) or (count == 3 and clock[0] < 10 + 40 / hz + 0.05)
+        if waiting:
+            clock[0] += 0.01
+            return [], [], []
+        return [sys.stdin], [], []
+
+    def validate_ranges(values, *, check_slew=True):
+        if np.max(np.abs(values[:, 0])) > 0.400001:
+            raise ValueError("cubic overshoot rejected")
+        if check_slew and np.max(np.abs(np.diff(values, axis=0))) > 0.03:
+            raise ValueError("future splice slew rejected")
 
     # No actual ROS, SDK, processes, network or hardware are used.
     import tempfile
@@ -544,20 +584,59 @@ def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch):
         monkeypatch.setattr(worker, "ROSFeedbackProvider", Feedback)
         monkeypatch.setattr(worker, "SharpaSdkDirectExecutor", SDK)
         monkeypatch.setattr(worker, "validate_gateway_admission", lambda node: None)
-        monkeypatch.setattr(worker, "validate_action_ranges", lambda *a, **kw: None)
+        monkeypatch.setattr(worker, "validate_action_ranges", validate_ranges)
         monkeypatch.setattr(sdk_direct, "hand_joint_limits", lambda: np.tile([-1.0, 1.0], (22, 1)))
         monkeypatch.setattr(worker, "construct_messages", lambda frame: (SimpleNamespace(), None, None))
         monkeypatch.setattr(worker, "play_command_frames", lambda frames, send, feedback: [send(f) for f in frames])
         monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
-        monkeypatch.setattr(worker.select, "select", lambda *a: ([sys.stdin], [], []))
+        monkeypatch.setattr(worker.select, "select", select_ready)
         monkeypatch.delenv("SHARPA_PROTOCOL_FD", raising=False)
         monkeypatch.setattr(sys, "stdin", Input())
         monkeypatch.setattr(sys, "stdout", protocol)
         monkeypatch.setattr(sys, "argv", ["worker", "--enable-hardware"])
-        worker.main()
+        if failure is None:
+            worker.main()
+        else:
+            with pytest.raises(SystemExit):
+                worker.main()
         rows = [json.loads(line) for line in protocol.getvalue().splitlines()]
-        assert all(row["status"] == "PASS" for row in rows)
-        assert any(row.get("observation_anchored") for row in rows)
         assert rows[-1]["operation"] == "shutdown"
         assert stopped == [True]
-        assert len(sent) >= 2
+        if failure is None:
+            assert all(row["status"] == "PASS" for row in rows)
+            assert any(row.get("queued") for row in rows)
+            final = next(row for row in rows if row.get("finished"))
+            assert final["generation"] == 2
+            events_rows = [json.loads(line) for line in events.read_text().splitlines()]
+            frames = [row for row in events_rows if row["event"] == "frame"]
+            expected = 20 * math.ceil(1 / scale)
+            assert sum(row["generation"] == 1 for row in frames) == expected
+            assert sum(row["generation"] == 2 for row in frames) == expected
+            assert max(row["phase"] for row in frames) <= 25
+            np.testing.assert_allclose(frames[-1]["command"], trajectory(0.026)[25], atol=1e-6)
+        else:
+            failed = next(row for row in rows if row["status"] == "FAIL")
+            assert {"late": "handover", "splice": "splice", "overshoot": "overshoot"}[failure] in failed["reason"]
+            if failure == "overshoot":
+                assert sent == []
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--execute-steps", "15"],
+        ["--execute-steps", "20"],
+        ["--soft-initial-delay-steps", "5"],
+        ["--soft-delay-buffer-size", "10"],
+        ["--compression", "off"],
+    ],
+)
+def test_obsolete_async_schedule_cannot_silently_run(flags):
+    process = subprocess.run(
+        [sys.executable, "-m", "deploy.fr3_sharpa_runtime.async_soft_run", "--check", *flags],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 2
