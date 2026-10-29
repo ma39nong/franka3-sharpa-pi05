@@ -65,6 +65,8 @@ def main() -> None:
     stream_tick = None
     stream_log = None
     stream_last_command = None
+    from .async_soft_ipc import RequestInbox
+    inbox = RequestInbox(sys.stdin)
 
     def stream_event(name, **fields):
         if stream_log is not None:
@@ -187,13 +189,11 @@ def main() -> None:
                                  command=command.tolist(), measured=current.state.tolist())
                     stream_tick += DT_NS / 1e9
             timeout = 0.01 if stream is None or stream.finished else max(0, min(0.01, stream_tick - time.monotonic()))
-            readable, _, _ = select.select([sys.stdin], [], [], timeout)
-            if not readable:
+            available, request = inbox.poll(timeout)
+            if not available:
                 continue
-            line = sys.stdin.readline()
-            if not line:
+            if request is None:
                 break
-            request = json.loads(line)
             clipping_report = None
             experimental_audit = None
             operation = request.get("operation")
@@ -235,9 +235,10 @@ def main() -> None:
                 if stream is None:
                     raise ValueError("No active async Soft stream")
                 actions, clipping_report = stream_actions(request)
-                from .async_soft_stream import execution_targets
-                # Staging is early; validate the FUTURE boundary, not the current command.
-                transition = target_chunk(execution_targets(actions)[0])
+                # Check the exact bounded, blended targets that will execute.
+                _, targets = stream.prepare(actions, anchor=stream.targets[-1])
+                validate_action_ranges(np.concatenate([targets, np.repeat(targets[-1:], 30, axis=0)]), check_slew=False)
+                transition = target_chunk(targets[0])
                 transition[0] = stream.targets[-1]
                 validate_action_ranges(transition)
                 result = stream.install(actions, request["receipt"], time.monotonic(), terminal=bool(request.get("terminal", False)))
@@ -389,6 +390,12 @@ def main() -> None:
             detail += "\nPrediction clipping audit: " + json.dumps(clipping_report, allow_nan=False)
         if experimental_audit is not None:
             detail += "\nExperimental execution audit: " + json.dumps(experimental_audit, allow_nan=False)
+        try:
+            stream_event("failure", reason=str(error), error_type=type(error).__name__,
+                         generation=stream.generation if stream is not None else None,
+                         last_command=None if stream_last_command is None else stream_last_command.tolist())
+        except (OSError, ValueError):
+            pass
         print(json.dumps({"status": "FAIL", "published": sequence > 0,
                           "reason": str(error), "detail": detail}), file=protocol, flush=True)
         raise SystemExit(1)

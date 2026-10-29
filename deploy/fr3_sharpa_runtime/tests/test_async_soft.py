@@ -52,7 +52,7 @@ def test_fixed_prefix_compression_references_and_boundary_install(scale):
     assert staged["queued"]
     assert staged["skipped"] == 0
     np.testing.assert_array_equal(timeline.sample(10.4), old)
-    np.testing.assert_allclose(timeline.sample(boundary), trajectory(0.026)[0])
+    np.testing.assert_allclose(timeline.sample(boundary), trajectory()[25])
     assert timeline.generation == 2
     assert timeline.status(boundary + 20 / hz)["finished"]
 
@@ -360,6 +360,11 @@ def test_async_coordinator_keeps_old_commands_running_and_rejects_failures(monke
             assert row["installation"]["queued"]
         assert len(sent) > 4  # Old commands were sampled while prediction was pending.
         assert result["rtc_guidance"] is False
+        requests = [row["context"] for row in rows if row["event"] == "request"]
+        for ctx in requests:
+            assert ctx["handover_monotonic_s"] - ctx["snapshot_monotonic_s"] < 0.7
+        if scale == 0.1:
+            assert requests[0]["snapshot_monotonic_s"] > 15.9
     else:
         error = KeyboardInterrupt if failure == "interrupt" else RuntimeError if failure == "worker" else TimeoutError
         with pytest.raises(error):
@@ -386,7 +391,7 @@ def test_fourth_cli_is_offline_and_old_options_do_not_enable_it(model):
     assert report["broker_mode"] == "async-soft"
     assert report["execute_steps"] == 26
     assert report["execution_target_count"] == 20
-    assert report["compression"] == "cubic"
+    assert report["compression"] == "pchip"
     assert report["node_hz"] == 3
     assert report["model_profile"] == model
     assert not report["hardware_output"]
@@ -424,7 +429,7 @@ def test_isolated_worker_retains_confirmed_shutdown_on_partial_execution(monkeyp
 
 
 @pytest.mark.parametrize("scale", [0.1, 0.5, 1.0])
-@pytest.mark.parametrize("failure", [None, "late", "splice", "overshoot"])
+@pytest.mark.parametrize("failure", [None, "late", "splice"])
 def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch, scale, failure):
     import io
     from types import ModuleType
@@ -616,7 +621,9 @@ def test_real_async_worker_snapshot_install_and_confirmed_shutdown(monkeypatch, 
             np.testing.assert_allclose(frames[-1]["command"], trajectory(0.026)[25], atol=1e-6)
         else:
             failed = next(row for row in rows if row["status"] == "FAIL")
-            assert {"late": "handover", "splice": "splice", "overshoot": "overshoot"}[failure] in failed["reason"]
+            assert {"late": "handover", "splice": "boundary mismatch", "overshoot": "overshoot"}[failure] in failed[
+                "reason"
+            ]
             if failure == "overshoot":
                 assert sent == []
 
@@ -640,3 +647,65 @@ def test_obsolete_async_schedule_cannot_silently_run(flags):
         check=False,
     )
     assert process.returncode == 2
+
+
+def test_shape_preserving_compression_does_not_ring_at_a_local_peak():
+    from scipy.interpolate import interp1d
+
+    from deploy.fr3_sharpa_runtime.async_soft_stream import execution_targets
+
+    actions = trajectory()
+    actions[:, 0] = 0
+    actions[1:3, 0] = 0.4
+    old = interp1d(np.arange(26), actions[:26], kind="cubic", axis=0)(np.linspace(0, 25, 20))
+    assert old[:, 0].max() > 0.4
+    new = execution_targets(actions)
+    assert new[:, 0].max() <= 0.400001
+    assert new[:, 0].min() >= 0
+
+
+@pytest.mark.parametrize("scale", [0.1, 0.5, 1])
+def test_small_soft_mismatch_has_no_instant_boundary_jump(scale):
+    timeline, context = snapshot(scale)
+    end = timeline.targets[-1].copy()
+    actions = trajectory(0.04)
+    original_targets = timeline.prepare(actions)[1]
+    timeline.install(actions, receipt(context), 10.41, terminal=True)
+    boundary = context["handover_monotonic_s"]
+    np.testing.assert_allclose(timeline.sample(boundary), end)
+    np.testing.assert_array_equal(timeline.targets[4:], original_targets[4:])
+    assert timeline.targets.shape == (20, 58)
+    np.testing.assert_array_equal(timeline.targets[-1], actions[25])
+    # Convex correction does not introduce new extrema.
+    assert np.min(timeline.targets) >= np.min(end)
+    assert np.max(timeline.targets) <= np.max(original_targets)
+
+
+def test_pipe_partial_message_never_waits_for_newline_and_keeps_buffered_requests():
+    from deploy.fr3_sharpa_runtime.async_soft_ipc import RequestInbox
+
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "r") as stream:
+        inbox = RequestInbox(stream)
+        try:
+            os.write(write_fd, b'{"operation":')
+            assert inbox.poll(0) == (False, None)
+            os.write(write_fd, b'"stream_status"}\n{"operation":"close"}\n')
+            assert inbox.poll(0) == (True, {"operation": "stream_status"})
+            assert inbox.poll(0) == (True, {"operation": "close"})
+        finally:
+            os.close(write_fd)
+        assert inbox.poll(0) == (True, None)
+
+
+def test_partial_pipe_eof_is_an_error():
+    from deploy.fr3_sharpa_runtime.async_soft_ipc import RequestInbox
+
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "r") as stream:
+        inbox = RequestInbox(stream)
+        os.write(write_fd, b'{"operation":')
+        os.close(write_fd)
+        assert inbox.poll(0) == (False, None)
+        with pytest.raises(ValueError, match="incomplete"):
+            inbox.poll(0)

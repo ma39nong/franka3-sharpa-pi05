@@ -13,7 +13,7 @@ import numpy as np
 
 from .protocol import as_finite_action_chunk
 
-CAPABILITY = "sharpa-async-soft-rolling-v2"
+CAPABILITY = "sharpa-async-soft-rolling-v3"
 CONTEXT_KEY = "_async_soft_context"
 RECEIPT_KEY = "async_soft_receipt"
 _FIELDS = {
@@ -85,11 +85,11 @@ def require_capabilities(metadata):
 
 
 def execution_targets(actions):
-    """Strict cubic 26 -> 20, endpoints preserved; never fall back silently."""
-    from scipy.interpolate import interp1d
+    """Shape-preserving cubic 26 -> 20; endpoints preserved, no overshoot."""
+    from scipy.interpolate import PchipInterpolator
 
     source = as_finite_action_chunk(actions)[:26]
-    targets = interp1d(np.arange(26), source, kind="cubic", axis=0)(np.linspace(0, 25, 20)).astype(np.float32)
+    targets = PchipInterpolator(np.arange(26), source, axis=0)(np.linspace(0, 25, 20)).astype(np.float32)
     targets[[0, -1]] = source[[0, -1]]
     return targets
 
@@ -104,11 +104,21 @@ class AsyncSoftTimeline:
         self._activate(self.prepare(actions), now, terminal)
 
     @staticmethod
-    def prepare(actions):
+    def prepare(actions, anchor=None):
         # Discarded nodes 30..49 cannot affect command generation or identity.
         kept = as_finite_action_chunk(actions)[:30].copy()
         padded = np.concatenate([kept, np.repeat(kept[-1:], 20, axis=0)])
-        return kept, execution_targets(padded)
+        targets = execution_targets(padded)
+        if anchor is not None:
+            gap = float(np.max(np.abs(targets[0] - anchor)))
+            if gap > 0.05:
+                raise ValueError(f"Async Soft boundary mismatch {gap:.6f} rad exceeds 0.05 rad; stopped")
+            # Blend within the existing 20 targets, with no added commands or tail.
+            # Convex weights preserve per-joint bounds. Never hide a large mismatch.
+            u = np.linspace(0, 1, 5, dtype=np.float32)
+            weights = (u * u * (3 - 2 * u))[:, None]
+            targets[:5] = (1 - weights) * anchor + weights * targets[:5]
+        return kept, targets
 
     def _activate(self, plan, now, terminal):
         self.actions, self.targets = plan
@@ -192,13 +202,14 @@ class AsyncSoftTimeline:
             raise ValueError("Async Soft source changed")
         if now < context["snapshot_monotonic_s"] or now >= self.boundary:
             raise TimeoutError("Async Soft staging missed handover deadline")
-        self.queued = self.prepare(actions), terminal
+        self.queued = self.prepare(actions, anchor=self.targets[-1]), terminal
         return {
             "queued": True,
             "source_generation": self.generation,
             "handover_monotonic_s": self.boundary,
             "reference_start": 0,
             "skipped": 0,
+            "boundary_gap_rad": float(np.max(np.abs(as_finite_action_chunk(actions)[0] - self.targets[-1]))),
             "alignment": "trajectory_phase",
             "execution_target_count": 20,
         }

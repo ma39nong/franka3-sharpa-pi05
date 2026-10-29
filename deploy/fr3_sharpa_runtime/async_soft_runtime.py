@@ -1,5 +1,6 @@
 """Pipeline fixed 20-target segments; inference overlaps the current segment."""
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
@@ -21,6 +22,12 @@ def run_async_soft(
     accepted, stage = 1, "initial_prediction"
     started = clock()
     requested_generation = None
+    # Warmup infer_ms excludes observation/IPC; use a bounded history and margin.
+    initial_ms = first[2].get("infer_ms", 250.0)
+    initial_s = float(initial_ms) / 1000 if isinstance(initial_ms, int | float) else 0.25
+    latencies = deque([max(0.05, initial_s)], maxlen=10)
+    prediction_started = None
+    latest_status = None
 
     def log(event, **fields):
         with (directory / "requests.jsonl").open("a") as stream:
@@ -33,7 +40,7 @@ def run_async_soft(
             "accepted_chunks": accepted,
             "stage": stage,
             "elapsed_s": clock() - started,
-            "compression": "cubic",
+            "compression": "pchip",
             "effective_horizon": 30,
             "execute_steps": 26,
             "execution_target_count": 20,
@@ -73,6 +80,7 @@ def run_async_soft(
         )
         while True:
             status = worker.request({"operation": "stream_status"})
+            latest_status = status
             if status["finished"]:
                 stopped = worker.request({"operation": "stream_stop"})
                 return save("COMPLETE", completion="commands_sent", final_stream=stopped)
@@ -90,6 +98,7 @@ def run_async_soft(
                             "terminal": bool(args.num_chunks and accepted + 1 >= args.num_chunks),
                         }
                     )
+                    latencies.append(max(0.01, clock() - prediction_started))
                     accepted += 1
                     log(
                         "queued",
@@ -100,14 +109,16 @@ def run_async_soft(
                     )
                     future = context = None
                     stage = "playing"
-            # Launch once per activated segment, immediately; never wait for 15 source nodes.
+            # Observe near the boundary, leaving measured worst-case latency plus margin.
             if (
                 future is None
                 and not status["queued"]
                 and status["generation"] != requested_generation
                 and not (args.num_chunks and accepted >= args.num_chunks)
+                and status["handover_monotonic_s"] - clock() <= max(0.25, 2 * max(latencies) + 0.15)
             ):
                 stage = "observing"
+                prediction_started = clock()
                 deadline = status["handover_monotonic_s"] - 0.01
 
                 def poll(deadline=deadline):
@@ -137,6 +148,9 @@ def run_async_soft(
         save(
             "INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAILED",
             error=str(error) or type(error).__name__,
+            error_type=type(error).__name__,
+            last_stream_status=latest_status,
+            measured_pipeline_s=list(latencies),
         )
         raise
     finally:
