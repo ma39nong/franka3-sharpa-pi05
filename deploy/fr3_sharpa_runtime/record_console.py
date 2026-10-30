@@ -10,7 +10,7 @@ import sys
 import threading
 
 
-def record_command(command, path):
+def record_command(command, path, *, env=None, cwd=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     child = None
@@ -54,7 +54,7 @@ def record_command(command, path):
     try:
         # Reject accidental reuse of a previous run's console log.
         with path.open("xb", buffering=0) as output:
-            child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=env, cwd=cwd)
             if interrupted is not None:
                 os.killpg(child.pid, interrupted)
             reader = threading.Thread(target=mirror, daemon=True)

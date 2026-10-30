@@ -1,5 +1,8 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
+日常启动统一看 [部署启动指令](部署启动指令.md)。需要选择权重、模式、Home/Current和自动录制时，运行 `bash deploy/fr3_sharpa_control/ui.sh`，操作说明见 [部署控制台](deploy/fr3_sharpa_control/README.md)。
+
+
 `chunk-base-test` 已包含可选 RTC 试验：服务端 `--enable-rtc`，执行端用 `--broker-mode serial/rtc` 选择机制。**RTC 启动统一显式使用 `--broker-mode rtc --speed fast`，表示 1.0 倍模型原速；非 RTC 串行保留 slow／medium／fast 三档。**旧命令默认串行。配置、测试状态及现场入口见 [RTC 说明](deploy/fr3_sharpa_full/RTC.md)。串行与 RTC 共存在同一分支，无需切换分支。
 
 双 FR3 机械臂、双 Sharpa 灵巧手的视觉语言动作模型工程。当前部署使用 **π0.5 全量微调、30 Hz、原生 58 维绝对关节目标**。

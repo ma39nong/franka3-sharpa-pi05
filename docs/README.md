@@ -1,5 +1,8 @@
 # 文档索引
 
+日常操作：[部署启动指令](../部署启动指令.md) · [部署控制台与自动录制](../deploy/fr3_sharpa_control/README.md)。
+
+
 当前 Sharpa 实机部署以[根 README](../README.md)和 [runtime 部署说明](../deploy/fr3_sharpa_runtime/README.md)为准。
 
 | 文档 | 用途 |

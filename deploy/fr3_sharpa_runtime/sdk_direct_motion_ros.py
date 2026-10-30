@@ -46,6 +46,9 @@ def main() -> None:
 
     rclpy.init()
     node = rclpy.create_node("fr3_sharpa_runtime_sdk_direct")
+    from deploy.fr3_sharpa_control.recording import RecordingGate, command_publisher, play_task_frames
+    recording = RecordingGate()
+    publish_targets = command_publisher(node, recording)
     feedback = ROSFeedbackProvider(node)
     executor = SharpaSdkDirectExecutor()
     protocol = (os.fdopen(int(os.environ["SHARPA_PROTOCOL_FD"]), "w", buffering=1)
@@ -86,6 +89,7 @@ def main() -> None:
         arm, _, _ = construct_messages(frame)
         arm.sequence = sequence
         arm_pub.publish(arm)
+        publish_targets(values, stamp)
         sequence += 1
 
     def fresh_feedback():
@@ -195,6 +199,9 @@ def main() -> None:
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
                     publish_frame(frame)
                 play_command_frames(frames, send_initial, fresh_feedback)
+                if recording.enabled:
+                    recording.start()
+                    executor.resume_stream()
                 now = time.monotonic()
                 stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]))
                 stream_tick = now
@@ -305,7 +312,8 @@ def main() -> None:
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
                     publish_frame(frame)
 
-                play_command_frames(frames, send_chunk_frame, fresh_feedback)
+                play_task_frames(frames, bridge_frames, send_chunk_frame, fresh_feedback, recording,
+                                 resume=executor.resume_stream)
                 end_feedback = fresh_feedback()
                 error_by_group = {
                     name: float(np.max(np.abs(end_feedback.state[part] - selected[-1, part])))
@@ -341,6 +349,7 @@ def main() -> None:
     finally:
         from .shutdown import protect_disable_confirmation
         with protect_disable_confirmation():
+            recording.stop(wait=False)
             feedback_stop.set()
             try:
                 if feedback_thread is not None:

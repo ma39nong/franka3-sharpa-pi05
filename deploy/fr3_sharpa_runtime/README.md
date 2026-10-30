@@ -1,5 +1,8 @@
 # FR3 + Sharpa 本机部署
 
+统一UI、自动启动/停止、第一段chunk开始录制及自动视频导出见 [部署控制台](../fr3_sharpa_control/README.md)；完整三终端场景命令见 [部署启动指令](../../部署启动指令.md)。
+
+
 录制执行端与 Ctrl+C 失能确认请使用 [退出与录制说明](SHUTDOWN_RECORDING.md) 中的新入口，避免在执行命令后连接 `| tee`。本轮失能结果另存到执行日志目录的 `shutdown-<pid>.json`。
 
 本机 cam1 源时钟异常的对照测试和诊断限制见 [相机时钟说明](CAMERA_CLOCK.md)。目前未启用自动修改相机时钟的启动逻辑。
