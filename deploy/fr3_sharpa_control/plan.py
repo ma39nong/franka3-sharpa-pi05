@@ -47,16 +47,17 @@ def desktop():
 
 
 def allocate_run(root, *, now=None):
-    day = Path(root).expanduser().resolve() / (now or datetime.now().astimezone()).strftime("%Y-%m-%d")
+    moment = now or datetime.now().astimezone()
+    day = Path(root).expanduser().resolve() / moment.strftime("%Y-%m-%d")
     day.mkdir(parents=True, exist_ok=True)
-    number = 1
+    label, attempt = moment.strftime("%H.%M"), 1
     while True:
-        directory = day / f"{number:02d}"
+        directory = day / (label if attempt == 1 else f"{label}-{attempt}")
         try:
             directory.mkdir()  # Atomic reservation, including concurrent launchers.
             return directory
         except FileExistsError:
-            number += 1
+            attempt += 1
 
 
 def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None):
