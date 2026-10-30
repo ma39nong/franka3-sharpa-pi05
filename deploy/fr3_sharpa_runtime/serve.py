@@ -98,10 +98,11 @@ def main() -> None:
     print(f"Warmup OK: actions=(50, 58), {config.MODEL_PROFILE.name}, absolute, 30 Hz", flush=True)
     served = TimedPolicy(policy)
     if args.enable_inference_experiments:
+        from .paper_model import reference_normalizer
         from .model_service import ExperimentalPolicy
         from .rolling import CAPABILITY, CONTEXT_KEY, RollingOptions
         served = ExperimentalPolicy(served, metadata,
-            normalizer=normalize_transform(stats), delta=config.MODEL_PROFILE.extra_delta_transform,
+            normalizer=reference_normalizer(stats, training.model), delta=config.MODEL_PROFILE.extra_delta_transform,
             matrix=matrix, covariance_info=covariance_info)
         # Warm both referenced sampler variants before motion-capable requests.
         from .rolling import model_identity
@@ -121,7 +122,7 @@ def main() -> None:
             warm[CONTEXT_KEY]["reference"]["completed_monotonic_ns"] = time.monotonic_ns()
             as_finite_action_chunk(served.infer(warm)["actions"])
         metadata["inpainting_warmed_up"] = True
-        print("Inference experiments ready: paper-rolling-v1 (independent noise)", flush=True)
+        print("Inference experiments ready: paper-rolling-v1; noise=" + ("paper-correlated" if metadata["paper_algorithm"] else "independent"), flush=True)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(metadata, indent=2) + "\n")

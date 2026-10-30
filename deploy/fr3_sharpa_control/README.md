@@ -18,9 +18,26 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 运行期间配置冻结。停止不会自动回Home，Current始终使用重启时新采集的状态和图像。页面关闭不会等于停止执行；请用停止按钮。UI服务器终端Ctrl-C也会先停止执行、等待既有清理，再关闭模型。
 
+## 当前覆盖范围
+
+| 权重（均为30Hz、原生58D、50步） | main | soft-inpainting-test |
+| --- | --- | --- |
+| 全量 Absolute | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
+| 全量普通 Delta（双臂delta／双手absolute） | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
+| 全量 Paper Delta v1（包括本次7999／T3） | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
+| 未合并 Absolute LoRA（VLM16／Expert32配方） | 普通串行 | 普通串行 |
+
+这不是通用权重加载器：LoRA Delta、其他动作顺序/维度/频率、未知模型变体、其他论文资产版本尚未接入。模式列表同时受所选仓库和模型限制；旧分支没有Paper适配时会阻止启动。现场硬件验证与离线模型验证分开记录。
+
+Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。本次7999为timestamp_zscore_arms、beta0.5。
+
+Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；RTC使用完整50步参考。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
+
+2026-10-30离线验证：本次7999在RTX5090上通过真实加载、普通推理、RTC引导、串行Soft四点参考、异步Soft四点参考smoke；输出均为有限50×58。异步Soft仍为50→30→26＋4→20，Soft施加6次；未连接机器人，不能替代工作机实机验证。回归：main283项；Soft422项（16条既有JAX/Flax弃用警告）。模型smoke报告保存在各工作目录忽略Git的 `.deployment/paper_7999_audit/`。
+
 ## 权重身份
 
-参数元数据用于核对全量/未合并LoRA和原生58D投影；不能从目录名推断动作语义。当前已核对的AB4 absolute和本次delta统计指纹可以自动识别。其他权重优先提供归档训练JSON，需统计SHA256、模型结构、30Hz、horizon50、token256匹配；确实没有可读记录时，可由操作员根据训练配置明确确认语义。该确认按manifest和统计的内容指纹保存，再次选择同一权重自动恢复；路径同名但内容变更不会沿用旧绑定。
+参数元数据用于核对全量/未合并LoRA和原生58D投影；不能从目录名推断动作语义。当前已核对的AB4 absolute和普通delta统计指纹、完整Paper资产可以自动识别。其他权重优先提供归档训练JSON，需统计SHA256、模型结构、30Hz、horizon50、token256匹配；确实没有可读记录时，可由操作员根据训练配置明确确认语义。该确认按manifest、统计以及Paper算法资产的内容指纹保存，再次选择同一权重自动恢复；路径同名但内容变更不会沿用旧绑定。
 
 未知语义会阻止启动；不会将名字含delta的目录静默当作delta。LoRA delta当前没有新部署配置，会明确拒绝。模型全局参数形状和推理输出还会在GPU预热时核对。5999是训练步骤号，不代表某种执行模式。
 

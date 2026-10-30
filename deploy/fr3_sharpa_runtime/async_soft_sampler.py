@@ -15,7 +15,7 @@ def sample_async_soft(self, rng, observation, *, noise=None, reference=None, ref
     if self.action_horizon != 50 or self.action_dim != 58:
         raise ValueError("Async Soft sampler requires native 50x58 actions")
     if noise is None:
-        noise = jax.random.normal(rng, (batch, 50, 58))
+        noise = self.noise(rng, (batch, 50, 58)) if hasattr(self, "paper_beta") else jax.random.normal(rng, (batch, 50, 58))
     if reference is not None and reference.shape != (batch, 4, 58):
         raise ValueError("Async Soft reference must be batch x4x58")
     dt = -1.0 / num_steps

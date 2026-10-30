@@ -1,6 +1,6 @@
 # 异步 Soft：50 → 30 → 26＋4 → 20
 
-本实验在 `soft-inpainting-test` 部署分支维护，训练仓库不参与这次改动。原串行、原 RTC、串行 Soft 的脚本、调度器、采样器及 worker 保持原样，main 不变。使用原 full/full-delta 权重和配套统计，无需重新训练；不兼容训练侧新论文归一化资产。
+本实验在 `soft-inpainting-test` 部署分支维护，训练仓库不参与这次改动。异步调度和worker由Soft分支维护；main共享Paper加载与UI适配，原串行与RTC保留既有调度。支持原 full/full-delta 权重与配套统计，并已接入sharpa-delta-paper-v1全量Delta资产（含T3逐时间步归一化、相关噪声）。Paper仍选full-delta，由checkpoint资产自动识别；需同步本版公共加载层。其他论文格式尚不支持。
 
 ## 执行契约（rolling-v3）
 

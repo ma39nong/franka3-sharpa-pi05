@@ -49,7 +49,6 @@ def main():
         return
     import jax
 
-    from openpi import transforms
     from openpi.policies import policy_config
     from openpi.serving.websocket_policy_server import WebsocketPolicyServer
     from openpi.shared import normalize
@@ -61,12 +60,12 @@ def main():
     training = build_config()
     config.validate_training_contract(training)
     stats = normalize.load(config.NORM_STATS.parent)
-    data = training.data.create(training.assets_dirs, training.model)
     loaded = policy_config.create_trained_policy(training, config.CHECKPOINT, norm_stats=stats)
+    from .paper_model import reference_normalizer
     served = AsyncSoftPolicy(
         loaded,
         metadata,
-        normalizer=transforms.Normalize(stats, use_quantiles=data.use_quantile_norm),
+        normalizer=reference_normalizer(stats, training.model),
         delta=config.MODEL_PROFILE.extra_delta_transform,
     )
     observation = {"observation/state": np.zeros(58, np.float32), "prompt": config.DEFAULT_PROMPT}
