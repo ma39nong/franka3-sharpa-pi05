@@ -10,7 +10,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
-1. 选择本机部署仓库和checkpoint目录，识别权重，选择串行／RTC／Soft模式。
+1. 选择本机部署仓库和checkpoint目录，在主界面按训练配置选择模型动作类型：Absolute，或双臂Delta／双手Absolute，再点击识别权重，选择串行／RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
 2. 点击**启动推理**。只检查权重并加载GPU、预热、核对服务身份，不启动硬件、相机、录制或机器人执行；即使选择了Home或录制，也不需要此时提供Home配置或ROS环境。推理端预热期间可以点**停止推理**取消。
 3. 等推理端显示就绪，选择Current/Home、速度、步数、轮数、录制和输出位置，点击**核对执行配置**。
 4. 点击**启动执行**。必须已有与当前仓库、提交、权重和模式匹配的已预热推理端；执行入口只检查/复用该服务，不会隐式加载或切换模型。每次执行都自动运行硬件 `up`，然后按配置开始执行。
@@ -29,7 +29,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 页面中排固定三个同时可见的窗口：**终端一·硬件**（up与硬件清理）、**终端二·推理**（权重检查与持续模型日志）、**终端三·执行**（参数检查、执行、录制与视频导出）。不再按每个内部文件增加日志窗口。三个窗口分别滚动，不互相切换隐藏。推理日志不会因开始新一轮执行而消失，硬件/执行显示最近一轮。
 
-详细文件仍完整保存在磁盘。只启动推理时日志存于仓库 `.deployment/control_model_sessions/日期/编号/`；不会占用桌面部署记录的01、02编号。实际执行仍按所选父目录自动分配日期/编号。视频导出在后台进行，不阻塞下一轮执行。
+详细文件仍完整保存在磁盘。只启动推理时日志存于仓库 `.deployment/control_model_sessions/日期/小时.分钟/`；不会创建桌面部署记录。实际执行按所选父目录自动创建日期/小时.分钟目录。视频导出在后台进行，不阻塞下一轮执行。
 
 ## 当前覆盖范围
 
@@ -42,11 +42,11 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 这不是通用权重加载器：LoRA Delta、其他动作顺序/维度/频率、未知模型变体、其他论文资产版本尚未接入。模式列表同时受所选仓库和模型限制；旧分支没有Paper适配时会阻止启动。现场硬件验证与离线模型验证分开记录。
 
-Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。本次7999为timestamp_zscore_arms、beta0.5。
+Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。Paper T3对应的7999为timestamp_zscore_arms、beta0.5；7999只是训练步数，普通Delta的同名目录不能当作Paper权重。
 
 Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；RTC使用完整50步参考。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
 
-2026-10-30离线验证：本次7999在RTX5090上通过真实加载、普通推理、RTC引导、串行Soft四点参考、异步Soft四点参考smoke；输出均为有限50×58。异步Soft仍为50→30→26＋4→20，Soft施加6次；未连接机器人，不能替代工作机实机验证。推理/执行启停拆分后的回归：main290项；Soft429项（16条既有JAX/Flax弃用警告）。模型smoke报告保存在各工作目录忽略Git的 `.deployment/paper_7999_audit/`。
+2026-10-30离线验证：本次7999在RTX5090上通过真实加载、普通推理、RTC引导、串行Soft四点参考、异步Soft四点参考smoke；输出均为有限50×58。异步Soft仍为50→30→26＋4→20，Soft施加6次；未连接机器人，不能替代工作机实机验证。合并LTT录制修复后的回归：main292项；Soft431项（16条既有JAX/Flax弃用警告）。模型smoke报告保存在各工作目录忽略Git的 `.deployment/paper_7999_audit/`。
 
 ## 权重身份
 
@@ -74,7 +74,7 @@ Main提供普通串行和RTC；Soft分支增加串行Soft和异步Soft。UI读�
 默认父目录按XDG Desktop、已有的“桌面”/“Desktop”自动定位，也可选择其他目录：
 
 ```text
-<选定父目录>/2026-10-30/01/
+<选定父目录>/2026-10-30/15.43/
   run.json                 # 冻结配置、分支提交、模型与统计身份
   recording.json           # 起止时间、各topic消息数、缺失topic
   rosbag/                  # 原始SQLite3 bag和metadata.yaml
@@ -85,12 +85,11 @@ Main提供普通串行和RTC；Soft分支增加串行Soft和异步Soft。UI读�
     three_cameras.mp4
   logs/                    # 执行trace与独立shutdown报告
   runtime.log
-  model.log                # 本轮新启动模型时
   ui_status.json
   video_export.json
 ```
 
-每日01、02…采用原子建目录分配，不覆盖既有数据；失败启动也保留该编号和排查记录。不勾录制时不启动bag/video任务，仅保存配置和运行日志。
+名称使用工作机本地的小时和分钟，如15.43、15.50，不加入秒。同一分钟重复启动时使用15.43-2、15.43-3等后缀；原子创建目录，不覆盖既有数据。失败启动也保留该时间目录和排查记录。旧编号目录保持原样。不勾录制时不启动bag/video任务，仅保存配置和运行日志。
 
 录制三路RGB、左右FR3反馈、左右Sharpa反馈、原双臂命令，以及新增 `/openpi/executed_joint_targets`（完整58D、实际裁剪/插值后下发目标）。实测反馈与发送目标分别保存，不将命令当成实际到位。原图像header时间戳保留在bag中。视频以同一录制进程的ROS接收时间轴30fps对齐，低帧率画面保持最近收到帧，不按相机帧号硬拼；画面标明head/left_wrist/right_wrist和经过时间。
 

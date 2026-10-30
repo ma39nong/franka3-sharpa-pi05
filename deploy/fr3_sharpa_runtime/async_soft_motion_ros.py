@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import select
 import sys
 import threading
 import time
@@ -50,7 +49,6 @@ def main() -> None:
     node = rclpy.create_node("fr3_sharpa_runtime_sdk_direct")
     from deploy.fr3_sharpa_control.recording import RecordingGate, command_publisher, play_task_frames
     recording = RecordingGate()
-    publish_targets = command_publisher(node, recording)
     feedback = ROSFeedbackProvider(node)
     executor = SharpaSdkDirectExecutor()
     protocol = (os.fdopen(int(os.environ["SHARPA_PROTOCOL_FD"]), "w", buffering=1)
@@ -113,6 +111,8 @@ def main() -> None:
         return value
 
     try:
+        # Include recorder initialization in the normal failure/shutdown protocol.
+        publish_targets = command_publisher(node, recording)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline and "teleop_safety_gateway" not in node.get_node_names():
             rclpy.spin_once(node, timeout_sec=0.05)

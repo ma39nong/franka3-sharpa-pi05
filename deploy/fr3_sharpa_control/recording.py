@@ -89,7 +89,7 @@ def command_publisher(node, gate):
     if not gate.enabled:
         return lambda values, stamp: None
     from sensor_msgs.msg import JointState
-    from .protocol import SHARPA_JOINT_NAMES
+    from deploy.fr3_sharpa_runtime.protocol import SHARPA_JOINT_NAMES
     publisher = node.create_publisher(JointState, "/openpi/executed_joint_targets", 30)
     names = ([f"left_fr3_joint{i}" for i in range(1, 8)] + [f"left_{n}" for n in SHARPA_JOINT_NAMES]
              + [f"right_fr3_joint{i}" for i in range(1, 8)] + [f"right_{n}" for n in SHARPA_JOINT_NAMES])

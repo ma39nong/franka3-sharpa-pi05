@@ -121,13 +121,15 @@ def test_old_async_fifteen_node_protocol_is_rejected(repository, checkpoint):
         settings(repository, checkpoint, mode="soft-async", steps=26).plan()
 
 
-def test_atomic_numbering_does_not_overwrite_runs(tmp_path):
-    now = datetime(2026, 10, 30)
+def test_atomic_minute_names_do_not_overwrite_runs(tmp_path):
+    now = datetime(2026, 10, 30, 15, 43, 59)
     with ThreadPoolExecutor(8) as pool:
         paths = list(pool.map(lambda _: plans.allocate_run(tmp_path, now=now), range(16)))
     assert len(set(paths)) == 16
-    assert (tmp_path / "2026-10-30/01").is_dir()
-    assert (tmp_path / "2026-10-30/16").is_dir()
+    assert {path.name for path in paths} == {"15.43", *[f"15.43-{i}" for i in range(2, 17)]}
+    assert plans.allocate_run(tmp_path, now=datetime(2026, 10, 30, 15, 50)).name == "15.50"
+    next_day = plans.allocate_run(tmp_path, now=datetime(2026, 10, 31, 0, 0))
+    assert next_day.relative_to(tmp_path).as_posix() == "2026-10-31/00.00"
 
 
 def test_record_gate_starts_after_bridge_before_model_frames(monkeypatch):
@@ -152,6 +154,38 @@ def test_disabled_gate_preserves_existing_single_play_call(monkeypatch):
                               resume=lambda: pytest.fail("disabled gate must not reset stream"),
                               play=lambda frames, *_: calls.append(frames))
     assert calls == [[0, 1, 2]]
+
+
+def test_recorded_target_publisher_uses_canonical_runtime_protocol(monkeypatch):
+    from deploy.fr3_sharpa_runtime.protocol import SHARPA_JOINT_NAMES
+    messages, publishers = [], []
+    class JointState:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=types.SimpleNamespace(sec=0, nanosec=0))
+    monkeypatch.setitem(sys.modules, "sensor_msgs", types.ModuleType("sensor_msgs"))
+    monkeypatch.setitem(sys.modules, "sensor_msgs.msg", types.SimpleNamespace(JointState=JointState))
+    def create(kind, topic, depth):
+        publishers.append((kind, topic, depth))
+        return types.SimpleNamespace(publish=messages.append)
+    node = types.SimpleNamespace(create_publisher=create)
+    values = np.arange(58, dtype=float) / 100
+    recording.command_publisher(node, recording.RecordingGate("unused-socket"))(values, 1_234_567_890)
+    assert publishers == [(JointState, "/openpi/executed_joint_targets", 30)]
+    assert len(messages) == 1
+    message = messages[0]
+    expected = ([f"left_fr3_joint{i}" for i in range(1, 8)] + [f"left_{n}" for n in SHARPA_JOINT_NAMES]
+                + [f"right_fr3_joint{i}" for i in range(1, 8)] + [f"right_{n}" for n in SHARPA_JOINT_NAMES])
+    assert message.name == expected and len(message.name) == 58
+    assert message.position == list(values)
+    assert (message.header.stamp.sec, message.header.stamp.nanosec) == (1, 234_567_890)
+
+
+def test_disabled_recording_does_not_construct_target_publisher(monkeypatch):
+    monkeypatch.delenv("SHARPA_RECORD_SOCKET", raising=False)
+    def create(*args):
+        pytest.fail("Recording disabled must not create a publisher")
+    publish = recording.command_publisher(types.SimpleNamespace(create_publisher=create), recording.RecordingGate())
+    publish([0.] * 58, 1)
 
 
 def test_bag_writer_is_not_opened_during_prepare_and_closes_cleanly(tmp_path, monkeypatch):

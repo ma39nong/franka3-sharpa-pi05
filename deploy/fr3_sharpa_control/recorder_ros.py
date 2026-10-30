@@ -139,7 +139,16 @@ def main():
                 video.write(np.zeros((64, 64, 3), np.uint8))
             finally:
                 video.release()
-        print("Recording/export dependencies OK; no ROS node or hardware started")
+        # Exercise the worker's optional recording publisher before hardware up.
+        # The sink is local; no ROS context, DDS publisher or SDK is constructed.
+        from types import SimpleNamespace
+        from .recording import RecordingGate, command_publisher
+        messages = []
+        sink = SimpleNamespace(create_publisher=lambda *args: SimpleNamespace(publish=messages.append))
+        command_publisher(sink, RecordingGate("dependency-check"))([0.0] * 58, 1_234_567_890)
+        if len(messages) != 1 or len(messages[0].name) != 58 or len(messages[0].position) != 58:
+            raise RuntimeError("实际下发目标录制消息必须为58D")
+        print("Recording/export dependencies and 58D target publisher OK; no ROS node or hardware started")
         return
     if args.directory is None or args.socket is None:
         parser.error("--directory and --socket required")
