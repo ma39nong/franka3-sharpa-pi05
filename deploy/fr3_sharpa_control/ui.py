@@ -15,20 +15,21 @@ from .plan import desktop, inspect_checkpoint, repository_info
 HTML = """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sharpa 部署控制台</title><style>
 *{box-sizing:border-box}body{margin:0;background:#eff3f6;color:#15293e;font:14px/1.55 system-ui,sans-serif}
-header{background:#132f40;color:white;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;gap:16px}
-.brand{display:flex;align-items:center;gap:18px}.brand-name{font-size:25px;font-weight:750;letter-spacing:2px;white-space:nowrap}.brand-product{border-left:1px solid #43606f;padding-left:18px}h1{font-size:19px;margin:0}header p{margin:2px 0 0;color:#bbd1da;font-size:12px}
+header{background:white;color:#123a56;border-bottom:1px solid #dae3e9;padding:6px 24px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.brand{flex:1;min-width:0}.brand-logo{display:block;width:260px;max-width:100%;height:72px;background:#123a56;-webkit-mask:url('/assets/liqing-logo.png') center/contain no-repeat;mask:url('/assets/liqing-logo.png') center/contain no-repeat}
+
 main{width:100%;padding:18px 20px 14px}.dashboard-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:16px;align-items:stretch}
 .card{min-width:0;background:white;border:1px solid #dae3e9;border-radius:10px;padding:18px}h2{font-size:17px;margin:0 0 14px}label{display:block;margin-top:11px;font-weight:600}input,select{width:100%;min-width:0;padding:9px;border:1px solid #b9c8d2;border-radius:6px;background:white;font:inherit;color:inherit}
 input[type=checkbox]{width:auto}.row{display:flex;gap:10px;align-items:end}.row>*{flex:1;min-width:0}.path{display:flex;gap:6px}.path input{min-width:0}.path button{flex:0 0 auto}
 button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#17394a;font:600 13px system-ui;cursor:pointer;white-space:nowrap}button.primary{background:#087b75;color:white}button.stop{background:#b63f37;color:white}button:disabled{opacity:.45;cursor:not-allowed}
-.muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#254c60;border-radius:20px;font-size:12px;white-space:nowrap}
+.muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
 .logs .card{padding:14px;display:flex;flex-direction:column}.logs h2{font-size:15px;margin-bottom:10px}.logs pre{height:clamp(180px,21vh,270px);max-height:none;background:#132b38;color:#d5e5ed;padding:12px;border-radius:6px;margin:0;overflow:auto}.logs .is-active{border-color:#7bb5b0;box-shadow:0 0 0 1px #7bb5b0}
 .camera-card{padding:14px}.camera-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.camera-heading h2{font-size:15px;margin:0}.camera-heading span{font-size:12px;color:#7c8e9c}.camera-placeholder{height:clamp(180px,21vh,270px);border:1px dashed #c4d0d9;border-radius:6px;background:#f7f9fb;display:flex;align-items:center;justify-content:center;color:#93a2af;font-size:13px}.page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
 dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:350px;overflow:auto}#entries button{display:block;background:white;text-align:left;width:100%;border-bottom:1px solid #e5edf1}details{margin:11px 0}summary{cursor:pointer;font-weight:600}.preview{min-height:60px}
-@media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}.camera-placeholder{height:240px}header{padding:14px 18px}main{padding:14px}.brand-name{font-size:21px}.brand{gap:12px}.brand-product{padding-left:12px}}
-@media(max-width:520px){.brand{align-items:start;flex-direction:column;gap:3px}.brand-product{border:0;padding:0}.brand-name{font-size:20px}h1{font-size:16px}.card{padding:14px}.row{flex-wrap:wrap}.row>*{flex-basis:42%}}
-</style><header><div class="brand"><div class="brand-name" aria-label="厘清智能文字标识">厘清智能</div><div class="brand-product"><h1>Sharpa 部署控制台</h1><p>权重身份 · 执行方式 · 录制归档</p></div></div><span id="phase" class="badge">空闲</span></header>
+@media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}.camera-placeholder{height:240px}header{padding:6px 18px}main{padding:14px}}
+@media(max-width:520px){.brand-logo{height:60px;width:220px}.card{padding:14px}.row{flex-wrap:wrap}.row>*{flex-basis:42%}}
+</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
 <main><section class="dashboard-row configuration" aria-label="部署配置与控制"><article class="card" id="weights-card"><h2>1 · 权重与代码</h2>
 <label>部署仓库目录</label><div class="path"><input id="repository"><button onclick="browse('repository')">选择目录</button></div>
 <div class="muted" id="repoInfo">Main 与 Soft 可各用一个部署目录；不会在运行中切换 Git 分支。</div>
@@ -104,7 +105,7 @@ def server_for(root, *, port=8766):
         def log_message(self, *_): pass
 
         def send(self, status, data, kind="application/json; charset=utf-8"):
-            body = data.encode() if isinstance(data, str) else json.dumps(data, ensure_ascii=False).encode()
+            body = data if isinstance(data, bytes) else data.encode() if isinstance(data, str) else json.dumps(data, ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
@@ -128,6 +129,8 @@ def server_for(root, *, port=8766):
                 parsed = urlparse(self.path)
                 if parsed.path == "/":
                     self.send(200, HTML, "text/html; charset=utf-8")
+                elif parsed.path == "/assets/liqing-logo.png":
+                    self.send(200, (Path(__file__).parent / "assets/liqing-logo.png").read_bytes(), "image/png")
                 elif parsed.path == "/api/info":
                     self.send(200, {"defaults": defaults, "token": token})
                 elif parsed.path == "/api/status":
