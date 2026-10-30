@@ -196,7 +196,14 @@ class FakeDeployment(control.DeploymentController):
     def _command(self, command, name, env, **kwargs): self.commands.append(name)
     def _prepare_model(self, env):
         self.commands.append("model_ready")
+        self.model = types.SimpleNamespace(returncode=None, poll=lambda: None)
         if self.abort_model: self.cancel.set()
+    def _probe(self, env, plan=None): return True
+    def _close_model(self): self.model = None; self.model_key = None; self.model_ready = False
+    def ready(self, values):
+        self.start_model(values)
+        self.thread.join(timeout=5)
+        assert self.state["phase"] == "model_ready"
     def _spawn(self, command, name, env):
         assert name == "runtime"  # Tests use recording=False.
         self.commands.append(name)
@@ -213,6 +220,7 @@ def test_each_restart_includes_up_and_new_initialization(repository, checkpoint,
     for filename in ("operator_poses.yaml", "hand_home.json"):
         (repository / ".deployment" / filename).write_text("mock Home contents for lifecycle test")
     controller = FakeDeployment(repository)
+    controller.ready(settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__)
     for initialization in ("home", "current"):
         values = settings(repository, checkpoint, output=str(tmp_path / "records"), initialization=initialization).__dict__
         controller.start(values)
@@ -226,10 +234,10 @@ def test_each_restart_includes_up_and_new_initialization(repository, checkpoint,
 def test_cancel_during_model_start_never_launches_motion(repository, checkpoint, tmp_path):
     controller = FakeDeployment(repository)
     controller.abort_model = True
-    controller.start(settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__)
+    controller.start_model(settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__)
     controller.thread.join(timeout=5)
-    assert "runtime" not in controller.commands and "hardware_cleanup" in controller.commands
-    assert controller.state["phase"] == "stopped"
+    assert "runtime" not in controller.commands and "hardware" not in controller.commands and "hardware_cleanup" not in controller.commands
+    assert controller.state["phase"] == "model_off"
 
 
 def test_early_runtime_exit_without_disable_report_retries_hardware_cleanup(repository, checkpoint, tmp_path):
@@ -237,6 +245,7 @@ def test_early_runtime_exit_without_disable_report_retries_hardware_cleanup(repo
         def _spawn(self, *args):
             return types.SimpleNamespace(returncode=130, poll=lambda: 130)
     controller = InterruptedBeforeWorker(repository)
+    controller.ready(settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__)
     controller.start(settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__)
     controller.thread.join(timeout=5)
     assert controller.state["phase"] == "failed"
@@ -299,7 +308,7 @@ def test_old_video_export_keeps_its_directory_while_next_run_starts(repository, 
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text('printf \'{"status":"COMPLETE"}\\n\' > "$2/video_export.json"\n')
     controller = FakeDeployment(repository)
-    controller.plan = settings(repository, checkpoint).plan()
+    controller.ready(settings(repository, checkpoint).__dict__)
     old = tmp_path / "previous recording"
     old.mkdir()
     controller._queue_export(old, dict(os.environ))
@@ -376,3 +385,113 @@ def test_real_video_encoder_produces_three_synchronized_panels(tmp_path, monkeyp
     assert np.argmax(frame[70, 80]) == 0  # Head/left/right are distinct panels, not mislabeled duplicates.
     assert np.argmax(frame[70, 240]) == 1
     assert np.argmax(frame[70, 400]) == 2
+
+
+def test_execution_requires_separately_started_matching_inference(repository, checkpoint, tmp_path):
+    controller = FakeDeployment(repository)
+    values = settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__
+    with pytest.raises(ValueError, match="先启动"):
+        controller.start(values)
+    assert not controller.commands and not (tmp_path / "records").exists()
+    controller.ready(values)
+    assert controller.commands == ["model_check", "model_ready"]
+    assert not (tmp_path / "records").exists()  # Model-only warmup consumes no recording run number.
+    with pytest.raises(ValueError, match="先启动"):
+        controller.start({**values, "mode": "rtc", "speed": "fast"})
+    controller.start(values)
+    controller.thread.join(timeout=5)
+    assert controller.model_ready
+    assert controller.commands.count("model_ready") == 1
+    controller.close_model()
+    assert not controller.model_ready
+    with pytest.raises(ValueError, match="先启动"):
+        controller.start(values)
+
+
+def test_inference_ignores_home_recording_and_playback_settings(repository, checkpoint, tmp_path):
+    controller = FakeDeployment(repository)
+    values = settings(repository, checkpoint, initialization="home", record=True, steps=99,
+        output=str(tmp_path / "records")).__dict__
+    controller.ready(values)
+    assert controller.model_ready and controller.commands == ["model_check", "model_ready"]
+    saved = json.loads((repository / ".deployment/control_last.json").read_text())
+    assert saved["initialization"] == "home" and saved["record"] and saved["steps"] == 99
+    assert not (tmp_path / "records").exists()
+
+
+def test_execution_failure_preserves_inference(repository, checkpoint, tmp_path):
+    class BrokenParameters(FakeDeployment):
+        def _command(self, command, name, env, **kwargs):
+            self.commands.append(name)
+            if name == "parameter_check": raise RuntimeError("bad execution config")
+    controller = BrokenParameters(repository)
+    values = settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__
+    controller.ready(values)
+    controller.start(values)
+    controller.thread.join(timeout=5)
+    assert controller.state["phase"] == "failed" and controller.model_ready
+    assert "hardware" not in controller.commands
+
+
+def test_three_terminal_logs_keep_live_model_and_last_execution(tmp_path):
+    controller = control.DeploymentController(tmp_path)
+    model, execution = tmp_path / "model", tmp_path / "run"
+    model.mkdir(); execution.mkdir()
+    controller.model_directory = model
+    controller.execution_directory = execution
+    controller.directory = execution
+    for name, text in {"model.log": "model stays alive", "model_check.log": "model contract"}.items():
+        (model / name).write_text(text)
+    for name, text in {"hardware.log": "up", "hardware_cleanup.log": "down", "parameter_check.log": "checked",
+                       "runtime.log": "joint playback", "recorder.log": "bag", "video_export.log": "video"}.items():
+        (execution / name).write_text(text)
+    (execution / "unrelated.log").write_text("hidden implementation detail")
+    logs = controller.snapshot()["logs"]
+    assert set(logs) == {"hardware", "inference", "execution"}
+    assert "model stays alive" in logs["inference"]
+    assert "up" in logs["hardware"] and "down" in logs["hardware"]
+    assert all(text in logs["execution"] for text in ("checked", "joint playback", "bag", "video"))
+    controller.directory = model
+    assert controller.snapshot()["logs"] == logs
+
+
+def test_stopping_inference_during_execution_is_rejected(tmp_path):
+    controller = control.DeploymentController(tmp_path)
+    controller.operation = "execute"
+    controller.state["running"] = True
+    with pytest.raises(ValueError, match="先停止执行"):
+        controller.close_model()
+    assert not controller.cancel.is_set()
+
+
+def test_stop_inference_during_warmup_never_touches_hardware(repository, checkpoint, tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    class Loading(FakeDeployment):
+        def _prepare_model(self, env):
+            super()._prepare_model(env)
+            entered.set()
+            assert release.wait(timeout=5)
+    controller = Loading(repository)
+    sent = []
+    monkeypatch.setattr(control, "interrupt", lambda process: sent.append(process))
+    controller.start_model(settings(repository, checkpoint).__dict__)
+    assert entered.wait(timeout=5)
+    assert controller.snapshot()["model_loading"]
+    controller.close_model()
+    release.set()
+    controller.thread.join(timeout=5)
+    assert controller.state["phase"] == "model_off" and not controller.model_ready
+    assert len(sent) == 1
+    assert "hardware" not in controller.commands and "runtime" not in controller.commands
+
+
+def test_model_port_probe_does_not_generate_invalid_http_handshakes():
+    import socket
+    import select
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        assert control.port_listening(port)
+        assert select.select([listener], [], [], 0)[0] == []
+    assert not control.port_listening(port)

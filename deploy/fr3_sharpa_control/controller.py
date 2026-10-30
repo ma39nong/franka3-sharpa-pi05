@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import socket
 import subprocess
 import tempfile
 import threading
@@ -23,6 +22,22 @@ def interrupt(process):
     if process is not None and process.poll() is None:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGINT)
+
+
+def port_listening(port):
+    """Linux listen-table probe, without bogus HTTP handshakes in model logs."""
+    for name in ("tcp", "tcp6"):
+        path = Path("/proc/net") / name
+        if not path.exists():
+            continue
+        for row in path.read_text().splitlines()[1:]:
+            fields = row.split()
+            address, encoded_port = fields[1].split(":")
+            if fields[3] == "0A" and int(encoded_port, 16) == port and address in (
+                "0100007F", "00000000", "00000000000000000000000000000000"
+            ):
+                return True
+    return False
 
 
 def probe(mode, port):
@@ -47,6 +62,10 @@ class DeploymentController:
         self.thread = None
         self.runtime = self.model = self.recorder = None
         self.model_key = None
+        self.model_ready = False
+        self.model_directory = None
+        self.execution_directory = None
+        self.operation = None
         self.plan = None
         self.directory = None
         self.socket = None
@@ -65,14 +84,34 @@ class DeploymentController:
         with self.lock:
             state = dict(self.state)
             directory = self.directory
-            state["model_running"] = self.model is not None and self.model.poll() is None
+            model_directory = self.model_directory
+            execution_directory = self.execution_directory
+            alive = self.model is not None and self.model.poll() is None
+            state["model_running"] = alive or (self.model_ready and self.model is None)
+            state["model_ready"] = self.model_ready and (alive or self.model is None)
+            state["model_key"] = self.model_key
+            state["model_owned"] = alive
+            state["operation"] = self.operation
+            state["execution_running"] = bool(state.get("running") and self.operation == "execute")
+            state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
+        # Keep detailed files on disk; UI always has the same three terminal panes.
+        groups = {
+            "hardware": [(execution_directory, "hardware.log"), (execution_directory, "hardware_cleanup.log")],
+            "inference": [(model_directory, "model_check.log"), (model_directory, "model.log")],
+            "execution": [(execution_directory, name) for name in ("parameter_check.log", "recording_check.log", "recorder.log", "runtime.log", "video_export.log")],
+        }
         logs = {}
-        if directory:
-            for path in sorted(directory.glob("*.log")):
-                with path.open("rb") as stream:
-                    stream.seek(max(0, path.stat().st_size - 18000))
-                    logs[path.name] = stream.read().decode(errors="replace")
+        for group, files in groups.items():
+            parts = []
+            for folder, name in files:
+                if folder:
+                    path = folder / name
+                    with suppress(OSError):
+                        with path.open("rb") as stream:
+                            stream.seek(max(0, path.stat().st_size - 18000))
+                            parts.append(f"[{name}]\n" + stream.read().decode(errors="replace"))
+            logs[group] = "\n".join(parts)[-18000:]
         state["logs"] = logs
         state["exports"] = []
         for path in list(self.exports)[-12:]:
@@ -87,7 +126,30 @@ class DeploymentController:
     def preview(self, values):
         return DeploymentSettings(**values).plan(cache=self.cache, machine_root=self.root)
 
-    def start(self, values, *, expected_approval=None):
+    @staticmethod
+    def _model_identity(plan):
+        return (plan["settings"]["repository"], plan["commit"], plan["model"]["identity"],
+                plan["model"]["profile"], plan["port"], plan["settings"]["mode"])
+
+    def start_model(self, values):
+        # Home, playback speed/steps and recording are execution settings. Model
+        # warmup must work even when no robot or Home files are available.
+        original_values = dict(values)
+        mode = values.get("mode", "serial")
+        values = {**values, "initialization": "current", "record": False, "rounds": 0,
+                  "speed": "fast" if mode == "rtc" else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+        return self.start(values, operation="model", persisted_values=original_values)
+
+    def _require_model(self, plan, env):
+        if not self.model_ready or self.model_key != self._model_identity(plan):
+            raise ValueError("请先启动与当前仓库、权重及模式一致的推理端，再启动执行")
+        if (self.model is not None and self.model.poll() is not None) or not self._probe(env, plan):
+            self.model_ready = False
+            raise RuntimeError("推理端已退出或身份握手失败，请重新启动推理端")
+
+    def start(self, values, *, expected_approval=None, operation="execute", persisted_values=None):
+        if operation not in ("model", "execute"):
+            raise ValueError("Unknown deployment operation")
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError("当前部署尚未停止和清理完毕")
@@ -96,16 +158,25 @@ class DeploymentController:
             plan = self.preview(values)
             if expected_approval is not None and expected_approval != plan["approval"]:
                 raise ValueError("核对后权重、代码或配置发生变化，请重新核对最终配置")
+            if operation == "execute":
+                self._require_model(plan, plan_environment(plan))
             self.cancel.clear()
+            self.operation = operation
             self.plan = json.loads(json.dumps(plan))
-            self.directory = allocate_run(plan["settings"]["output"])
+            self.directory = allocate_run(self.root / ".deployment/control_model_sessions" if operation == "model" else plan["settings"]["output"])
+            if operation == "execute":
+                self.execution_directory = self.directory
+            if operation == "model":
+                # Reusing the same model must retain its original live log path.
+                if self.model_key != self._model_identity(plan) or self.model is None or self.model.poll() is not None:
+                    self.model_directory = self.directory
             self.socket = Path(tempfile.mkdtemp(prefix="sharpa-record-")) / "control.sock"
             self.runtime = self.recorder = None
             self.state = {"phase": "validating", "message": "正在检查模型契约和参数", "running": True,
                           "plan": self.plan, "stop_requested": False}
             try:
                 write_json(self.directory / "run.json", self.plan)
-                write_json(self.root / ".deployment/control_last.json", values)
+                write_json(self.root / ".deployment/control_last.json", persisted_values if persisted_values is not None else values)
                 # Save only evidence bound to both manifest and statistics, never path alone.
                 self.cache.mkdir(parents=True, exist_ok=True)
                 write_json(self.cache / f"{plan['model']['identity']}.json", {"semantics": plan["model"]["semantics"]})
@@ -113,12 +184,13 @@ class DeploymentController:
                 self.state.update(phase="failed", running=False, message="配置或归档目录无法写入；未启动设备")
                 self.socket.parent.rmdir()
                 raise
-            self.thread = threading.Thread(target=self._run, daemon=True, name="sharpa-deployment")
+            self.thread = threading.Thread(target=self._run_model if operation == "model" else self._run, daemon=True, name="sharpa-deployment")
             self.thread.start()
             return self.snapshot()
 
     def _spawn(self, command, name, env):
-        output = (self.directory / f"{name}.log").open("ab", buffering=0)
+        folder = self.model_directory if name in ("model", "model_check") else self.directory
+        output = (folder / f"{name}.log").open("ab", buffering=0)
         try:
             process = subprocess.Popen(command, cwd=self.plan["settings"]["repository"], env=env,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
@@ -149,11 +221,12 @@ class DeploymentController:
         if self.cancel.is_set():
             raise Cancelled()
 
-    def _probe(self, env):
-        root, profile, mode = self.plan["settings"]["repository"], self.plan["model"]["profile"], self.plan["settings"]["mode"]
+    def _probe(self, env, plan=None):
+        plan = plan or self.plan
+        root, profile, mode = plan["settings"]["repository"], plan["model"]["profile"], plan["settings"]["mode"]
         command = ["bash", "-c", 'source "$1/deploy/fr3_sharpa_runtime/model_env.sh" --model "$2"; '
                    'sharpa_python -m deploy.fr3_sharpa_control.controller probe "$3" "$4"',
-                   "--", root, profile, mode, str(self.plan["port"])]
+                   "--", root, profile, mode, str(plan["port"])]
         try:
             result = subprocess.run(command, env=env, cwd=root, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, timeout=5)
@@ -203,29 +276,29 @@ class DeploymentController:
             thread.join()
 
     def _prepare_model(self, env):
-        key = (self.plan["settings"]["repository"], self.plan["commit"], self.plan["model"]["identity"],
-               self.plan["model"]["profile"], self.plan["port"], self.plan["settings"]["mode"])
+        key = self._model_identity(self.plan)
         if self.model and self.model.poll() is None and key != self.model_key:
             self._close_model()
         self._cancelled()
-        with socket.socket() as client:
-            client.settimeout(0.3)
-            occupied = client.connect_ex(("127.0.0.1", self.plan["port"])) == 0
+        occupied = port_listening(self.plan["port"])
         if occupied:
             if not self._probe(env):
                 raise RuntimeError("服务端口已有不匹配的模型/模式；不会关闭不属于本UI的服务")
+            if self.model is not None and self.model.poll() is not None:
+                self.model = None
+            self.model_key = key
             return
         if self.model is None or self.model.poll() is not None:
-            self.model = self._spawn(self.plan["service"], "model", env)
-            self.model_key = key
+            with self.lock:
+                self._cancelled()
+                self.model = self._spawn(self.plan["service"], "model", env)
+                self.model_key = key
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             self._cancelled()
             if self.model.poll() is not None:
                 raise RuntimeError("模型服务退出，请查看model.log")
-            with socket.socket() as client:
-                client.settimeout(0.1)
-                listening = client.connect_ex(("127.0.0.1", self.plan["port"])) == 0
+            listening = port_listening(self.plan["port"])
             if listening and self._probe(env):
                 return
             time.sleep(0.3)
@@ -241,6 +314,8 @@ class DeploymentController:
         with self.lock:
             if not self.state.get("running") or self.cancel.is_set():
                 return self.snapshot()
+            if self.operation == "model":
+                raise ValueError("推理端正在加载，请使用停止推理")
             self.cancel.set()
             if self.socket:
                 with suppress(OSError):
@@ -260,12 +335,53 @@ class DeploymentController:
                 self.model.wait()
         self.model = None
         self.model_key = None
+        self.model_ready = False
 
     def close_model(self):
         with self.lock:
             if self.state.get("running"):
-                raise ValueError("先停止执行并等待清理完成，再关闭模型")
+                if self.operation == "model":
+                    if self.cancel.is_set():
+                        return self.snapshot()
+                    self.cancel.set()
+                    self.model_ready = False
+                    interrupt(self.model)
+                    self.update("model_stopping", "正在停止推理加载", stop_requested=True)
+                    return self.snapshot()
+                raise ValueError("先停止执行并等待清理完成，再停止推理")
+            if self.model is None and self.model_ready:
+                raise ValueError("推理端由外部终端启动，请在原终端停止；本UI不拥有该进程")
             self._close_model()
+            self.update("model_off", "推理端已停止；再次执行前请先启动推理")
+            return self.snapshot()
+
+    def _run_model(self):
+        env, failure = plan_environment(self.plan), None
+        try:
+            self._command(self.plan["service"] + ["--check-only"], "model_check", env)
+            self.update("model_loading", "正在加载和预热推理端；不会启动硬件或执行")
+            self._prepare_model(env)
+            self._cancelled()
+            if self.preview(self.plan["settings"])["approval"] != self.plan["approval"]:
+                raise RuntimeError("预热期间代码或权重发生变化，请重新启动推理")
+            with self.lock:
+                self._cancelled()
+                self.model_key = self._model_identity(self.plan)
+                self.model_ready = True
+        except Cancelled:
+            self._close_model()
+        except Exception as error:
+            failure = str(error)
+            self._close_model()
+        finally:
+            if self.cancel.is_set():
+                self._close_model()
+            if self.socket:
+                self.socket.unlink(missing_ok=True)
+                with suppress(OSError):
+                    self.socket.parent.rmdir()
+            self.update("failed" if failure else "model_off" if self.cancel.is_set() else "model_ready",
+                        failure or ("推理端已停止" if self.cancel.is_set() else "推理端已就绪；核对执行配置后可启动执行"), running=False)
 
     def _run(self):
         env = plan_environment(self.plan)
@@ -276,15 +392,14 @@ class DeploymentController:
         if self.plan["settings"]["record"]:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
         try:
-            self._command(self.plan["service"] + ["--check-only"], "model_check", env)
+            self._require_model(self.plan, env)
             self._command(self.plan["check"], "parameter_check", env)
             if self.plan["settings"]["record"]:
                 self._command(["bash", "deploy/fr3_sharpa_control/record_session.sh", "check"], "recording_check", env)
             self.update("hardware_up", "正在确保硬件服务已启动（每次重新执行都包含up）")
             hardware_up = True  # Includes partially successful compose up.
             self._command(self.plan["hardware"], "hardware", env)
-            self.update("model_loading", "正在加载模型并核对预热后的服务身份")
-            self._prepare_model(env)
+            self._require_model(self.plan, env)
             if self.plan["settings"]["record"]:
                 self.update("recording_ready", "正在准备录制订阅；Home/prepare期间不写包")
                 self.recorder = self._spawn(["bash", "deploy/fr3_sharpa_control/record_session.sh",
@@ -327,11 +442,9 @@ class DeploymentController:
                 raise RuntimeError("未取得完整的双手失能PASS报告，不能将进程结束当作失能成功")
             cleanup_verified = True
         except Cancelled:
-            self._close_model() if not runtime_started else None
+            pass
         except Exception as error:
             failure = str(error)
-            if not runtime_started:
-                self._close_model()
             if self.runtime and self.runtime.poll() is None:
                 self.stop()
                 self.runtime.wait()  # Existing finite disable-confirmation owner controls its timeout.
