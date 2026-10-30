@@ -1,5 +1,8 @@
 # 文档索引
 
+统一部署界面和第一段chunk自动录制：[部署控制台](../deploy/fr3_sharpa_control/README.md) · [三终端指令](../部署启动指令.md)。
+
+
 当前 Sharpa 实机部署以[根 README](../README.md)和 [runtime 部署说明](../deploy/fr3_sharpa_runtime/README.md)为准。
 
 | 文档 | 用途 |
