@@ -154,6 +154,38 @@ def test_disabled_gate_preserves_existing_single_play_call(monkeypatch):
     assert calls == [[0, 1, 2]]
 
 
+def test_recorded_target_publisher_uses_canonical_runtime_protocol(monkeypatch):
+    from deploy.fr3_sharpa_runtime.protocol import SHARPA_JOINT_NAMES
+    messages, publishers = [], []
+    class JointState:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=types.SimpleNamespace(sec=0, nanosec=0))
+    monkeypatch.setitem(sys.modules, "sensor_msgs", types.ModuleType("sensor_msgs"))
+    monkeypatch.setitem(sys.modules, "sensor_msgs.msg", types.SimpleNamespace(JointState=JointState))
+    def create(kind, topic, depth):
+        publishers.append((kind, topic, depth))
+        return types.SimpleNamespace(publish=messages.append)
+    node = types.SimpleNamespace(create_publisher=create)
+    values = np.arange(58, dtype=float) / 100
+    recording.command_publisher(node, recording.RecordingGate("unused-socket"))(values, 1_234_567_890)
+    assert publishers == [(JointState, "/openpi/executed_joint_targets", 30)]
+    assert len(messages) == 1
+    message = messages[0]
+    expected = ([f"left_fr3_joint{i}" for i in range(1, 8)] + [f"left_{n}" for n in SHARPA_JOINT_NAMES]
+                + [f"right_fr3_joint{i}" for i in range(1, 8)] + [f"right_{n}" for n in SHARPA_JOINT_NAMES])
+    assert message.name == expected and len(message.name) == 58
+    assert message.position == list(values)
+    assert (message.header.stamp.sec, message.header.stamp.nanosec) == (1, 234_567_890)
+
+
+def test_disabled_recording_does_not_construct_target_publisher(monkeypatch):
+    monkeypatch.delenv("SHARPA_RECORD_SOCKET", raising=False)
+    def create(*args):
+        pytest.fail("Recording disabled must not create a publisher")
+    publish = recording.command_publisher(types.SimpleNamespace(create_publisher=create), recording.RecordingGate())
+    publish([0.] * 58, 1)
+
+
 def test_bag_writer_is_not_opened_during_prepare_and_closes_cleanly(tmp_path, monkeypatch):
     writers = []
     class Writer:

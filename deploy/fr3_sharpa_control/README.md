@@ -11,7 +11,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
 1. 选择本机部署仓库目录和直接含 params/、assets/ 的 checkpoint 步骤目录。
-2. 点击识别权重，选择执行模式、Current/Home、速度、步数、轮数和录制开关。
+2. 在主界面按实际训练配置手动选择模型动作类型：Absolute，或双臂 Delta／双手 Absolute，再点击识别权重。全量／LoRA 参数结构仍自动核对；可选训练 JSON 用于交叉验证，Paper 资产检查仍必须通过。然后选择执行模式、Current/Home、速度、步数、轮数和录制开关。
 3. 点击核对最终配置。修改配置后，或核对后权重/代码身份变化，需要重新核对。
 4. 点击启动部署。UI自动检查参数和模型契约、执行硬件 up、启动或复用匹配的已预热服务，然后启动执行端。
 5. 点击停止执行，等失能确认与硬件清理结束。再次选择Current/Home并启动时，自动重新包含up。关闭模型服务是独立按钮；更换模式/权重时会重启UI自己拥有的模型服务，不会终止身份不匹配的外部模型进程。
@@ -29,7 +29,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 这不是通用权重加载器：LoRA Delta、其他动作顺序/维度/频率、未知模型变体、其他论文资产版本尚未接入。模式列表同时受所选仓库和模型限制；旧分支没有Paper适配时会阻止启动。现场硬件验证与离线模型验证分开记录。
 
-Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。本次7999为timestamp_zscore_arms、beta0.5。
+Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。Paper T3 的对应7999应为timestamp_zscore_arms、beta0.5；7999只是训练步数，不代表所有同名步骤目录都是该实验。普通Delta目录不应显示Paper算法。
 
 Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；RTC使用完整50步参考。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
 
