@@ -13,13 +13,15 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
 
 
 def repository_info(path):
     repo = Path(path).expanduser().resolve()
     branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True, stderr=subprocess.DEVNULL).strip()
     modes = ["serial", "rtc"]
+    if (repo / "deploy/fr3_sharpa_runtime/paper_rtc.py").is_file():
+        modes.append("paper-rtc")
     if (repo / "deploy/fr3_sharpa_full/serve_soft.sh").is_file():
         modes.append("soft-serial")
     stream = repo / "deploy/fr3_sharpa_runtime/async_soft_stream.py"
@@ -126,7 +128,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             detected, source = semantics, "操作员按训练配置手动确认"
     if detected and lora and detected == "delta":
         raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
-    return {"supported_modes": ["serial", "rtc", "soft-serial", "soft-async"] if not lora else ["serial"],
+    return {"supported_modes": ["serial", "paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"] if not lora else ["serial"],
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
@@ -158,7 +160,7 @@ class DeploymentSettings:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
         if self.mode == "serial" and not 1 <= self.steps <= 50:
             raise ValueError("串行每轮执行动作数必须在1..50")
-        if self.mode == "rtc" and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
+        if self.mode in ("rtc", "paper-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
         if self.mode.startswith("soft-") and self.steps != 26:
             raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
@@ -166,7 +168,7 @@ class DeploymentSettings:
         if not model["profile"]:
             raise ValueError(model["evidence"])
         if self.mode not in model["supported_modes"]:
-            raise ValueError("该模型不支持所选推理模式；LoRA当前仅支持普通串行")
+            raise ValueError("该模型不支持所选推理模式；Paper请选择Paper RTC，LoRA仅支持普通串行")
         if self.mode.startswith("soft-") and model["finetune_mode"] != "full":
             raise ValueError("Soft目前仅支持全量absolute/delta")
         if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
@@ -177,9 +179,13 @@ class DeploymentSettings:
         service_args, runtime_args = [], []
         port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
         description = f"预测50，执行前{self.steps}，再观测推理"
-        if self.mode == "rtc":
-            service_args = ["--enable-rtc"]
+        if self.mode in ("rtc", "paper-rtc"):
+            service_args = ["--enable-paper-rtc" if self.mode == "paper-rtc" else "--enable-rtc"]
             runtime_args = ["--broker-mode", "rtc"]
+            if self.mode == "paper-rtc":
+                if not (repo / shared / "paper_rtc.py").is_file():
+                    raise ValueError("所选仓库尚未同步Paper RTC适配类")
+                runtime_args.append("--paper-rtc")
             description = f"50点时间线，{self.steps}源节点触发后台重规划（非固定执行前缀）"
         elif self.mode == "soft-serial":
             service = full + "serve_soft.sh"

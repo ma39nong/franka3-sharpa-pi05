@@ -24,6 +24,7 @@ def create_trained_policy(
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
     rtc_action_repack: Callable[[Any], Any] | None = None,
+    policy_class: type[_policy.Policy] = _policy.Policy,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -42,6 +43,8 @@ def create_trained_policy(
         rtc_action_repack: Optional conversion from deployed absolute-action order
             to the raw action order expected by the input transforms. Required
             before this policy can accept an RTC request.
+
+        policy_class: Policy implementation; defaults to the standard inference policy.
 
     Note:
         The function automatically detects whether the model is PyTorch-based by checking for the
@@ -77,7 +80,7 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
-    return _policy.Policy(
+    return policy_class(
         model,
         transforms=[
             *repack_transforms.inputs,

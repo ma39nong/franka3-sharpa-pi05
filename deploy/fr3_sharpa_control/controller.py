@@ -42,8 +42,11 @@ def port_listening(port):
 
 def probe(mode, port):
     from deploy.fr3_sharpa_runtime.runtime import SharpaRuntime
-    metadata = SharpaRuntime(f"ws://127.0.0.1:{port}").inspect_metadata(require_rtc=mode == "rtc")
-    if mode == "soft-async":
+    metadata = SharpaRuntime(f"ws://127.0.0.1:{port}").inspect_metadata(require_rtc=mode in ("rtc", "paper-rtc"))
+    if mode == "paper-rtc":
+        from deploy.fr3_sharpa_runtime.rtc_stream import require_paper_capabilities
+        require_paper_capabilities(metadata)
+    elif mode == "soft-async":
         from deploy.fr3_sharpa_runtime.async_soft_stream import require_capabilities
         require_capabilities(metadata)
     elif mode == "soft-serial":
@@ -137,7 +140,7 @@ class DeploymentController:
         original_values = dict(values)
         mode = values.get("mode", "serial")
         values = {**values, "initialization": "current", "record": False, "rounds": 0,
-                  "speed": "fast" if mode == "rtc" else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+                  "speed": "fast" if mode in ("rtc", "paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
         return self.start(values, operation="model", persisted_values=original_values)
 
     def _require_model(self, plan, env):

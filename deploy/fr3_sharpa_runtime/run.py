@@ -25,6 +25,27 @@ _observation_worker = None
 _observation_overlay = None
 
 
+def log_expired_inference(observation, timing, *, attempt, age_ns, directory):
+    """Persist rejected results' timing without recording RGB arrays or sending targets."""
+    payload = {"event": "observation_expired", "attempt": attempt,
+               "recorded_unix_ns": time.time_ns(), "age_ms": age_ns / 1e6, "limit_ms": 200,
+               "observation": observation.get("_timing", {}),
+               "alignment": observation.get("_alignment", {}), "policy_client": timing}
+    captured = observation["_captured_monotonic_ns"]
+    entered = timing.get("infer_chunk_entered_monotonic_ns")
+    if entered is not None:
+        payload["age_at_inference_start_ms"] = (entered - captured) / 1e6
+    line = json.dumps(payload, ensure_ascii=False, default=str)
+    print("[observation-expired] " + line, file=sys.stderr, flush=True)
+    try:
+        path = Path(directory) / "inference_timing.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+    except OSError as error:
+        print(f"Could not persist inference timing: {error}", file=sys.stderr, flush=True)
+
+
 def load_sample(path: Path, prompt: str, frame: int = 0) -> dict:
     """Offline LeRobot sample for dry-run and ros-test only."""
     from .dataset_sample import load_sample as read_sample
@@ -147,7 +168,8 @@ def execute_policy_prepare(args):
         from .home_pose import load_home
         home_arms, home_metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
     if getattr(args, "broker_mode", "serial") == "rtc":
-        SharpaRuntime(args.policy_url).inspect_metadata(require_rtc=True)
+        runtime_options = {"paper_rtc": True} if getattr(args, "paper_rtc", False) else {}
+        SharpaRuntime(args.policy_url, **runtime_options).inspect_metadata(require_rtc=True)
     inner = (f"source {shlex.quote(str(setup))}; "
              f"export SHARPA_SHUTDOWN_REPORT_DIR={shlex.quote(str(args.execution_trace_dir.expanduser().resolve()))}; "
              f"export PYTHONPATH={shlex.quote(repo)}:{shlex.quote(str(GELLO_REPO))}:{shlex.quote(str(core))}:\"${{PYTHONPATH:-}}\"; "
@@ -167,7 +189,7 @@ def execute_policy_prepare(args):
             if ready.get("operation") != "ready":
                 raise RuntimeError(f"sdk_direct worker did not become ready: {ready}")
         _start_observation_worker(args.ros_overlay)
-        runtime = SharpaRuntime(args.policy_url)
+        runtime = SharpaRuntime(args.policy_url, **({"paper_rtc": True} if getattr(args, "paper_rtc", False) else {}))
         def infer(observation):
             # Policy cold start can make the first read-only inference stale.  Drop
             # that result, reacquire all sensors, and retry once.  The 200 ms gate
@@ -183,10 +205,13 @@ def execute_policy_prepare(args):
                         observation.clear()
                         observation.update(current)
                     return result
+                log_expired_inference(current, getattr(runtime, "last_timing", {}),
+                    attempt=attempt + 1, age_ns=age, directory=args.execution_trace_dir)
                 if attempt == 0:
-                    print("POLICY WARMUP: discarded stale inference; reacquiring observation", file=sys.stderr)
+                    print("POLICY RETRY: discarded stale inference; reacquiring observation", file=sys.stderr)
                     current = live_observation(args.ros_overlay, args.prompt)
-            raise RuntimeError("Observation expired during inference; no new target/chunk will be sent")
+            raise RuntimeError("Observation expired during inference; no new target/chunk will be sent "
+                               f"(age={age / 1e6:.1f} ms, limit=200 ms; see inference_timing.jsonl)")
         initial = live_observation(args.ros_overlay, args.prompt)
         # Only legacy policy prepare consumes an inference before the chunk loop.
         # Current mode uses this fresh observation for its first executable prediction.
@@ -382,6 +407,7 @@ def main() -> None:
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
     parser.add_argument("--broker-mode", choices=("serial", "rtc"), default="serial",
                         help="serial keeps existing behavior; rtc overlaps inference and accepted motion")
+    parser.add_argument("--paper-rtc", action="store_true", help="Require a warmed Paper RTC short-reference adapter")
     parser.add_argument("--rtc-initial-delay-steps", type=int, default=5)
     parser.add_argument("--rtc-delay-buffer-size", type=int, default=10)
     parser.add_argument("--rtc-prefix-attention-schedule", choices=("ones", "zeros", "linear", "exp"), default="exp")
@@ -424,6 +450,8 @@ def main() -> None:
         parser.error("--execute-steps must be in [1, 50]")
     if args.sharpa_backend == "litchibot" and args.execute_steps != 50:
         parser.error("legacy litchibot requires --execute-steps 50; prefix execution uses sdk_direct")
+    if args.paper_rtc and args.broker_mode != "rtc":
+        parser.error("--paper-rtc requires --broker-mode rtc")
     if args.broker_mode == "rtc":
         from .rtc_stream import RTCSettings
         try:
@@ -455,6 +483,7 @@ def main() -> None:
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
         print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
+                          "paper_rtc": args.paper_rtc,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
                           "prepare_speed_rad_s": args.prepare_speed_rad_s,
@@ -477,6 +506,11 @@ def main() -> None:
         if args.mode != "dry-run":
             parser.error("Use a mode flag or --mode, not both")
         args.mode = "execute" if args.execute else "prepare" if args.prepare else "handoff-verify" if args.handoff_verify else "preflight-only"
+    if args.broker_mode == "rtc":
+        from .model_loader import checkpoint_contract
+        is_paper = bool(checkpoint_contract()["paper_algorithm"])
+        if args.paper_rtc != is_paper:
+            parser.error("Paper checkpoints require --paper-rtc; ordinary checkpoints use RTC without it")
     if args.broker_mode == "rtc" and args.mode != "execute":
         parser.error("--broker-mode rtc is for execute or offline --check only")
     if args.mode == "execute":

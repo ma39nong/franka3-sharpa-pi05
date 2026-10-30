@@ -42,11 +42,16 @@ def validate_observation(observation: dict) -> dict:
 class SharpaRuntime:
     """Request one 50-step prediction and prepare one independent session."""
 
-    def __init__(self, policy_url: str = config.POLICY_URL):
+    def __init__(self, policy_url: str = config.POLICY_URL, *, paper_rtc=False):
         if not policy_url.startswith("ws://127.0.0.1:") and not policy_url.startswith("ws://localhost:"):
             raise ValueError("First runtime only accepts a loopback policy server")
+        self.paper_rtc = paper_rtc
         self.policy_url = policy_url
         self.adapter = SharpaActionAdapter()
+        if (config.CHECKPOINT is not None and config.NORM_STATS is not None
+                and (config.CHECKPOINT / "params/_METADATA").is_file()):
+            # Heavy Paper bundle validation must precede observation capture.
+            config.prepare_policy_validation()
 
     def inspect_metadata(self, *, require_rtc=False):
         from openpi_client import msgpack_numpy
@@ -54,6 +59,9 @@ class SharpaRuntime:
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=1) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         config.validate_policy_metadata(metadata)
+        if self.paper_rtc:
+            from .rtc_stream import require_paper_capabilities
+            require_paper_capabilities(metadata)
         if require_rtc:
             from .rtc_stream import require_capabilities
             require_capabilities(metadata)
@@ -68,6 +76,7 @@ class SharpaRuntime:
 
         timing = {"infer_chunk_entered_monotonic_ns": entered_ns,
                   "client_imports_ready_monotonic_ns": time.monotonic_ns()}
+        self.last_timing = timing
         start = time.monotonic_ns()
         clean = validate_observation(observation)
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
@@ -75,7 +84,12 @@ class SharpaRuntime:
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=5) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
+            validation_start = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
+            if self.paper_rtc:
+                from .rtc_stream import require_paper_capabilities
+                require_paper_capabilities(metadata)
+            timing["metadata_validation_ms"] = (time.monotonic_ns() - validation_start) / 1e6
             start = time.monotonic_ns()
             if rtc_context is not None:
                 from openpi_client import rtc

@@ -7,7 +7,7 @@
 
 本机 cam1 源时钟异常的对照测试和诊断限制见 [相机时钟说明](CAMERA_CLOCK.md)。目前未启用自动修改相机时钟的启动逻辑。
 
-RTC 原速部署明确使用 `--broker-mode rtc --speed fast`（1.0 倍模型时间轴），服务端需先加 `--enable-rtc` 完成 guided 预热。下方未指定 broker 的 slow／medium／fast 示例均为串行模式。完整 RTC 命令见 [RTC 启动说明](../fr3_sharpa_full/RTC.md)。
+RTC 原速部署明确使用 `--broker-mode rtc --speed fast`（1.0 倍模型时间轴），服务端需先加 `--enable-rtc` 完成 guided 预热。下方未指定 broker 的 slow／medium／fast 示例均为串行模式。Paper 权重选择独立 **Paper RTC**：服务端 `--enable-paper-rtc`，执行端 `--broker-mode rtc --paper-rtc`，其他速度和触发参数相同，详见[控制台 Paper RTC 说明](../fr3_sharpa_control/README.md#paper-rtc-启动)。完整普通 RTC 命令见 [RTC 启动说明](../fr3_sharpa_full/RTC.md)。
 
 当前模型：π0.5 全量微调、30 Hz、原生 58D、50 帧、全部为绝对关节目标，单位 rad。执行路径是 policy server → runtime → FR3 Safety Gateway / Sharpa SDK direct。LoRA/full 参数差异由模型加载层处理，速度档位共用同一个执行器。
 

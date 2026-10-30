@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import threading
 
 from .protocol import ACTION_DIM, ACTION_HORIZON, FPS
 from .model_profiles import get_model_profile
@@ -66,6 +67,62 @@ def validate_training_contract(training):
         raise ValueError("Training action shape does not match the 50x58 deployment contract")
 
 
+_validation_lock = threading.Lock()
+_validation_cache = None
+
+
+def _asset_signature(paths):
+    signature = []
+    for path in paths:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            signature.append(None)
+        else:
+            signature.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    return tuple(signature)
+
+
+def prepare_policy_validation():
+    """Fully verify once, then invalidate on replacement/change of any contract asset.
+
+    Run before acquiring the first observation. Each handshake still checks local
+    file identities and compares the verified hashes/algorithm against the server.
+    Checkpoint assets must remain immutable for the duration of execution.
+    """
+    global _validation_cache
+    checkpoint = require_checkpoint()
+    paths = (checkpoint / "params/manifest.ocdbt", checkpoint / "params/_METADATA", NORM_STATS,
+             NORM_STATS.parent / "delta_paper.json", NORM_STATS.parent / "delta_paper.npz",
+             NORM_STATS.parent / "norm_metadata.json")
+    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME)
+    with _validation_lock:
+        signature = _asset_signature(paths)
+        if _validation_cache is not None:
+            previous_context, previous_signature, verified = _validation_cache
+            if context == previous_context and signature == previous_signature:
+                return verified
+            if context == previous_context and previous_signature[1] is not None and signature[1] is None:
+                raise ValueError("Checkpoint metadata removed after validation; execution blocked")
+        # Never cache failed/incomplete validation, or assets modified during it.
+        if signature[1] is not None:
+            from .model_loader import checkpoint_contract
+            contract = checkpoint_contract()
+            verified = {key: contract[key] for key in (
+                "checkpoint_manifest_sha256", "normalization_sha256", "paper_algorithm")}
+        else:
+            # Keep metadata-free protocol fixtures/legacy checks compatible.
+            import hashlib
+            verified = {"paper_algorithm": None}
+            for path, key in ((paths[0], "checkpoint_manifest_sha256"), (NORM_STATS, "normalization_sha256")):
+                if path.is_file():
+                    verified[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if signature != _asset_signature(paths):
+            raise ValueError("Checkpoint assets changed during validation; execution blocked")
+        _validation_cache = (context, signature, verified)
+        return verified
+
+
 def validate_policy_metadata(metadata):
     expected = {"config_name": CONFIG_NAME, "checkpoint": str(require_checkpoint()),
                 "norm_stats": str(NORM_STATS), "action_dim": ACTION_DIM,
@@ -76,16 +133,7 @@ def validate_policy_metadata(metadata):
         expected["training_action_supervision"] = MODEL_PROFILE.training_action_supervision
     # Robot execution depends on physical actions and checkpoint identity,
     # not on whether the model was trained with adapters or full parameters.
-    manifest = CHECKPOINT / "params/manifest.ocdbt"
-    if manifest.is_file():
-        import hashlib
-        expected["checkpoint_manifest_sha256"] = hashlib.sha256(manifest.read_bytes()).hexdigest()
-    if NORM_STATS.is_file():
-        import hashlib
-        expected["normalization_sha256"] = hashlib.sha256(NORM_STATS.read_bytes()).hexdigest()
-    # Same weights/stats can use a different paper bundle: bind the full algorithm.
-    from .model_loader import checkpoint_contract
-    expected["paper_algorithm"] = checkpoint_contract()["paper_algorithm"] if (CHECKPOINT / "params/_METADATA").is_file() else None
+    expected.update(prepare_policy_validation())
     for key, value in expected.items():
         if metadata.get(key) != value:
             raise ValueError(f"Policy server {key}={metadata.get(key)!r} does not match deployment {value!r}")

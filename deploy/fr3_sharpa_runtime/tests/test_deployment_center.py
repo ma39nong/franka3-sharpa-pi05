@@ -529,3 +529,8 @@ def test_model_port_probe_does_not_generate_invalid_http_handshakes():
         assert control.port_listening(port)
         assert select.select([listener], [], [], 0)[0] == []
     assert not control.port_listening(port)
+
+
+def test_ordinary_checkpoint_cannot_select_paper_rtc(repository, checkpoint):
+    with pytest.raises(ValueError, match="不支持所选"):
+        settings(repository, checkpoint, mode="paper-rtc", speed="fast").plan()

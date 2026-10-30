@@ -10,7 +10,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
-1. 选择本机部署仓库和checkpoint目录，在主界面按训练配置选择模型动作类型：Absolute，或双臂Delta／双手Absolute，再点击识别权重，选择串行／RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
+1. 选择本机部署仓库和checkpoint目录，在主界面按训练配置选择模型动作类型：Absolute，或双臂Delta／双手Absolute，再点击识别权重，选择串行／RTC／Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
 2. 点击**启动推理**。只检查权重并加载GPU、预热、核对服务身份，不启动硬件、相机、录制或机器人执行；即使选择了Home或录制，也不需要此时提供Home配置或ROS环境。推理端预热期间可以点**停止推理**取消。
 3. 等推理端显示就绪，选择Current/Home、速度、步数、轮数、录制和输出位置，点击**核对执行配置**。
 4. 点击**启动执行**。必须已有与当前仓库、提交、权重和模式匹配的已预热推理端；执行入口只检查/复用该服务，不会隐式加载或切换模型。每次执行都自动运行硬件 `up`，然后按配置开始执行。
@@ -37,16 +37,34 @@ bash deploy/fr3_sharpa_control/ui.sh
 | --- | --- | --- |
 | 全量 Absolute | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
 | 全量普通 Delta（双臂delta／双手absolute） | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
-| 全量 Paper Delta v1（包括本次7999／T3） | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
+| 全量 Paper Delta v1（包括本次7999／T3） | 普通串行、Paper RTC | 同步本次适配后：普通串行、Paper RTC、串行Soft、异步Soft |
 | 未合并 Absolute LoRA（VLM16／Expert32配方） | 普通串行 | 普通串行 |
 
 这不是通用权重加载器：LoRA Delta、其他动作顺序/维度/频率、未知模型变体、其他论文资产版本尚未接入。模式列表同时受所选仓库和模型限制；旧分支没有Paper适配时会阻止启动。现场硬件验证与离线模型验证分开记录。
 
 Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。Paper T3对应的7999为timestamp_zscore_arms、beta0.5；7999只是训练步数，普通Delta的同名目录不能当作Paper权重。
 
-Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；RTC使用完整50步参考。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
+Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；Paper RTC允许1..50步参考：先补齐50步走完整的绝对值→双臂delta→分位数归一化→Paper变换，再裁回真实参考长度；参考按**新chunk的0..K−1索引**编码。补齐部分不参与RTC引导，输出仍是50步。普通RTC仅用于非Paper权重。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
 
 2026-10-30离线验证：本次7999在RTX5090上通过真实加载、普通推理、RTC引导、串行Soft四点参考、异步Soft四点参考smoke；输出均为有限50×58。异步Soft仍为50→30→26＋4→20，Soft施加6次；未连接机器人，不能替代工作机实机验证。合并LTT录制修复后的回归：main292项；Soft431项（16条既有JAX/Flax弃用警告）。模型smoke报告保存在各工作目录忽略Git的 `.deployment/paper_7999_audit/`。
+
+### Paper RTC 启动
+
+更新代码后重启UI服务并刷新页面。选择Paper checkpoint、双臂Delta／双手Absolute，点击识别权重，再选择 **Paper RTC · 时间步归一化**。重规划触发节点可继续设15，速度固定Fast，轮数0表示持续重规划。它会继续产生后续chunk，直到停止、达到轮数或出现异常。
+
+切换模式需要停止旧推理服务并重新点击启动推理。新服务使用 `--enable-paper-rtc`，启动时实际预热K=50、35、1三种参考，全部通过才发布就绪标记。执行端使用 `--broker-mode rtc --paper-rtc`，在连接运动SDK前核对适配与预热标记；旧服务不能冒充Paper RTC。模型、Home、录制等其他配置仍按页面流程设置。
+
+如使用三终端命令，在已正确设置Paper checkpoint的 `full-delta` 环境中：
+
+```bash
+# 模型服务
+bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --enable-paper-rtc
+# 执行参数离线核对（不加载模型、不连接设备）
+bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta --check \
+  --broker-mode rtc --paper-rtc --speed fast --execute-steps 15 --num-chunks 0
+```
+
+短参考回归测试覆盖K=1/4/15/35/49/50、不同新观测状态、时间步归一化、绝对动作还原与参考之外零引导；这次改动没有启动机器人。实际GPU预热由下一次启动新模式时完成，过去仅K=50的RTC smoke不能验证本次35步故障。
 
 ## 权重身份
 
@@ -59,11 +77,11 @@ Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper�
 | 模式 | UI设置 | 行为 |
 | --- | --- | --- |
 | 普通串行 | 可填1..50，如15或20 | 每轮执行对应模型动作前缀后重新推理 |
-| RTC | 可填1..24，fast固定 | 后台重规划触发源节点；不是固定执行前缀；轮数0或至少2 |
+| RTC／Paper RTC | 可填1..24，fast固定 | 后台重规划触发源节点；不是固定执行前缀；轮数0或至少2 |
 | 串行Soft | 源执行点26，压缩目标20 | 50→30→26+4，原cubic策略允许条件不满足时回退26 |
 | 异步Soft | 固定26→20 | rolling-v3、PCHIP、固定4参考，段边界切换；拒绝旧15点异步协议 |
 
-Main提供普通串行和RTC；Soft分支增加串行Soft和异步Soft。UI读取所选代码目录，只启用其中实际支持的模式。推荐两个分支各保留一个部署目录，在UI选择对应目录，不在运行中git switch。独立目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
+Main提供普通串行、RTC和Paper RTC；Soft分支增加串行Soft和异步Soft。UI读取所选代码目录，只启用其中实际支持的模式。推荐两个分支各保留一个部署目录，在UI选择对应目录，不在运行中git switch。独立目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
 
 ## 自动录制和归档
 

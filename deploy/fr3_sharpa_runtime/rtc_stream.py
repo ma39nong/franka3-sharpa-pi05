@@ -37,6 +37,16 @@ class RTCSettings:
         return deque([self.initial_delay_steps], maxlen=self.delay_buffer_size)
 
 
+PAPER_RTC_ADAPTER = "paper-rtc-time-indexed-prefix-v1"
+
+
+def require_paper_capabilities(metadata):
+    require_capabilities(metadata)
+    if (not metadata.get("paper_algorithm") or metadata.get("rtc_input_adapter") != PAPER_RTC_ADAPTER
+            or metadata.get("rtc_short_prefix_warmed_up") is not True):
+        raise ValueError("Paper RTC requires --enable-paper-rtc and a warmed short-prefix adapter")
+
+
 def require_capabilities(metadata):
     if (
         metadata.get("rtc_supported") is not True
