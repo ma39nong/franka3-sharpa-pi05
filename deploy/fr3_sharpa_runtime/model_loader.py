@@ -9,8 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 
-import numpy as np
-
 from . import config
 from .model_profiles import validate_parameter_layout
 
@@ -34,17 +32,14 @@ def checkpoint_contract():
     if (projection_shapes.get("action_in_proj", [None])[0] != config.ACTION_DIM
             or projection_shapes.get("action_out_bias") != [config.ACTION_DIM]):
         raise ValueError(f"Expected native 58D model projections, got {projection_shapes}")
+    from .paper_contract import inspect_paper, validate_stats
+    algorithm = inspect_paper(config.NORM_STATS, entries)
+    if algorithm and config.MODEL_PROFILE.name != "full-delta":
+        raise ValueError("Paper delta权重必须使用full-delta模型配置，不能作为absolute/LoRA加载")
     stats = json.loads(config.NORM_STATS.read_text())["norm_stats"]
-    for group in ("state", "actions"):
-        for field in ("mean", "std", "q01", "q99"):
-            values = np.asarray(stats[group][field], dtype=float)
-            if values.shape != (58,) or not np.isfinite(values).all():
-                raise ValueError(f"{group}.{field} must contain 58 finite values")
-        if np.any(np.asarray(stats[group]["std"]) < 0):
-            raise ValueError(f"Negative {group} standard deviation")
-        if np.any(np.asarray(stats[group]["q01"]) > stats[group]["q99"]):
-            raise ValueError(f"Invalid {group} quantiles")
+    validate_stats(stats, paper_algorithm=algorithm)
     return {
+        "paper_algorithm": algorithm,
         "config_name": config.CONFIG_NAME,
         "checkpoint": str(checkpoint), "norm_stats": str(config.NORM_STATS),
         "checkpoint_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
@@ -79,7 +74,18 @@ def build_config():
                       action_horizon=50, max_token_len=256,
                       paligemma_variant=config.MODEL_PROFILE.paligemma_variant,
                       action_expert_variant=config.MODEL_PROFILE.action_expert_variant)
-    data = LeRobotFr3SharpaDataConfig(
+    metadata = checkpoint_contract()
+    data_class = LeRobotFr3SharpaDataConfig
+    if metadata["paper_algorithm"]:
+        from .paper_model import PaperPi0Config, PaperSharpaData
+        from dataclasses import fields
+        algorithm = metadata["paper_algorithm"]
+        model = PaperPi0Config(**{field.name: getattr(model, field.name) for field in fields(Pi0Config)},
+            paper_asset_dir=str(config.NORM_STATS.parent), paper_mode=algorithm["mode"],
+            paper_beta=algorithm["beta"], paper_std_floor=algorithm["std_floor"],
+            paper_asset_sha256=algorithm["bundle_sha256"])
+        data_class = PaperSharpaData
+    data = data_class(
         repo_id=config.NORM_STATS.parent.name,
         assets=AssetsConfig(assets_dir=str(config.NORM_STATS.parent.parent),
                             asset_id=config.NORM_STATS.parent.name),

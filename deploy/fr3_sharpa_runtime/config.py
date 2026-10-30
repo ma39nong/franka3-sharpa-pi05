@@ -83,6 +83,9 @@ def validate_policy_metadata(metadata):
     if NORM_STATS.is_file():
         import hashlib
         expected["normalization_sha256"] = hashlib.sha256(NORM_STATS.read_bytes()).hexdigest()
+    # Same weights/stats can use a different paper bundle: bind the full algorithm.
+    from .model_loader import checkpoint_contract
+    expected["paper_algorithm"] = checkpoint_contract()["paper_algorithm"] if (CHECKPOINT / "params/_METADATA").is_file() else None
     for key, value in expected.items():
         if metadata.get(key) != value:
             raise ValueError(f"Policy server {key}={metadata.get(key)!r} does not match deployment {value!r}")

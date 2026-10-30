@@ -3,7 +3,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import subprocess
@@ -70,14 +69,14 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         raise ValueError("checkpoint assets/ 必须包含唯一配套 norm_stats.json")
     stats = paths[0]
     values = json.loads(stats.read_text())["norm_stats"]
-    for group in ("state", "actions"):
-        for key in ("mean", "std", "q01", "q99"):
-            row = values[group][key]
-            if len(row) != 58 or not all(math.isfinite(float(v)) for v in row):
-                raise ValueError(f"{group}.{key} 需要58个有限数值")
     entries = json.loads(metadata.read_text())["tree_metadata"]
+    from deploy.fr3_sharpa_runtime.paper_contract import inspect_paper, validate_stats, algorithm_identity
+    algorithm = inspect_paper(stats, entries)
+    validate_stats(values, paper_algorithm=algorithm)
     from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile, validate_parameter_layout
     lora = any("lora" in key.lower() for key in entries)
+    if algorithm and lora:
+        raise ValueError("Paper目前仅支持全量delta，不能套用LoRA")
     validate_parameter_layout(entries, get_model_profile("lora" if lora else "full"))
     projections = {}
     for entry in entries.values():
@@ -89,8 +88,10 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
-    identity = hashlib.sha256((manifest_sha + stats_sha).encode()).hexdigest()
+    identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm)).encode()).hexdigest()
     detected, source = KNOWN_STATS.get(stats_sha), "已核对的训练统计指纹"
+    if algorithm:
+        detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
     cached_confirmation = False
     if training_record:
         record = json.loads(Path(training_record).expanduser().read_text())
@@ -103,6 +104,8 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             raise ValueError("训练记录模型变体与权重参数结构不一致")
         if record["inputs"].get("norm_stats_sha256") != stats_sha:
             raise ValueError("训练记录的归一化统计摘要与 checkpoint 不一致")
+        if algorithm and not data["extra_delta_transform"]:
+            raise ValueError("训练记录与Paper资产的delta语义冲突")
         detected = "delta" if data["extra_delta_transform"] else "absolute"
         source = "匹配统计和模型结构的训练记录"
     if cache and not detected:
@@ -122,7 +125,9 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             detected, source = semantics, "操作员按训练配置手动确认"
     if detected and lora and detected == "delta":
         raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
-    return {"checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
+    return {"supported_modes": ["serial", "rtc", "soft-serial", "soft-async"] if not lora else ["serial"],
+            "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
+            "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
             "finetune_mode": "lora" if lora else "full", "semantics": detected,
             "evidence": source if detected else "无法从参数识别动作语义：请提供训练JSON或明确确认",
@@ -159,8 +164,12 @@ class DeploymentSettings:
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics, cache=cache)
         if not model["profile"]:
             raise ValueError(model["evidence"])
+        if self.mode not in model["supported_modes"]:
+            raise ValueError("该模型不支持所选推理模式；LoRA当前仅支持普通串行")
         if self.mode.startswith("soft-") and model["finetune_mode"] != "full":
             raise ValueError("Soft目前仅支持全量absolute/delta")
+        if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
+            raise ValueError("所选仓库尚未同步Paper权重适配，请更新该分支")
         shared = "deploy/fr3_sharpa_runtime/"
         full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
