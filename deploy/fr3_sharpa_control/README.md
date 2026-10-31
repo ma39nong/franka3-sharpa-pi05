@@ -135,3 +135,9 @@ bash deploy/fr3_sharpa_control/record_session.sh check
 ```
 
 本次开发不自动安装或修改工作机SDK/ROS。缺依赖时，勾选录制的启动会在硬件up之前失败并显示日志。界面、模式组合、录制门、编号、停止和合成视频导出有离线测试；真实设备、DDS传感器吞吐与工作机编码环境还需现场验收。三路实时预览按约定留待下一阶段。
+
+## Train RTC
+
+新模式“Train RTC · 训练前缀条件”使用训练时 RTC 的硬前缀采样。选择完整 checkpoint，并在“训练记录”提供该次训练保存的运行 JSON；或把记录复制为 checkpoint 根目录的 `train_rtc_record.json`。核对记录中的 `rtc_max_delay > 0`、模型结构和统计后，界面才开放该模式。Paper/LoRA 权重不开放此入口。
+
+选择 Train RTC 后重新启动推理服务；命令对应 `--enable-train-rtc`，执行端对应 `--broker-mode rtc --train-rtc --speed fast`。界面设置承诺前缀预算为 `min(25, rtc_max_delay)`，沿用 current/Home、录制、停止和旧块播放机制。实际推理/安装超过预算则停止。服务必须完成全部静态前缀长度的预热才能连接执行流程。工作机 GPU 与实机验证仍待完成；命令及数据坐标约束见根 README 的 Train RTC 部署模式。

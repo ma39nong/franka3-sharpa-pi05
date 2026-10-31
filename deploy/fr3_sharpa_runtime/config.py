@@ -94,8 +94,9 @@ def prepare_policy_validation():
     checkpoint = require_checkpoint()
     paths = (checkpoint / "params/manifest.ocdbt", checkpoint / "params/_METADATA", NORM_STATS,
              NORM_STATS.parent / "delta_paper.json", NORM_STATS.parent / "delta_paper.npz",
-             NORM_STATS.parent / "norm_metadata.json")
-    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME)
+             NORM_STATS.parent / "norm_metadata.json",
+             Path(os.environ.get("SHARPA_TRAIN_RTC_RECORD", str(checkpoint / "train_rtc_record.json"))))
+    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[-1]))
     with _validation_lock:
         signature = _asset_signature(paths)
         if _validation_cache is not None:
@@ -110,6 +111,8 @@ def prepare_policy_validation():
             contract = checkpoint_contract()
             verified = {key: contract[key] for key in (
                 "checkpoint_manifest_sha256", "normalization_sha256", "paper_algorithm")}
+            if contract.get("train_rtc"):
+                verified["train_rtc"] = contract["train_rtc"]
         else:
             # Keep metadata-free protocol fixtures/legacy checks compatible.
             import hashlib

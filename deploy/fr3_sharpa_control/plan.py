@@ -13,13 +13,15 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
 
 
 def repository_info(path):
     repo = Path(path).expanduser().resolve()
     branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True, stderr=subprocess.DEVNULL).strip()
     modes = ["serial", "rtc"]
+    if (repo / "deploy/fr3_sharpa_runtime/train_rtc.py").is_file():
+        modes.append("train-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/paper_rtc.py").is_file():
         modes.append("paper-rtc")
     if (repo / "deploy/fr3_sharpa_full/serve_soft.sh").is_file():
@@ -90,11 +92,17 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             projections["output"] = entry["value_metadata"]["write_shape"]
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
+    from deploy.fr3_sharpa_runtime.train_rtc_contract import inspect_train_rtc
+    trained = inspect_train_rtc(stats, root, training_record or None)
+    if trained and (algorithm or lora):
+        raise ValueError("Train RTC requires ordinary full checkpoint, excludes Paper/LoRA")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
-    identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm)).encode()).hexdigest()
+    identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm) + (trained["record_sha256"] if trained else "")).encode()).hexdigest()
     detected, source = KNOWN_STATS.get(stats_sha), "已核对的训练统计指纹"
     if algorithm:
         detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
+    if trained:
+        detected, source = trained["semantics"], "匹配统计与结构的Train RTC训练记录"
     cached_confirmation = False
     if training_record:
         record = json.loads(Path(training_record).expanduser().read_text())
@@ -128,7 +136,12 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             detected, source = semantics, "操作员按训练配置手动确认"
     if detected and lora and detected == "delta":
         raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
-    return {"supported_modes": ["serial", "paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"] if not lora else ["serial"],
+    supported_modes = ["serial"]
+    if not lora:
+        supported_modes += ["paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"]
+    if trained:
+        supported_modes = ["serial", "train-rtc"]
+    return {"train_rtc": trained, "supported_modes": supported_modes,
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
@@ -160,7 +173,7 @@ class DeploymentSettings:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
         if self.mode == "serial" and not 1 <= self.steps <= 50:
             raise ValueError("串行每轮执行动作数必须在1..50")
-        if self.mode in ("rtc", "paper-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
+        if self.mode in ("rtc", "paper-rtc", "train-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
         if self.mode.startswith("soft-") and self.steps != 26:
             raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
@@ -179,9 +192,13 @@ class DeploymentSettings:
         service_args, runtime_args = [], []
         port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
         description = f"预测50，执行前{self.steps}，再观测推理"
-        if self.mode in ("rtc", "paper-rtc"):
-            service_args = ["--enable-paper-rtc" if self.mode == "paper-rtc" else "--enable-rtc"]
+        if self.mode in ("rtc", "paper-rtc", "train-rtc"):
+            service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]
+            if self.mode == "train-rtc":
+                if not (repo / shared / "train_rtc.py").is_file():
+                    raise ValueError("所选仓库缺少Train RTC适配")
+                runtime_args += ["--train-rtc", "--rtc-initial-delay-steps", str(min(25, model["train_rtc"]["max_delay"]))]
             if self.mode == "paper-rtc":
                 if not (repo / shared / "paper_rtc.py").is_file():
                     raise ValueError("所选仓库尚未同步Paper RTC适配类")
@@ -249,5 +266,9 @@ def plan_environment(plan):
     if overlay.is_dir():
         env.setdefault("SHARPA_ROS_MESSAGES_OVERLAY", str(overlay))
     env["PYTHONPATH"] = f"{root}:{root}/src:{root}/packages/openpi-client/src"
+    if plan["model"].get("train_rtc"):
+        env["SHARPA_TRAIN_RTC_RECORD"] = plan["model"]["train_rtc"]["record"]
+    else:
+        env.pop("SHARPA_TRAIN_RTC_RECORD", None)
     env.pop("SHARPA_RECORD_SOCKET", None)
     return env

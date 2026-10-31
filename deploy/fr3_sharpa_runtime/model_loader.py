@@ -38,7 +38,13 @@ def checkpoint_contract():
         raise ValueError("Paper delta权重必须使用full-delta模型配置，不能作为absolute/LoRA加载")
     stats = json.loads(config.NORM_STATS.read_text())["norm_stats"]
     validate_stats(stats, paper_algorithm=algorithm)
+    from .train_rtc_contract import inspect_train_rtc
+    trained = inspect_train_rtc(config.NORM_STATS, checkpoint)
+    if trained and (algorithm or config.MODEL_PROFILE.finetune_mode != "full"
+                    or trained["semantics"] != ("delta" if config.MODEL_PROFILE.extra_delta_transform else "absolute")):
+        raise ValueError("Train RTC record conflicts with Paper/profile/action semantics")
     return {
+        "train_rtc": trained,
         "paper_algorithm": algorithm,
         "config_name": config.CONFIG_NAME,
         "checkpoint": str(checkpoint), "norm_stats": str(config.NORM_STATS),
@@ -75,6 +81,11 @@ def build_config():
                       paligemma_variant=config.MODEL_PROFILE.paligemma_variant,
                       action_expert_variant=config.MODEL_PROFILE.action_expert_variant)
     metadata = checkpoint_contract()
+    if metadata["train_rtc"]:
+        from dataclasses import fields
+        from .train_rtc_model import TrainRTCPi0Config
+        model = TrainRTCPi0Config(**{field.name: getattr(model, field.name) for field in fields(Pi0Config)},
+                                 rtc_max_delay=metadata["train_rtc"]["max_delay"])
     data_class = LeRobotFr3SharpaDataConfig
     if metadata["paper_algorithm"]:
         from .paper_model import PaperPi0Config, PaperSharpaData

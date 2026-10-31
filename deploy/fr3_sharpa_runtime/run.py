@@ -168,7 +168,7 @@ def execute_policy_prepare(args):
         from .home_pose import load_home
         home_arms, home_metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
     if getattr(args, "broker_mode", "serial") == "rtc":
-        runtime_options = {"paper_rtc": True} if getattr(args, "paper_rtc", False) else {}
+        runtime_options = {key: True for key in ("paper_rtc", "train_rtc") if getattr(args, key, False)}
         SharpaRuntime(args.policy_url, **runtime_options).inspect_metadata(require_rtc=True)
     inner = (f"source {shlex.quote(str(setup))}; "
              f"export SHARPA_SHUTDOWN_REPORT_DIR={shlex.quote(str(args.execution_trace_dir.expanduser().resolve()))}; "
@@ -189,7 +189,7 @@ def execute_policy_prepare(args):
             if ready.get("operation") != "ready":
                 raise RuntimeError(f"sdk_direct worker did not become ready: {ready}")
         _start_observation_worker(args.ros_overlay)
-        runtime = SharpaRuntime(args.policy_url, **({"paper_rtc": True} if getattr(args, "paper_rtc", False) else {}))
+        runtime = SharpaRuntime(args.policy_url, **({key: True for key in ("paper_rtc", "train_rtc") if getattr(args, key, False)}))
         def infer(observation):
             # Policy cold start can make the first read-only inference stale.  Drop
             # that result, reacquire all sensors, and retry once.  The 200 ms gate
@@ -407,6 +407,7 @@ def main() -> None:
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
     parser.add_argument("--broker-mode", choices=("serial", "rtc"), default="serial",
                         help="serial keeps existing behavior; rtc overlaps inference and accepted motion")
+    parser.add_argument("--train-rtc", action="store_true", help="Require trained hard-prefix RTC service")
     parser.add_argument("--paper-rtc", action="store_true", help="Require a warmed Paper RTC short-reference adapter")
     parser.add_argument("--rtc-initial-delay-steps", type=int, default=5)
     parser.add_argument("--rtc-delay-buffer-size", type=int, default=10)
@@ -450,6 +451,8 @@ def main() -> None:
         parser.error("--execute-steps must be in [1, 50]")
     if args.sharpa_backend == "litchibot" and args.execute_steps != 50:
         parser.error("legacy litchibot requires --execute-steps 50; prefix execution uses sdk_direct")
+    if args.train_rtc and (args.paper_rtc or args.broker_mode != "rtc"):
+        parser.error("--train-rtc requires --broker-mode rtc and excludes --paper-rtc")
     if args.paper_rtc and args.broker_mode != "rtc":
         parser.error("--paper-rtc requires --broker-mode rtc")
     if args.broker_mode == "rtc":
@@ -469,6 +472,13 @@ def main() -> None:
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name
     args.execute_speed_scale = profile.execute_speed_scale
+    if args.train_rtc:
+        from .model_loader import checkpoint_contract
+        trained_contract = checkpoint_contract().get("train_rtc")
+        if not trained_contract:
+            parser.error("Train RTC requires matching training JSON")
+        if not 1 <= args.rtc_initial_delay_steps <= min(25, trained_contract["max_delay"]):
+            parser.error("Train RTC commitment must be 1..min(25, training max delay)")
     if args.check:
         if args.mode != "dry-run":
             parser.error("Use --check or --mode, not both")
@@ -483,7 +493,7 @@ def main() -> None:
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
         print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
-                          "paper_rtc": args.paper_rtc,
+                          "paper_rtc": args.paper_rtc, "train_rtc": args.train_rtc,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
                           "prepare_speed_rad_s": args.prepare_speed_rad_s,
@@ -508,7 +518,12 @@ def main() -> None:
         args.mode = "execute" if args.execute else "prepare" if args.prepare else "handoff-verify" if args.handoff_verify else "preflight-only"
     if args.broker_mode == "rtc":
         from .model_loader import checkpoint_contract
-        is_paper = bool(checkpoint_contract()["paper_algorithm"])
+        contract = checkpoint_contract()
+        if args.train_rtc != bool(contract.get("train_rtc")):
+            parser.error("Train RTC checkpoints require --train-rtc and matching training record")
+        if args.train_rtc and not 1 <= args.rtc_initial_delay_steps <= min(25, contract["train_rtc"]["max_delay"]):
+            parser.error("Train RTC initial delay must be 1..min(25, training max delay)")
+        is_paper = bool(contract["paper_algorithm"])
         if args.paper_rtc != is_paper:
             parser.error("Paper checkpoints require --paper-rtc; ordinary checkpoints use RTC without it")
     if args.broker_mode == "rtc" and args.mode != "execute":

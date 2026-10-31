@@ -396,3 +396,28 @@ git ls-tree -r --name-only bbe7f697e17a220ca91fae10b1812322b0741fa2 -- deploy/ e
 旧实现包括 Wuji 设备协议、54D/其他模型映射和 RTG/Ruckig 方案，不是当前 Sharpa 的可运行入口。当前功能与历史设计的差异见 [架构说明](deploy/fr3_sharpa_runtime/ARCHITECTURE.md)和 [Wuji 历史参考](docs/reference_wuji_architecture.md)。
 
 权重、训练数据、运行日志和本机构建产物不提交 Git。许可证见 [LICENSE](LICENSE) 和 [LICENSE_GEMMA.txt](LICENSE_GEMMA.txt)。
+
+## Train RTC 部署模式
+
+`train-rtc` 分支增加独立的 **Train RTC · 训练前缀条件** 模式，支持 JAX π0.5 Sharpa 全参、58D/50步/30Hz，absolute 与双臂 delta 均可。它复用现有异步队列和硬件执行流程，推理时固定前 d 个已提交动作并预测后缀；普通 RTC / Paper RTC 的梯度引导参数不用于此模式。
+
+需随 checkpoint 下载该次训练入口保存的完整运行 JSON（`config.fields.model.fields.rtc_max_delay > 0`，不是 UI 的 `run.json`），保留其中的数据来源、英文 prompt、配置、实验名与统计指纹。UI 中填写“训练记录”后检查模型，再选 Train RTC；也可将该 JSON 放到 checkpoint 步骤目录下命名 `train_rtc_record.json`。加载时核对模型结构、动作语义和统计 SHA256；参数形状本身无法证明使用过 RTC 训练，请配套使用同一实验的权重和记录。
+
+命令行示例（先配置自己的 checkpoint、统计及硬件环境；以下为 delta 模型）：
+
+```bash
+export SHARPA_FULL_DELTA_CHECKPOINT=/path/to/checkpoint/2000
+export SHARPA_TRAIN_RTC_RECORD=/path/to/training-run.json
+# 终端一：仅检查；随后加载模型做离线预热，不连接机器人。
+bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --enable-train-rtc --check-only
+bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --enable-train-rtc --smoke-only
+# 正式模型服务：同一命令去掉 --smoke-only。
+# 终端二：只检查执行配置；d=10仅适用于训练上限至少10的模型。
+bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta \
+  --broker-mode rtc --train-rtc --speed fast --rtc-initial-delay-steps 10 \
+  --initialization current --execute-steps 15 --num-chunks 2 --check
+```
+
+absolute 模型改用 `--model full` 与 `SHARPA_CHECKPOINT`。`--rtc-initial-delay-steps` 在 Train RTC 中表示固定的承诺前缀预算 d，取值为 `1..min(25, rtc_max_delay)`；UI 默认选择该上限。服务预热训练支持的每一个静态前缀长度，并核对前缀恢复为原绝对动作。旧轨迹先按当前观测转为训练动作空间并归一化，delta 仅作用于双臂；手部保持 absolute。推理完成及安装若超过 d 个节点则停止，不扩大到旧 RTC 的25步引导窗口。`--execute-steps` 仍是后台重规划触发节点数，与 d 不同。
+
+当前已接入代码与离线测试；完整 checkpoint 的 GPU 预热和机器人实机验证需在工作机完成。此模式不包含 Paper 的时间步归一化或相关噪声，不自动把旧 RTC 服务当作 Train RTC 服务。

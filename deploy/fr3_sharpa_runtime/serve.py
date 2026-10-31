@@ -21,7 +21,12 @@ def main() -> None:
     parser.add_argument("--report", type=Path, help="Save checkpoint/smoke validation as JSON")
     parser.add_argument("--enable-rtc", action="store_true", help="Warm and enable Sharpa 58D JAX soft-prefix guidance")
     parser.add_argument("--enable-paper-rtc", action="store_true", help="Enable Paper RTC with time-indexed short references")
+    parser.add_argument("--enable-train-rtc", action="store_true", help="Use trained hard-prefix conditioning (requires training record)")
     args = parser.parse_args()
+    if args.enable_train_rtc:
+        if args.enable_rtc or args.enable_paper_rtc:
+            parser.error("Train RTC excludes soft/Paper RTC")
+        args.enable_rtc = True
     if args.enable_paper_rtc:
         args.enable_rtc = True
     if args.enable_rtc and config.MODEL_PROFILE.finetune_mode != "full":
@@ -29,6 +34,10 @@ def main() -> None:
     from .model_loader import checkpoint_contract, build_config
 
     metadata = checkpoint_contract()
+    if args.enable_train_rtc and not metadata.get("train_rtc"):
+        parser.error("Train RTC requires a matching training JSON with rtc_max_delay > 0")
+    if args.enable_rtc and metadata.get("train_rtc") and not args.enable_train_rtc:
+        parser.error("Trained RTC checkpoint requires --enable-train-rtc")
     if args.enable_paper_rtc and not metadata["paper_algorithm"]:
         parser.error("Paper RTC requires a complete matching Paper delta checkpoint")
     if args.enable_rtc and metadata["paper_algorithm"] and not args.enable_paper_rtc:
@@ -36,7 +45,7 @@ def main() -> None:
     if args.enable_rtc:
         from openpi_client import rtc
         metadata.update(rtc_supported=True, rtc_warmed_up=False, rtc_action_dim=58,
-                        rtc_protocol_version=rtc.PROTOCOL_VERSION, rtc_algorithm="soft_prefix_guidance")
+                        rtc_protocol_version=rtc.PROTOCOL_VERSION, rtc_algorithm="trained_prefix_conditioning" if args.enable_train_rtc else "soft_prefix_guidance")
         if args.enable_paper_rtc:
             from .rtc_stream import PAPER_RTC_ADAPTER
             metadata.update(rtc_input_adapter=PAPER_RTC_ADAPTER, rtc_short_prefix_warmed_up=False)
@@ -59,6 +68,9 @@ def main() -> None:
     print(f"Loading {config.MODEL_PROFILE.name} 58D model ({config.MODEL_PROFILE.training_action_supervision} supervision; absolute output)", flush=True)
     from .rtc_stream import canonical_prefix
     policy_options = {}
+    if args.enable_train_rtc:
+        from .train_rtc import TrainRTCPolicy
+        policy_options["policy_class"] = TrainRTCPolicy
     if args.enable_paper_rtc:
         from .paper_rtc import PaperRTCPolicy
         policy_options["policy_class"] = PaperRTCPolicy
@@ -76,12 +88,24 @@ def main() -> None:
         context = rtc.validate_context({
             "protocol_version": rtc.PROTOCOL_VERSION, "token": "sharpa-rtc-warmup",
             "source_number": 1, "source_sha256": hashlib.sha256(actions.tobytes()).hexdigest(),
-            "previous_actions": actions, "inference_delay_steps": 5,
+            "previous_actions": actions, "inference_delay_steps": min(5, metadata["train_rtc"]["max_delay"]) if args.enable_train_rtc else 5,
             "prefix_attention_horizon": 25, "prefix_attention_schedule": "exp", "max_guidance_weight": 5.0})
         for _ in range(2):
             guided = policy.infer(observation, rtc_context=context)
             as_finite_action_chunk(guided["actions"])
             rtc.validate_receipt(guided.get("rtc"), context)
+        if args.enable_train_rtc:
+            maximum = metadata["train_rtc"]["max_delay"]
+            for delay in range(maximum + 1):
+                trained_context = rtc.validate_context({**context.to_dict(),
+                    "token": f"train-rtc-warmup-{delay}", "inference_delay_steps": delay,
+                    "prefix_attention_horizon": max(1, delay)})
+                trained_result = policy.infer(observation, rtc_context=trained_context)
+                actual = as_finite_action_chunk(trained_result["actions"])
+                np.testing.assert_allclose(actual[:delay], actions[:delay], rtol=1e-5, atol=1e-5)
+                rtc.validate_receipt(trained_result.get("rtc"), trained_context)
+            metadata["rtc_warmed_prefix_lengths"] = list(range(maximum + 1))
+            print(f"Train RTC Warmup OK: committed delays 0..{maximum}", flush=True)
         if args.enable_paper_rtc:
             for length in (35, 1):
                 short_context = rtc.validate_context({**context.to_dict(),
