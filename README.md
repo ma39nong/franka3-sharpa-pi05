@@ -1,5 +1,7 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
+现场操作流程见 [部署 UI 使用手册](部署UI使用手册.md)。
+
 统一部署界面和第一段chunk自动录制：[部署控制台](deploy/fr3_sharpa_control/README.md) · [三终端指令](部署启动指令.md)。
 
 
