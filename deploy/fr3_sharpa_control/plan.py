@@ -151,9 +151,12 @@ class DeploymentSettings:
     output: str = ""
     training_record: str = ""
     semantics: str = "auto"
+    camera_policy: str = "exclusive"
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
+        if self.camera_policy not in ("exclusive", "require_free"):
+            raise ValueError("相机策略仅支持独占接管或要求设备空闲")
         if self.mode not in MODES or self.initialization not in ("home", "current") or self.speed not in ("slow", "medium", "fast"):
             raise ValueError("不支持的模式、启动姿态或速度")
         if type(self.rounds) is not int or self.rounds < 0 or type(self.steps) is not int or type(self.record) is not bool:
@@ -174,6 +177,8 @@ class DeploymentSettings:
         if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
             raise ValueError("所选仓库尚未同步Paper权重适配，请更新该分支")
         shared = "deploy/fr3_sharpa_runtime/"
+        if not (repo / shared / "camera_startup.py").is_file():
+            raise ValueError("所选部署目录未接入启动前相机闸门；请同步该分支后再使用本控制台")
         full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
         service_args, runtime_args = [], []
@@ -224,7 +229,8 @@ class DeploymentSettings:
                 "model": model, "branch": branch, "commit": commit, "description": description, "port": port,
                 "home_files": home_files, "machine_root": str(machine),
                 "home_sha256": {key: fingerprint(path) for key, path in home_files.items()} if self.initialization == "home" else {},
-                "hardware": ["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "up"],
+                "hardware": ["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "up",
+                             *(["--exclusive"] if self.camera_policy == "exclusive" else [])],
                 "service": ["bash", service, *common, *service_args],
                 "check": ["bash", runtime, *options, "--check"],
                 "execute": ["bash", runtime, *options, "--execute", "--enable-hardware", "--sharpa-backend", "sdk_direct"]}
@@ -250,4 +256,5 @@ def plan_environment(plan):
         env.setdefault("SHARPA_ROS_MESSAGES_OVERLAY", str(overlay))
     env["PYTHONPATH"] = f"{root}:{root}/src:{root}/packages/openpi-client/src"
     env.pop("SHARPA_RECORD_SOCKET", None)
+    env.pop("SHARPA_CAMERA_LEASE_FD", None)  # Never inherit another stale run's lease.
     return env

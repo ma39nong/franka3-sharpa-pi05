@@ -85,6 +85,38 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta --check \
 
 Main提供普通串行、RTC和Paper RTC；Soft分支增加串行Soft和异步Soft。UI读取所选代码目录，只启用其中实际支持的模式。推荐两个分支各保留一个部署目录，在UI选择对应目录，不在运行中git switch。独立目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
 
+## 启动前部署独占相机
+
+主界面新增“启动前相机策略”，默认是“部署独占接管”，也可选“要求相机空闲”。核对配置会显示并冻结该选项；改动后需重新核对。点击启动执行即授权按此策略处理相机：独占模式会中断使用旧相机服务的遥操预览或录制，模型预热阶段不会接管相机。
+
+接管只针对 Docker 中标签为 teleop-cameras／openpi-cameras、命令为 triple_camera.launch.py、且挂载配置的三台序列号及头部/左右语义与本机部署配置完全一致的服务。使用不可变容器 ID 停止，检查容器 Running=false、PID=0，并等待可见USB/网络/驱动占用消失；不按容器名通配停止，不执行remove-orphans、USB reset或杀未知进程。部分相机重叠、无法核对配置或未知进程占用均拒绝启动，并记录容器名、命令、可见PID或设备句柄。操作系统权限可能限制占用诊断，不能将未列出PID当作设备一定空闲。
+
+释放后只启动一个部署相机服务。只读ROS闸门查询驱动 GetDeviceInfo 返回的实际序列号，校验头部cam0／左腕cam2／右腕cam1映射；要求三路有效RGB/BGR、唯一发布者、连续3秒稳定出图（头部至少18Hz、双腕至少25Hz、连续帧间隔不超过150ms），并复用runtime的200ms新鲜度及100ms时间对齐限制。通过后才启动机械臂/网关依赖；执行端连接SDK和Home前会再验证一次。
+
+相机锁跨同一用户的部署目录生效，持有至执行、失能确认及清理结束，运行中不允许另一个启动入口抢占。只读相机监控持续检查图像、时间戳和发布者身份；丢图、监控退出或心跳超时会向执行端发送一次SIGINT，等待原有失能与清理流程结束，不会在运动中自动重启相机。恢复需要结束后显式重新启动。未知占用不杀进程；失败时不自动恢复旧遥操服务。
+
+已知服务正常停止并不保证设备本身没有固件/USB问题；实际序列号或出图闸门不通过时仍会阻止Home。相关信息见hardware.log与runtime.log。所有在GUI中选择的main/Soft部署目录都必须同步相机闸门代码，旧目录会在配置阶段明确拒绝。
+
+首次更新后编译新增的相机身份查询消息（只编译消息，不启动设备）：
+
+```bash
+bash deploy/fr3_sharpa_runtime/build_messages.sh
+```
+
+只读占用核对（不停止现有服务、不打开相机）：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh camera-check
+```
+
+三终端启动需明确选择接管：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up --exclusive
+```
+
+不带 --exclusive 时，发现同组已知服务也会报错，不会静默中断它。camera_probe只创建图像订阅及设备信息服务客户端，不创建运动发布器、不连接SDK。
+
 ## 自动录制和归档
 
 勾选录制后，UI在执行前检查ROS bag和视频依赖，提前建立独立录制进程和订阅，但此时不创建bag写入器。Home和初始首帧接近期间不写包。运动worker完成接近后，先取得录制就绪应答，再开始发送第一段任务chunk；RTC/异步Soft在首次stream播放前打开同一个门。

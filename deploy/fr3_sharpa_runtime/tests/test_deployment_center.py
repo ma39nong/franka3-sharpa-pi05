@@ -49,6 +49,7 @@ def repository(tmp_path):
     for file in (shared / "sdk_direct_motion_ros.py", shared / "async_soft_motion_ros.py"):
         file.write_text("# RecordingGate integration marker\n")
     (shared / "async_soft_stream.py").write_text("CAPABILITY = 'sharpa-async-soft-rolling-v3'\n")
+    (shared / "camera_startup.py").write_text("# Camera startup gate fixture\n")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -58,6 +59,19 @@ def repository(tmp_path):
 
 def settings(repository, checkpoint, **kwargs):
     return plans.DeploymentSettings(str(repository), str(checkpoint), semantics="absolute", **kwargs)
+
+
+def test_camera_policy_is_explicit_and_frozen_in_approval(repository, checkpoint):
+    exclusive = settings(repository, checkpoint, camera_policy="exclusive").plan()
+    free = settings(repository, checkpoint, camera_policy="require_free").plan()
+    assert exclusive["hardware"][-1] == "--exclusive"
+    assert free["hardware"][-1] == "up"
+    assert exclusive["approval"] != free["approval"]
+    with pytest.raises(ValueError, match="相机策略"):
+        settings(repository, checkpoint, camera_policy="kill-anything").plan()
+    (repository / "deploy/fr3_sharpa_runtime/camera_startup.py").unlink()
+    with pytest.raises(ValueError, match="相机闸门"):
+        settings(repository, checkpoint).plan()
 
 
 def test_names_never_determine_semantics_and_binding_tracks_content(checkpoint, tmp_path):
@@ -263,6 +277,25 @@ def test_each_restart_includes_up_and_new_initialization(repository, checkpoint,
         assert controller.plan["settings"]["initialization"] == initialization
     assert controller.commands.count("hardware") == 2
     assert controller.commands.count("runtime") == 2
+
+
+def test_camera_startup_failure_never_spawns_execution_worker(repository, checkpoint, tmp_path):
+    controller = FakeDeployment(repository)
+    values = settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__
+    controller.ready(values)
+    original = controller._command
+    def camera_failure(command, name, env, **kwargs):
+        if name == "hardware":
+            controller.commands.append(name)
+            raise RuntimeError("camera readiness failed")
+        return original(command, name, env, **kwargs)
+    controller._command = camera_failure
+    controller.start(values)
+    controller.thread.join(timeout=5)
+    assert controller.state["phase"] == "failed"
+    assert "camera readiness failed" in controller.state["message"]
+    assert "runtime" not in controller.commands
+    assert "hardware_cleanup" in controller.commands
 
 
 def test_cancel_during_model_start_never_launches_motion(repository, checkpoint, tmp_path):
