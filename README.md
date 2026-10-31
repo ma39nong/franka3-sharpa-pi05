@@ -1,5 +1,7 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
+现场操作请先看 [部署 UI 使用手册](部署UI使用手册.md)，涵盖首次配置、模式选择、独立启停、录制回放与故障排查。
+
 日常启动统一看 [部署启动指令](部署启动指令.md)。需要选择权重、模式、Home/Current和自动录制时，运行 `bash deploy/fr3_sharpa_control/ui.sh`，操作说明见 [部署控制台](deploy/fr3_sharpa_control/README.md)。
 
 

@@ -1,5 +1,7 @@
 # 统一部署控制台与 Chunk 录制
 
+面向现场操作人员的逐步说明见 [部署 UI 使用手册](../../部署UI使用手册.md)。本页保留模型契约、模式实现与维护细节。
+
 ## 工作机启动
 
 推荐在已配置工作机环境的 main 部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
@@ -124,7 +126,7 @@ bash deploy/fr3_sharpa_control/record_execute.sh -- \
   --execute --enable-hardware --initialization current --speed slow --num-chunks 0
 ```
 
-`SHARPA_RECORDINGS_DIR` 或包装的 `--output` 可指定归档父目录；仍自动日期和编号。不要再额外启动旧 `record_rosbag.sh`，也不要在执行命令后接 `| tee`。旧录制脚本仅为历史兼容，新手册使用统一包装。
+`SHARPA_RECORDINGS_DIR` 或包装的 `--output` 可指定归档父目录；仍按本机日期和小时.分钟命名。不要再额外启动旧 `record_rosbag.sh`，也不要在执行命令后接 `| tee`。旧录制脚本仅为历史兼容，新手册使用统一包装。
 
 ## 依赖与验证边界
 
