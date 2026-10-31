@@ -4,8 +4,12 @@
 import argparse
 from collections import deque
 import json
+import os
+import sys
 import time
 
+from .camera_alignment_recovery import DEFAULT_RECOVERY_SEC
+from .camera_alignment_recovery import AlignmentRecovery
 from .camera_startup import camera_contract
 from .ros_observation import TOPICS
 from .ros_observation import ObservationProvider
@@ -19,7 +23,8 @@ def check_serials(expected, observed):
             raise ValueError(f"{name} 实际序列号{observed.get(name)!r}与配置{entry['serial_number']!r}不符；禁止Home")
 
 
-def probe(path, timeout=45, *, watch=False):
+def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOVERY_SEC):
+    recovery = AlignmentRecovery(alignment_recovery_sec)
     from orbbec_camera_msgs.srv import GetDeviceInfo
     import rclpy
     from rclpy.qos import DurabilityPolicy
@@ -67,6 +72,7 @@ def probe(path, timeout=45, *, watch=False):
     ready = False
     last_report = 0.0
     publisher_ids = None
+    last_warning = None
     try:
         while (watch and ready) or time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
@@ -123,9 +129,38 @@ def probe(path, timeout=45, *, watch=False):
                 )
             except ValueError as error:
                 if ready:
-                    raise RuntimeError("运行中相机时间戳或出图中断：" + str(error)) from error
+                    try:
+                        diagnostic = recovery.wait(
+                            error,
+                            provider.latest,
+                            now_ros=node.get_clock().now().nanoseconds,
+                            now_mono=time.monotonic_ns(),
+                        )
+                    except RuntimeError:
+                        print(
+                            json.dumps({"event": "camera_alignment_failed", "reason": str(error)}, ensure_ascii=False),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        raise
+                    now = time.monotonic()
+                    if last_warning is None or now - last_warning >= 0.1:
+                        diagnostic["history"] = {
+                            key: {
+                                "count": len(history),
+                                "oldest_stamp_ns": min((stamp_ns(e[0]) for e in history), default=None),
+                                "newest_stamp_ns": max((stamp_ns(e[0]) for e in history), default=None),
+                            }
+                            for key, history in provider.histories.items()
+                        }
+                        print(json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr, flush=True)
+                        last_warning = now
                 detail = str(error)
                 continue
+            recovered = recovery.recovered(time.monotonic_ns())
+            if recovered is not None:
+                print(json.dumps(recovered), file=sys.stderr, flush=True)
+                last_warning = None
             report = {
                 "status": "PASS",
                 "checked_monotonic_ns": time.monotonic_ns(),
@@ -135,6 +170,7 @@ def probe(path, timeout=45, *, watch=False):
                 "alignment": alignment,
                 "source_stamps_ns": {key: stamp_ns(value[0]) for key, value in selected.items()},
                 "command_publishers_created": 0,
+                "alignment_recovery_sec": recovery.seconds,
             }
             if not watch:
                 return report
@@ -154,10 +190,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config")
     parser.add_argument(
-        "--watch", action="store_true", help="Monitor until interrupted; any later camera failure exits"
+        "--watch", action="store_true", help="Monitor continuously; bounded retry for fresh cross-camera misalignment"
+    )
+    parser.add_argument(
+        "--alignment-recovery-sec",
+        type=float,
+        default=os.environ.get("SHARPA_CAMERA_ALIGNMENT_RECOVERY_SEC", str(DEFAULT_RECOVERY_SEC)),
+        help="Fresh alignment retry window in [0, 0.5] seconds (default 0.3); 0 fails immediately",
     )
     parser.add_argument("--check", action="store_true", help="Import message types only; no ROS node or devices")
     args = parser.parse_args()
+    try:
+        AlignmentRecovery(args.alignment_recovery_sec)
+    except ValueError as error:
+        parser.error(str(error))
     if args.check:
         from orbbec_camera_msgs.srv import GetDeviceInfo
         from sensor_msgs.msg import Image
@@ -168,7 +214,7 @@ def main():
         print(json.dumps({"status": "PASS", "scope": "camera probe dependencies; no ROS node"}))
         return
     try:
-        result = probe(args.config, watch=args.watch)
+        result = probe(args.config, watch=args.watch, alignment_recovery_sec=args.alignment_recovery_sec)
         if result is not None:
             print(json.dumps(result, ensure_ascii=False))
     except KeyboardInterrupt:
