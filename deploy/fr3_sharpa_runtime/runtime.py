@@ -58,6 +58,11 @@ class SharpaRuntime:
         if self.train_rtc:
             from .train_rtc_contract import require_train_capabilities
             require_train_capabilities(metadata)
+            if self.paper_rtc:
+                from .train_rtc_contract import require_train_paper_capabilities
+                require_train_paper_capabilities(metadata)
+            elif metadata.get("paper_algorithm"):
+                raise ValueError("Trained Paper service requires Train Paper RTC")
         else:
             from .rtc_stream import require_capabilities
             require_capabilities(metadata)
@@ -68,7 +73,7 @@ class SharpaRuntime:
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=1) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         config.validate_policy_metadata(metadata)
-        if self.paper_rtc:
+        if self.paper_rtc and not self.train_rtc:
             from .rtc_stream import require_paper_capabilities
             require_paper_capabilities(metadata)
         if require_rtc:
@@ -96,7 +101,7 @@ class SharpaRuntime:
             config.validate_policy_metadata(metadata)
             if self.train_rtc:
                 self._require_rtc(metadata)
-            if self.paper_rtc:
+            if self.paper_rtc and not self.train_rtc:
                 from .rtc_stream import require_paper_capabilities
                 require_paper_capabilities(metadata)
             timing["metadata_validation_ms"] = (time.monotonic_ns() - validation_start) / 1e6

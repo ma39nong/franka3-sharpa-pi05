@@ -4,7 +4,7 @@
 
 ## 工作机启动
 
-推荐在已配置工作机环境的 main 部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
+推荐在已配置工作机环境、包含所需模式的部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
 
 ```bash
 bash deploy/fr3_sharpa_control/ui.sh
@@ -12,7 +12,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
-1. 选择本机部署仓库和checkpoint目录，在主界面按训练配置选择模型动作类型：Absolute，或双臂Delta／双手Absolute，再点击识别权重，选择串行／RTC／Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
+1. 选择本机部署仓库和checkpoint目录，优先自动识别动作类型；没有训练证据时按训练配置选择Absolute或双臂Delta／双手Absolute。点击识别权重，按可用范围选择串行／RTC／Paper RTC／Train RTC／Train Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
 2. 点击**启动推理**。只检查权重并加载GPU、预热、核对服务身份，不启动硬件、相机、录制或机器人执行；即使选择了Home或录制，也不需要此时提供Home配置或ROS环境。推理端预热期间可以点**停止推理**取消。
 3. 等推理端显示就绪，选择Current/Home、速度、步数、轮数、录制和输出位置，点击**核对执行配置**。
 4. 点击**启动执行**。必须已有与当前仓库、提交、权重和模式匹配的已预热推理端；执行入口只检查/复用该服务，不会隐式加载或切换模型。每次执行都自动运行硬件 `up`，然后按配置开始执行。
@@ -181,3 +181,26 @@ bash deploy/fr3_sharpa_control/record_session.sh check
 新模式“Train RTC · 训练前缀条件”使用训练时 RTC 的硬前缀采样。选择完整 checkpoint，并在“训练记录”提供该次训练保存的运行 JSON；或把记录复制为 checkpoint 根目录的 `train_rtc_record.json`。核对记录中的 `rtc_max_delay > 0`、模型结构和统计后，界面才开放该模式。Paper/LoRA 权重不开放此入口。
 
 选择 Train RTC 后重新启动推理服务；命令对应 `--enable-train-rtc`，执行端对应 `--broker-mode rtc --train-rtc --speed fast`。界面设置承诺前缀预算为 `min(25, rtc_max_delay)`，沿用 current/Home、录制、停止和旧块播放机制。实际推理/安装超过预算则停止。服务必须完成全部静态前缀长度的预热才能连接执行流程。工作机 GPU 与实机验证仍待完成；命令及数据坐标约束见根 README 的 Train RTC 部署模式。
+
+
+## Train RTC 与 Train Paper RTC（train-rtc 分支）
+
+| 选项 | 训练权重 | 推理机制 |
+| --- | --- | --- |
+| RTC | 普通全量 Absolute／Delta | 推理时前缀引导 |
+| Paper RTC | 普通 Paper Delta | 逐时间步归一化、相关噪声及推理时前缀引导 |
+| Train RTC | `rtc_max_delay > 0` 的普通全量权重 | 训练前缀条件，采样全过程固定已承诺前缀 |
+| Train Paper RTC | Paper 与 RTC 联合训练权重 | Paper 归一化与相关噪声，加训练前缀条件 |
+
+本分支已合并 `codex/camera-exclusive-startup`。两份已审查的7999分别为：
+
+- `…tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1031_105906_trainRTC/7999`：选择 **Train RTC**。
+- `…tairan_tairan_sharpa_no_block_one_delta_paper_t3_s42_run01_rtc_d10_1031_151412/7999`：选择 **Train Paper RTC**，`timestamp_zscore_arms`、β=0.5。
+
+在UI中选择实际本机checkpoint目录，动作类型保留自动，点击识别权重。内置的精简训练证据位于 `../fr3_sharpa_runtime/training_records/`，通过Orbax manifest、参数元数据和统计文件摘要绑定这两份权重；改目录名不影响识别，其他权重不会仅凭相同统计或“rtc”目录名套用记录。完整复制 `params/` 和 `assets/`；仓库不包含权重。
+
+其他Train RTC权重需在“训练证据”选择对应训练JSON，或在checkpoint根目录放 `train_rtc_record.json`。命令行还可通过 `SHARPA_TRAIN_RTC_RECORD` 指定。联合训练记录中的Paper模式、β、std floor、资产摘要必须与checkpoint一致。识别后仅提供普通串行和对应的训练RTC模式；不会将联合权重误送给普通RTC／Paper RTC。
+
+两份权重均为30Hz、58D、50步，训练最大延迟10步。RTC速度固定Fast；界面的15是**重规划触发节点**，不是训练延迟。当前训练RTC调度固定承诺10步，约333ms；推理返回超出已承诺前缀窗口会停止执行。支持的前缀0..10均在模型服务启动时实际预热；联合模式还检查50／35／1步短参考，预热成功才允许执行。
+
+启动顺序保持“启动推理 → 等待就绪 → 核对执行配置 → 启动执行”。执行自动相机接管与硬件up，Current／Home、录制和停止清理沿用原流程。切换RTC类型需停止旧推理并重新启动。相机SDK镜像和ROS消息overlay仍需按[相机SDK说明](../fr3_sharpa_runtime/CAMERA_SDK.md)在工作机配置。

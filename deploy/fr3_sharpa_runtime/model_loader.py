@@ -39,10 +39,10 @@ def checkpoint_contract():
     stats = json.loads(config.NORM_STATS.read_text())["norm_stats"]
     validate_stats(stats, paper_algorithm=algorithm)
     from .train_rtc_contract import inspect_train_rtc
-    trained = inspect_train_rtc(config.NORM_STATS, checkpoint)
-    if trained and (algorithm or config.MODEL_PROFILE.finetune_mode != "full"
+    trained = inspect_train_rtc(config.NORM_STATS, checkpoint, paper_algorithm=algorithm)
+    if trained and (config.MODEL_PROFILE.finetune_mode != "full"
                     or trained["semantics"] != ("delta" if config.MODEL_PROFILE.extra_delta_transform else "absolute")):
-        raise ValueError("Train RTC record conflicts with Paper/profile/action semantics")
+        raise ValueError("Train RTC record conflicts with profile/action semantics")
     return {
         "train_rtc": trained,
         "paper_algorithm": algorithm,
@@ -91,7 +91,13 @@ def build_config():
         from .paper_model import PaperPi0Config, PaperSharpaData
         from dataclasses import fields
         algorithm = metadata["paper_algorithm"]
-        model = PaperPi0Config(**{field.name: getattr(model, field.name) for field in fields(Pi0Config)},
+        paper_class = PaperPi0Config
+        paper_options = {}
+        if metadata["train_rtc"]:
+            from .train_paper_rtc_model import TrainPaperRTCPi0Config
+            paper_class = TrainPaperRTCPi0Config
+            paper_options["rtc_max_delay"] = metadata["train_rtc"]["max_delay"]
+        model = paper_class(**paper_options, **{field.name: getattr(model, field.name) for field in fields(Pi0Config)},
             paper_asset_dir=str(config.NORM_STATS.parent), paper_mode=algorithm["mode"],
             paper_beta=algorithm["beta"], paper_std_floor=algorithm["std_floor"],
             paper_asset_sha256=algorithm["bundle_sha256"])

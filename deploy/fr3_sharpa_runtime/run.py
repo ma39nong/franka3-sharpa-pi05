@@ -407,6 +407,7 @@ def main() -> None:
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
     parser.add_argument("--broker-mode", choices=("serial", "rtc"), default="serial",
                         help="serial keeps existing behavior; rtc overlaps inference and accepted motion")
+    parser.add_argument("--train-paper-rtc", action="store_true", help="Require trained Paper hard-prefix service")
     parser.add_argument("--train-rtc", action="store_true", help="Require trained hard-prefix RTC service")
     parser.add_argument("--paper-rtc", action="store_true", help="Require a warmed Paper RTC short-reference adapter")
     parser.add_argument("--rtc-initial-delay-steps", type=int, default=5)
@@ -436,6 +437,10 @@ def main() -> None:
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
+    if args.train_paper_rtc:
+        if args.train_rtc or args.paper_rtc:
+            parser.error("Use --train-paper-rtc alone")
+        args.train_rtc = args.paper_rtc = True
     if not np.isfinite(args.prediction_clip_rad) or args.prediction_clip_rad < 0:
         parser.error("--prediction-clip-rad must be finite and nonnegative")
     if args.prepare_policy_first and args.sharpa_backend == "sdk_direct":
@@ -451,7 +456,7 @@ def main() -> None:
         parser.error("--execute-steps must be in [1, 50]")
     if args.sharpa_backend == "litchibot" and args.execute_steps != 50:
         parser.error("legacy litchibot requires --execute-steps 50; prefix execution uses sdk_direct")
-    if args.train_rtc and (args.paper_rtc or args.broker_mode != "rtc"):
+    if args.train_rtc and ((args.paper_rtc and not args.train_paper_rtc) or args.broker_mode != "rtc"):
         parser.error("--train-rtc requires --broker-mode rtc and excludes --paper-rtc")
     if args.paper_rtc and args.broker_mode != "rtc":
         parser.error("--paper-rtc requires --broker-mode rtc")
@@ -474,7 +479,10 @@ def main() -> None:
     args.execute_speed_scale = profile.execute_speed_scale
     if args.train_rtc:
         from .model_loader import checkpoint_contract
-        trained_contract = checkpoint_contract().get("train_rtc")
+        trained_metadata = checkpoint_contract()
+        trained_contract = trained_metadata.get("train_rtc")
+        if bool(trained_metadata["paper_algorithm"]) != args.train_paper_rtc:
+            parser.error("Use --train-paper-rtc for trained Paper, --train-rtc for ordinary trained weights")
         if not trained_contract:
             parser.error("Train RTC requires matching training JSON")
         if not 1 <= args.rtc_initial_delay_steps <= min(25, trained_contract["max_delay"]):

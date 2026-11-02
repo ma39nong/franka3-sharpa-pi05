@@ -92,10 +92,12 @@ def prepare_policy_validation():
     """
     global _validation_cache
     checkpoint = require_checkpoint()
+    from .train_rtc_contract import resolve_training_record
+    record = resolve_training_record(checkpoint)
     paths = (checkpoint / "params/manifest.ocdbt", checkpoint / "params/_METADATA", NORM_STATS,
              NORM_STATS.parent / "delta_paper.json", NORM_STATS.parent / "delta_paper.npz",
              NORM_STATS.parent / "norm_metadata.json",
-             Path(os.environ.get("SHARPA_TRAIN_RTC_RECORD", str(checkpoint / "train_rtc_record.json"))))
+             record or checkpoint / "train_rtc_record.json")
     context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[-1]))
     with _validation_lock:
         signature = _asset_signature(paths)
