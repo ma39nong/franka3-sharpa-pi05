@@ -137,6 +137,56 @@ def test_only_one_handle_cannot_claim_both_hands_disabled():
     assert not report["hands"]["left"]["confirmed_disabled"]
 
 
+def test_missing_vendor_handle_fails_promptly_without_retry_or_reconnect():
+    class MissingHandle(Hand):
+        _wave = None
+
+        def connect(self):
+            pytest.fail("Never reconnect during shutdown")
+
+        def read_enable_state(self):
+            pytest.fail("Never read an absent SDK handle")
+
+    left, right = Hand(), MissingHandle()
+    report = disable_and_confirm({"left": left, "right": right}, settings(), emit=lambda message: None)
+    assert report["status"] == "FAIL"
+    assert report["hands"]["left"]["confirmed_disabled"]
+    assert report["hands"]["right"]["status"] == "NO_SDK_HANDLE"
+    assert report["hands"]["right"]["attempts"] == 0
+    assert not report["hands"]["right"]["confirmed_disabled"]
+    assert right.requests == 0
+    assert right.disconnected.is_set()
+
+
+def test_interrupt_during_left_connect_keeps_partial_handle_and_right_unstarted():
+    from deploy.fr3_sharpa_runtime.sdk_direct import DirectSdkConfig
+    from deploy.fr3_sharpa_runtime.sdk_direct import SharpaSdkDirectExecutor
+
+    class InterruptedHand(Hand):
+        def connect(self):
+            raise KeyboardInterrupt
+
+    created = []
+    left = InterruptedHand()
+
+    def factory(side, serial):
+        created.append(side)
+        assert side == "left"
+        return left
+
+    executor = SharpaSdkDirectExecutor(DirectSdkConfig(), factory)
+    with pytest.raises(KeyboardInterrupt):
+        executor.connect()
+    assert created == ["left"]
+    report = executor.shutdown_confirmed()
+    assert left.requests == 1
+    assert left.disconnected.is_set()
+    assert report["hands"]["left"]["confirmed_disabled"]
+    assert report["hands"]["right"]["status"] == "NOT_CONNECTED"
+    assert report["hands"]["right"]["attempts"] == 0
+    assert report["status"] != "PASS"  # No physical right-hand readback occurred.
+
+
 def test_installed_hal_read_adapter_does_not_call_connect():
     class ExistingHandle:
         def connect(self):

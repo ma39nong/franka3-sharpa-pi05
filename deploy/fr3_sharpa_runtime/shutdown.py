@@ -147,6 +147,12 @@ def disable_and_confirm(hands, settings=None, *, emit=stderr):
 
     def disable(side, hand):
         try:
+            # The installed Sharpa HAL creates its _wave handle during connect.
+            # Retrying a missing handle cannot succeed without reconnecting,
+            # which is deliberately forbidden during shutdown.
+            if hasattr(hand, "_wave") and hand._wave is None:  # noqa: SLF001
+                update(side, status="NO_SDK_HANDLE", last_error="SDK handle unavailable; enable state cannot be read")
+                return
             for attempt in range(1, settings.max_attempts + 1):
                 if cancel.is_set() or time.monotonic() >= deadline:
                     break
@@ -216,7 +222,7 @@ def disable_and_confirm(hands, settings=None, *, emit=stderr):
     errors = [
         f"{side}: {state}"
         for side, state in result.items()
-        if state["status"] == "UNCONFIRMED" or state["disconnect_error"]
+        if state["status"] in ("UNCONFIRMED", "NO_SDK_HANDLE") or state["disconnect_error"]
     ]
     status = "PASS" if confirmed and not errors else "FAIL" if connected else "NOT_CONNECTED"
     for side, state in result.items():
@@ -227,6 +233,8 @@ def disable_and_confirm(hands, settings=None, *, emit=stderr):
             )
         if state["status"] == "NOT_CONNECTED":
             emit(f"[sharpa-shutdown] {side}: 没有持有 SDK 连接, 无法读回确认该手状态; 不会重新连接或使能。")
+        if state["status"] == "NO_SDK_HANDLE":
+            emit(f"[sharpa-shutdown] ERROR {side}: SDK 句柄不存在, 无法确认失能; 不执行空句柄重试, 不会重新连接或使能。")
         if state["disconnect_error"]:
             emit(f"[sharpa-shutdown] ERROR {side}: SDK disconnect failed: {state['disconnect_error']}")
     emit(

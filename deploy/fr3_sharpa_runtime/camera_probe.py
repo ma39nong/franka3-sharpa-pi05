@@ -10,10 +10,13 @@ import time
 
 from .camera_alignment_recovery import DEFAULT_RECOVERY_SEC
 from .camera_alignment_recovery import AlignmentRecovery
+from .camera_clock import CAMERA_STARTUP_TIMEOUT_SEC
+from .camera_clock import SourceClockSettling
 from .camera_startup import camera_contract
 from .ros_observation import TOPICS
 from .ros_observation import ObservationProvider
 from .ros_observation import select_aligned_observation
+from .ros_observation import spin_camera_updates
 from .ros_observation import stamp_ns
 
 
@@ -23,7 +26,7 @@ def check_serials(expected, observed):
             raise ValueError(f"{name} 实际序列号{observed.get(name)!r}与配置{entry['serial_number']!r}不符；禁止Home")
 
 
-def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOVERY_SEC):
+def probe(path, timeout=CAMERA_STARTUP_TIMEOUT_SEC, *, watch=False, alignment_recovery_sec=DEFAULT_RECOVERY_SEC):
     recovery = AlignmentRecovery(alignment_recovery_sec)
     from orbbec_camera_msgs.srv import GetDeviceInfo
     import rclpy
@@ -36,6 +39,7 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
     expected = camera_contract(path)
     rclpy.init()
     node = rclpy.create_node("sharpa_deployment_camera_gate")
+    clock_settling = SourceClockSettling(expected, time.monotonic_ns())
     # Reuse the exact runtime freshness/history/stability rules, but require cameras only.
     provider = ObservationProvider.__new__(ObservationProvider)
     provider.latest = {}
@@ -46,7 +50,7 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
     issues, serials = {}, {}
     qos = QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
-        depth=5,
+        depth=1,
         reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )
@@ -63,6 +67,8 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
             return
         issues.pop(key, None)
         provider.remember(key, message)
+        clock_settling.observe(key, stamp_ns(message), now_ros=node.get_clock().now().nanoseconds,
+                              now_mono=time.monotonic_ns())
 
     subscriptions = [
         node.create_subscription(Image, TOPICS[key], lambda msg, key=key: remember(key, msg), qos) for key in expected
@@ -73,9 +79,12 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
     last_report = 0.0
     publisher_ids = None
     last_warning = None
+    next_clock_report = 0.0
     try:
         while (watch and ready) or time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.05)
+            # Process all three streams before testing ages, rather than
+            # inspecting an old head entry after just one wrist callback.
+            spin_camera_updates(rclpy, node)
             services = node.get_service_names_and_types()
             for key in expected:
                 matches = [
@@ -137,8 +146,13 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
                             now_mono=time.monotonic_ns(),
                         )
                     except RuntimeError:
+                        now_ros, now_mono = node.get_clock().now().nanoseconds, time.monotonic_ns()
                         print(
-                            json.dumps({"event": "camera_alignment_failed", "reason": str(error)}, ensure_ascii=False),
+                            json.dumps({"event": "camera_alignment_failed", "reason": str(error),
+                                        "topics": {key: {"stamp_ns": stamp_ns(message),
+                                            "source_age_ms": (now_ros - stamp_ns(message)) / 1e6,
+                                            "received_age_ms": (now_mono - received) / 1e6}
+                                            for key, (message, received) in provider.latest.items()}}, ensure_ascii=False),
                             file=sys.stderr,
                             flush=True,
                         )
@@ -161,6 +175,12 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
             if recovered is not None:
                 print(json.dumps(recovered), file=sys.stderr, flush=True)
                 last_warning = None
+            if not ready and not clock_settling.ready(time.monotonic_ns()):
+                detail = "等待源时间戳启动收敛：至少观察30秒，并连续10秒新鲜、递增"
+                if time.monotonic() >= next_clock_report:
+                    print(json.dumps(clock_settling.diagnostic(time.monotonic_ns())), file=sys.stderr, flush=True)
+                    next_clock_report = time.monotonic() + 1.0
+                continue
             report = {
                 "status": "PASS",
                 "checked_monotonic_ns": time.monotonic_ns(),
@@ -171,6 +191,7 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
                 "source_stamps_ns": {key: stamp_ns(value[0]) for key, value in selected.items()},
                 "command_publishers_created": 0,
                 "alignment_recovery_sec": recovery.seconds,
+                "source_clock_settling": clock_settling.diagnostic(time.monotonic_ns()),
             }
             if not watch:
                 return report
@@ -178,12 +199,14 @@ def probe(path, timeout=45, *, watch=False, alignment_recovery_sec=DEFAULT_RECOV
                 print(json.dumps(report, ensure_ascii=False), flush=True)
                 ready = True
                 last_report = time.monotonic()
-        raise TimeoutError("相机启动验证超时：" + detail + "；未允许连接执行端或Home")
+        raise TimeoutError("相机启动验证超时：" + detail + "；未允许连接执行端或Home；"
+                           + json.dumps(clock_settling.diagnostic(time.monotonic_ns()), ensure_ascii=False))
     finally:
         for subscription in subscriptions:
             node.destroy_subscription(subscription)
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 def main():

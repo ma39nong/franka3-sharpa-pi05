@@ -43,7 +43,7 @@ def test_only_camera_subscriptions_use_reliable_qos(monkeypatch):
         destroy_node=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "rclpy", SimpleNamespace(
-        init=lambda: None, create_node=lambda _: node, shutdown=lambda: None,
+        init=lambda: None, create_node=lambda _: node, shutdown=lambda: None, ok=lambda: True,
     ))
     monkeypatch.setitem(sys.modules, "rclpy.qos", SimpleNamespace(
         qos_profile_sensor_data=sensor_qos, QoSProfile=lambda **kwargs: kwargs,
@@ -56,7 +56,7 @@ def test_only_camera_subscriptions_use_reliable_qos(monkeypatch):
         snapshot(timeout_s=0)
     for key, topic in TOPICS.items():
         if key.startswith("cam"):
-            assert subscribed[topic] == dict(history="KEEP_LAST", depth=5,
+            assert subscribed[topic] == dict(history="KEEP_LAST", depth=1,
                                              reliability="RELIABLE", durability="VOLATILE")
         else:
             assert subscribed[topic] is sensor_qos
@@ -122,6 +122,71 @@ def test_persistent_provider_reuses_node_and_closes_only_at_exit(monkeypatch):
         provider.snapshot()
 
 
+def test_close_after_ros_signal_shutdown_does_not_shutdown_twice(monkeypatch):
+    probe, _, _ = _timing_probe(monkeypatch, 90, recover=True)
+    import sys
+
+    ros = sys.modules["rclpy"]
+    calls = []
+    provider = probe.ObservationProvider()
+    monkeypatch.setattr(ros, "ok", lambda: False)
+    monkeypatch.setattr(ros, "shutdown", lambda: calls.append("shutdown"))
+    provider.node.destroy_node = lambda: calls.append("destroy")
+    provider.close()
+    provider.close()
+    assert calls == ["destroy"]
+
+
+def test_camera_gate_consumes_queued_head_before_rejecting_old_latest():
+    from collections import deque
+
+    from deploy.fr3_sharpa_runtime.ros_observation import select_aligned_observation
+    from deploy.fr3_sharpa_runtime.ros_observation import spin_camera_updates
+
+    now = 10_000_000_000
+
+    def entry(age_ms):
+        stamp = now - int(age_ms * 1e6)
+        return SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(
+            sec=stamp // 10**9, nanosec=stamp % 10**9))), now
+
+    latest = {"cam0": entry(204), "cam1": entry(10), "cam2": entry(20)}
+    histories = {key: deque([value]) for key, value in latest.items()}
+    pending = deque([("cam1", entry(5)), ("cam0", entry(30))])
+    calls = []
+
+    def spin(node, *, timeout_sec):
+        calls.append(timeout_sec)
+        if pending:
+            key, value = pending.popleft()
+            latest[key] = value
+            histories[key].append(value)
+
+    with pytest.raises(ValueError, match="Stale/future"):
+        select_aligned_observation(latest, histories, now_ros=now, now_mono=now)
+    spin_camera_updates(SimpleNamespace(spin_once=spin), object())
+    selected, mode = select_aligned_observation(latest, histories, now_ros=now, now_mono=now)
+    assert mode == "latest"
+    assert selected["cam0"] is histories["cam0"][-1]
+    assert calls[0] == 0.05
+    assert all(timeout == 0 for timeout in calls[1:])
+    assert 2 <= len(calls) <= 17
+
+
+def test_camera_gate_drain_is_bounded_and_does_not_cure_real_staleness():
+    from deploy.fr3_sharpa_runtime.ros_observation import select_aligned_observation
+    from deploy.fr3_sharpa_runtime.ros_observation import spin_camera_updates
+
+    calls = []
+    ros = SimpleNamespace(spin_once=lambda node, **kwargs: calls.append(kwargs))
+    spin_camera_updates(ros, object())
+    assert 1 <= len(calls) <= 17
+    stale = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=9, nanosec=0)))
+    with pytest.raises(ValueError, match="Stale/future"):
+        select_aligned_observation({"cam0": (stale, 10**10)}, {"cam0": []},
+                                   now_ros=10**10, now_mono=10**10)
+
+
 def _timing_probe(monkeypatch, first_age_ms, *, recover):
     import sys
     from deploy.fr3_sharpa_runtime import ros_observation as probe
@@ -147,7 +212,7 @@ def _timing_probe(monkeypatch, first_age_ms, *, recover):
     monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(probe.time, "monotonic_ns", lambda: int(clock[0]*1e9))
     monkeypatch.setitem(sys.modules, "rclpy", SimpleNamespace(
-        init=lambda: None, create_node=lambda _: node, shutdown=lambda: None, spin_once=spin))
+        init=lambda: None, create_node=lambda _: node, shutdown=lambda: None, spin_once=spin, ok=lambda: True))
     monkeypatch.setitem(sys.modules, "rclpy.qos", SimpleNamespace(
         qos_profile_sensor_data=object(), QoSProfile=lambda **kwargs: kwargs,
         HistoryPolicy=SimpleNamespace(KEEP_LAST=1), ReliabilityPolicy=SimpleNamespace(RELIABLE=1),

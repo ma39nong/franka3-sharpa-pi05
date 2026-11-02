@@ -10,6 +10,8 @@ import signal
 import subprocess
 import time
 
+from .camera_clock import CAMERA_PROCESS_TIMEOUT_SEC
+
 
 class CameraMonitor:
     def __init__(self, config):
@@ -42,7 +44,7 @@ class CameraMonitor:
             stdout=subprocess.PIPE,
             start_new_session=True,
         )
-        deadline = time.monotonic() + 55
+        deadline = time.monotonic() + CAMERA_PROCESS_TIMEOUT_SEC
         try:
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:

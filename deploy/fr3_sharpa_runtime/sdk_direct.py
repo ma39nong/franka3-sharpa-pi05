@@ -202,8 +202,10 @@ class SharpaSdkDirectExecutor:
             from litchi_hardware.core.types import HandSide
             left_side, right_side = HandSide.LEFT, HandSide.RIGHT
         self.left = self._factory(left_side, self.cfg.left_serial)
-        self.right = self._factory(right_side, self.cfg.right_serial)
         self.left.connect()
+        # Do not expose an unstarted right-hand object as an owned connection
+        # if startup is interrupted while connecting the left hand.
+        self.right = self._factory(right_side, self.cfg.right_serial)
         try:
             self.right.connect()
         except Exception:

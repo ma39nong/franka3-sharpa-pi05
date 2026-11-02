@@ -192,8 +192,9 @@ class CameraStartup:
         raise RuntimeError("等待相机设备释放超时；占用信息：" + json.dumps(owners, ensure_ascii=False))
 
     def probe(self):
+        from .camera_clock import CAMERA_PROCESS_TIMEOUT_SEC
         script = Path(__file__).with_name("camera_probe.sh")
-        output = self.command(["bash", str(script), str(self.config)], timeout=55)
+        output = self.command(["bash", str(script), str(self.config)], timeout=CAMERA_PROCESS_TIMEOUT_SEC)
         report = json.loads(output.splitlines()[-1])
         if report.get("status") != "PASS":
             raise RuntimeError("三路相机启动验证失败：" + output)

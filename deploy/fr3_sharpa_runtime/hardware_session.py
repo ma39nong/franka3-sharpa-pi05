@@ -30,6 +30,13 @@ class HardwareSession:
             "-f",
             self.overlay,
         ]
+        for variable, overlay in (("SHARPA_CAMERA_CAM1_PARAMS", "compose.camera-profile.yaml"),
+                                  ("SHARPA_CAMERA_CAM0_PARAMS", "compose.camera-head.yaml")):
+            profile = os.environ.get(variable)
+            if profile:
+                if not Path(profile).is_absolute() or not Path(profile).is_file():
+                    raise ValueError(f"{variable} must be an existing absolute file path")
+                self.compose += ["-f", str(root / "deploy/fr3_sharpa_runtime" / overlay)]
         self.owned = self.inventory()
 
     def inventory(self):

@@ -1,0 +1,8 @@
+# Optional deployment-only right-wrist transport override; source repo is untouched.
+services:
+  openpi-cameras:
+    volumes:
+      - type: bind
+        source: ${SHARPA_CAMERA_CAM1_PARAMS:?Set an existing right-wrist parameter file}
+        target: /workspace/franka_upper_body_teleop/ros_ws/src/teleop_camera_bringup/config/camera_cam1_global_params.yaml
+        read_only: true
