@@ -12,6 +12,7 @@ import time
 
 from .plan import DeploymentSettings, allocate_run, plan_environment
 from .recording import mark_stop, rpc, write_json
+from deploy.fr3_sharpa_runtime.camera_lease import CameraLease, LEASE_ENV
 
 
 class Cancelled(Exception):
@@ -197,7 +198,8 @@ class DeploymentController:
         try:
             process = subprocess.Popen(command, cwd=self.plan["settings"]["repository"], env=env,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                                       start_new_session=True)
+                                       start_new_session=True,
+                                       pass_fds=(int(env[LEASE_ENV]),) if env.get(LEASE_ENV) else ())
         finally:
             output.close()  # Child retains its own regular-file descriptor.
         return process
@@ -390,6 +392,7 @@ class DeploymentController:
         env = plan_environment(self.plan)
         directory, failure = self.directory, None
         hardware_up = runtime_started = cleanup_verified = False
+        camera_lease = None
         trace = directory / "logs"
         env["SHARPA_SHUTDOWN_REPORT_DIR"] = str(trace)
         if self.plan["settings"]["record"]:
@@ -399,9 +402,11 @@ class DeploymentController:
             self._command(self.plan["check"], "parameter_check", env)
             if self.plan["settings"]["record"]:
                 self._command(["bash", "deploy/fr3_sharpa_control/record_session.sh", "check"], "recording_check", env)
-            self.update("hardware_up", "正在确保硬件服务已启动（每次重新执行都包含up）")
+            camera_lease = CameraLease().acquire()
+            env[LEASE_ENV] = str(camera_lease.fd)
+            self.update("hardware_up", "正在按相机策略核对占用、等待释放并验证三路图像；通过后才启动执行端")
             hardware_up = True  # Includes partially successful compose up.
-            self._command(self.plan["hardware"], "hardware", env)
+            self._command(self.plan["hardware"], "hardware", env, timeout=180)
             self._require_model(self.plan, env)
             if self.plan["settings"]["record"]:
                 self.update("recording_ready", "正在准备录制订阅；Home/prepare期间不写包")
@@ -475,6 +480,8 @@ class DeploymentController:
             (self.socket.parent / "stop-recording").unlink(missing_ok=True)
             with suppress(OSError):
                 self.socket.parent.rmdir()
+            if camera_lease is not None:
+                camera_lease.close()
             self.update("failed" if failure else "stopped" if self.cancel.is_set() else "finished",
                         failure or "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动", running=False)
 

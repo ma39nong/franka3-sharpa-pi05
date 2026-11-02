@@ -9,7 +9,11 @@ COMPOSE=(docker compose --profile openpi-hardware --project-directory "$SHARPA_G
   -f "$SHARPA_ROOT/deploy/fr3_sharpa_runtime/compose.hardware.yaml")
 case "${1:-check}" in
   check) "${COMPOSE[@]}" config --quiet ;;
-  up) "${COMPOSE[@]}" up -d franka-control teleop-control openpi-cameras ;;
+  camera-check) sharpa_python -m deploy.fr3_sharpa_runtime.camera_startup --inspect ;;
+  up)
+    shift
+    sharpa_python -m deploy.fr3_sharpa_runtime.camera_startup "$@"
+    ;;
   stop) sharpa_python -m deploy.fr3_sharpa_runtime.hardware_session stop ;;
-  *) echo 'Usage: hardware.sh [check|up|stop]' >&2; exit 2 ;;
+  *) echo 'Usage: hardware.sh [check|camera-check|up [--exclusive]|stop]' >&2; exit 2 ;;
 esac

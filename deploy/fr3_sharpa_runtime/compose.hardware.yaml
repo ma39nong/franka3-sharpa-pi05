@@ -10,6 +10,7 @@ services:
       - control.launch.py
       - config:=/etc/openpi/teleop_control.yaml
   openpi-cameras:
+    image: ${SHARPA_CAMERA_IMAGE:-franka-upper-body-teleop:latest}
     extends:
       file: ${SHARPA_GELLO_REPO:-/home/user/gello_upper_body_teleop}/docker/compose.yaml
       service: data-collection

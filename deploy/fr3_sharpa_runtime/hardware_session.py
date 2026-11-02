@@ -87,10 +87,11 @@ class HardwareSession:
             raise RuntimeError("OpenPI cleanup incomplete: " + "; ".join(errors))
 
 
-def run_session(command, hardware, *, shutdown_grace_s=15):
+def run_session(command, hardware, *, shutdown_grace_s=15, camera_monitor=None):
     """Forward termination to the runtime tree, then release its hardware containers."""
     child = None
     interrupted = None
+    camera_failed = False
 
     def forward(number, _frame):
         nonlocal interrupted
@@ -110,8 +111,12 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
         if interrupted is not None:
             forward(interrupted, None)
         while True:
+            if camera_monitor is not None and not camera_monitor.healthy() and not camera_failed:
+                camera_failed = True
+                stderr("[camera] 运行中三路相机验证失败；停止执行并等待失能确认，不重启相机。")
+                forward(signal.SIGINT, None)
             try:
-                status = child.wait(timeout=1)
+                status = child.wait(timeout=0.1 if camera_monitor is not None else 1)
                 break
             except subprocess.TimeoutExpired:
                 if interrupted is not None:
@@ -127,6 +132,12 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
                             status = child.wait()
                     break
     finally:
+        if camera_monitor is not None:
+            try:
+                camera_monitor.close()
+            except Exception as error:
+                stderr(f"ERROR: camera monitor cleanup: {error}")
+                status = 1
         try:
             hardware.cleanup()
         except Exception as error:
@@ -135,14 +146,37 @@ def run_session(command, hardware, *, shutdown_grace_s=15):
         finally:
             for number, handler in previous.items():
                 signal.signal(number, handler)
+    if camera_failed:
+        return 1
     return 128 + interrupted if interrupted is not None and status != 1 else (128 - status if status < 0 else status)
 
 
 def main():
+    from .camera_lease import CameraLease
+    lease = CameraLease().acquire()
+    try:
+        run_main()
+    finally:
+        lease.close()
+
+
+def run_main():
     hardware = HardwareSession()  # Snapshot IDs before creating any runtime/SDK worker.
     if sys.argv[1:] == ["stop"]:
         hardware.cleanup()
         return
+    from .camera_startup import CameraStartup
+    from .camera_monitor import CameraMonitor
+    monitor = None
+    try:
+        startup = CameraStartup(hardware)
+        owners = startup.inspect()
+        if len(owners) != 1 or not hardware.is_openpi(owners[0], "openpi-cameras"):
+            raise RuntimeError("执行前没有唯一部署相机服务；先运行hardware.sh up --exclusive")
+        monitor = CameraMonitor(startup.config).start()  # Camera-only gate BEFORE any SDK worker.
+    except BaseException:
+        hardware.cleanup()
+        raise
     import argparse
     from .shutdown import DisableSettings
     parser = argparse.ArgumentParser(add_help=False)
@@ -150,7 +184,7 @@ def main():
     args, _ = parser.parse_known_args()
     grace = DisableSettings.from_env().session_grace_s if args.sharpa_backend == "sdk_direct" else 15
     raise SystemExit(run_session([sys.executable, "-m", "deploy.fr3_sharpa_runtime.run", *sys.argv[1:]],
-                                 hardware, shutdown_grace_s=grace))
+                                 hardware, shutdown_grace_s=grace, camera_monitor=monitor))
 
 
 if __name__ == "__main__":
