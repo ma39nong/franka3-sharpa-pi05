@@ -213,13 +213,15 @@ def test_bag_writer_is_not_opened_during_prepare_and_closes_cleanly(tmp_path, mo
     module = types.SimpleNamespace(SequentialWriter=Writer, StorageOptions=lambda **kw: kw,
         ConverterOptions=lambda *a: a, TopicMetadata=lambda **kw: kw)
     monkeypatch.setitem(sys.modules, "rosbag2_py", module)
-    bag = BagCapture(tmp_path)
+    now = 10_000_000_000
+    bag = BagCapture(tmp_path, clock=lambda: now)
     for topic in TOPICS:
-        bag.accept(topic, b"prepare", 1)
+        for stamp in (now - 50_000_000, now):
+            bag.accept(topic, b"prepare", 1, rx_mono_ns=stamp, serialize=bytes)
     assert not writers and not any(bag.counts.values())
     bag.request("start")
     for topic in TOPICS:
-        bag.accept(topic, b"task", 2)
+        bag.accept(topic, b"task", 2, rx_mono_ns=now + 1, serialize=bytes)
     bag.request("stop")
     assert writers[0].closed and len(writers[0].rows) == len(TOPICS)
     assert all(row[1] == b"task" for row in writers[0].rows)
@@ -343,9 +345,10 @@ def test_stop_marker_prevents_more_writes_without_waiting_for_disable(tmp_path):
     calls = []
     capture.writer = types.SimpleNamespace(write=lambda *a: calls.append(a))
     capture.active = True
-    capture.accept("/teleop/arm_commands", b"before stop", 1)
+    capture.recording_started_monotonic_ns = 0
+    capture.accept("/teleop/arm_commands", b"before stop", 1, rx_mono_ns=1, serialize=bytes)
     marker.touch()
-    capture.accept("/teleop/arm_commands", b"during hand disable", 2)
+    capture.accept("/teleop/arm_commands", b"during hand disable", 2, rx_mono_ns=2, serialize=bytes)
     assert len(calls) == 1 and capture.finished.is_set() and not capture.active
 
 
