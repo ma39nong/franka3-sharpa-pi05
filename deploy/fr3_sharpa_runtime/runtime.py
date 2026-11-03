@@ -42,10 +42,11 @@ def validate_observation(observation: dict) -> dict:
 class SharpaRuntime:
     """Request one 50-step prediction and prepare one independent session."""
 
-    def __init__(self, policy_url: str = config.POLICY_URL, *, paper_rtc=False):
+    def __init__(self, policy_url: str = config.POLICY_URL, *, paper_rtc=False, train_rtc=False):
         if not policy_url.startswith("ws://127.0.0.1:") and not policy_url.startswith("ws://localhost:"):
             raise ValueError("First runtime only accepts a loopback policy server")
         self.paper_rtc = paper_rtc
+        self.train_rtc = train_rtc
         self.policy_url = policy_url
         self.adapter = SharpaActionAdapter()
         if (config.CHECKPOINT is not None and config.NORM_STATS is not None
@@ -53,18 +54,30 @@ class SharpaRuntime:
             # Heavy Paper bundle validation must precede observation capture.
             config.prepare_policy_validation()
 
+    def _require_rtc(self, metadata):
+        if self.train_rtc:
+            from .train_rtc_contract import require_train_capabilities
+            require_train_capabilities(metadata)
+            if self.paper_rtc:
+                from .train_rtc_contract import require_train_paper_capabilities
+                require_train_paper_capabilities(metadata)
+            elif metadata.get("paper_algorithm"):
+                raise ValueError("Trained Paper service requires Train Paper RTC")
+        else:
+            from .rtc_stream import require_capabilities
+            require_capabilities(metadata)
+
     def inspect_metadata(self, *, require_rtc=False):
         from openpi_client import msgpack_numpy
         from websockets.sync.client import connect
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=1) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
         config.validate_policy_metadata(metadata)
-        if self.paper_rtc:
+        if self.paper_rtc and not self.train_rtc:
             from .rtc_stream import require_paper_capabilities
             require_paper_capabilities(metadata)
         if require_rtc:
-            from .rtc_stream import require_capabilities
-            require_capabilities(metadata)
+            self._require_rtc(metadata)
         return metadata
 
     def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120):
@@ -86,15 +99,16 @@ class SharpaRuntime:
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
             validation_start = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
-            if self.paper_rtc:
+            if self.train_rtc:
+                self._require_rtc(metadata)
+            if self.paper_rtc and not self.train_rtc:
                 from .rtc_stream import require_paper_capabilities
                 require_paper_capabilities(metadata)
             timing["metadata_validation_ms"] = (time.monotonic_ns() - validation_start) / 1e6
             start = time.monotonic_ns()
             if rtc_context is not None:
                 from openpi_client import rtc
-                from .rtc_stream import require_capabilities
-                require_capabilities(metadata)
+                self._require_rtc(metadata)
                 clean = rtc.make_request(clean, rtc_context)
             payload = msgpack_numpy.Packer().pack(clean)
             timing["observation_msgpack_ms"] = (time.monotonic_ns()-start)/1e6

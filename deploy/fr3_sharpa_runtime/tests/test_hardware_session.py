@@ -154,3 +154,13 @@ def test_runtime_launch_failure_still_releases_hardware(monkeypatch):
     with pytest.raises(OSError, match="failed to start"):
         session.run_session(["unused"], SimpleNamespace(cleanup=lambda: cleaned.append(True)))
     assert cleaned == [True]
+
+
+@pytest.mark.parametrize("variable", ("SHARPA_CAMERA_CAM0_PARAMS", "SHARPA_CAMERA_CAM1_PARAMS"))
+def test_missing_camera_profile_is_rejected_before_docker_inventory(monkeypatch, tmp_path, variable):
+    monkeypatch.setenv("SHARPA_GELLO_REPO", str(tmp_path))
+    monkeypatch.setenv("SHARPA_GATEWAY_CONFIG", str(tmp_path / "gateway.yaml"))
+    monkeypatch.setenv(variable, str(tmp_path / "missing.yaml"))
+    monkeypatch.setattr(session.HardwareSession, "inventory", lambda self: pytest.fail("No Docker calls for invalid profiles"))
+    with pytest.raises(ValueError, match="existing absolute file"):
+        session.HardwareSession()

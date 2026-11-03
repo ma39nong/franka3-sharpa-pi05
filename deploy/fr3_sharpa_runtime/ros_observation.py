@@ -25,6 +25,20 @@ MAX_AGE_NS = 200_000_000
 MAX_SPREAD_NS = 100_000_000
 
 
+def spin_camera_updates(rclpy, node, *, timeout_sec=0.05):
+    """Drain ready callbacks before judging freshness, with a bounded CPU budget.
+
+    A single spin may update a wrist while a newer head frame is still queued.
+    Never wait for a replacement frame here or alter its source timestamp.
+    """
+    rclpy.spin_once(node, timeout_sec=timeout_sec)
+    deadline = time.monotonic() + 0.01
+    for _ in range(16):
+        if time.monotonic() >= deadline:
+            break
+        rclpy.spin_once(node, timeout_sec=0.0)
+
+
 def timing_issues(entries, now_ros, now_mono):
     issues = []
     stamps = []
@@ -149,7 +163,9 @@ class ObservationProvider:
         self.startup_ready = startup_stable_s == 0
         self.subscriptions = []
         self.closed = False
-        camera_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
+        # Keep source-time history in our deque; DDS must not queue old images
+        # while encoding a snapshot or servicing other subscriptions.
+        camera_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                                 reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.VOLATILE)
         try:
@@ -201,7 +217,8 @@ class ObservationProvider:
             try:
                 self.node.destroy_node()
             finally:
-                self.rclpy.shutdown()
+                if self.rclpy.ok():
+                    self.rclpy.shutdown()
 
     def snapshot(self, timeout_s: float = 5.0, *, on_diagnostic=None) -> dict:
         if self.closed:
@@ -303,6 +320,8 @@ def persistent_main():
                 write_snapshot(provider.snapshot(float(request.get("timeout_s", 5.0)), on_diagnostic=diagnostic))
             except Exception as error:
                 print(json.dumps({"error": str(error)}), flush=True)
+    except KeyboardInterrupt:
+        pass
     finally:
         provider.close()
 

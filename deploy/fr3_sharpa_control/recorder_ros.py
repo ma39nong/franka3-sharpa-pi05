@@ -1,5 +1,6 @@
 """Paused ROS subscriptions; open a bag only at the first task chunk gate."""
 import argparse
+from collections import deque
 import json
 from pathlib import Path
 import signal
@@ -22,15 +23,24 @@ TOPICS = {
 }
 
 
+SENSORS = frozenset(TOPICS) - {"/teleop/arm_commands", "/openpi/executed_joint_targets"}
+MAX_LAST_RECEIVE_AGE_NS = 200_000_000
+PROGRESS_WINDOW_NS = 1_000_000_000
+
+
 class BagCapture:
     """Serialize control requests and callbacks under one lock."""
-    def __init__(self, directory, stop_marker=None):
+    def __init__(self, directory, stop_marker=None, *, clock=time.monotonic_ns, sleep=time.sleep):
         self.directory = Path(directory)
         self.lock = threading.RLock()
         self.writer = None
         self.active = False
         self.finished = threading.Event()
         self.seen = set()
+        self.clock, self.sleep = clock, sleep
+        self.last_rx_monotonic_ns = {}
+        self.recent_rx_monotonic_ns = {topic: deque(maxlen=512) for topic in TOPICS}
+        self.recording_started_monotonic_ns = None
         self.counts = {name: 0 for name in TOPICS}
         self.report = {"status": "PREPARED", "topics": TOPICS, "started_unix_ns": None}
         self.error = None
@@ -40,53 +50,111 @@ class BagCapture:
         write_json(self.directory / "recording.json", {**self.report, "counts": self.counts,
                     "missing_topics": [name for name, count in self.counts.items() if not count]})
 
-    def accept(self, topic, serialized, stamp):
+    def _stopped(self):
+        if self.stop_marker is not None and self.stop_marker.exists():
+            self.active = False
+            self.finished.set()
+        return self.finished.is_set()
+
+    def _fail(self, error):
+        self.error = str(error)
+        self.report.update(status="FAILED", error=self.error)
+        self.active = False
+        self.finished.set()
+
+    def readiness(self, now_mono_ns=None):
+        """Local receipt progress only; never cache sensor payloads."""
         with self.lock:
-            if self.stop_marker is not None and self.stop_marker.exists():
-                self.active = False
-                self.finished.set()
+            now = self.clock() if now_mono_ns is None else now_mono_ns
+            missing, stale, insufficient, ages = [], [], [], {}
+            for topic in sorted(SENSORS):
+                last = self.last_rx_monotonic_ns.get(topic)
+                if last is None:
+                    missing.append(topic)
+                    ages[topic] = None
+                else:
+                    ages[topic] = (now - last) / 1_000_000
+                    if now - last > MAX_LAST_RECEIVE_AGE_NS:
+                        stale.append(topic)
+                recent = self.recent_rx_monotonic_ns[topic]
+                # Sorting handles callbacks that entered before another thread but
+                # acquired the lock later. Distinct receipts must make progress.
+                samples = sorted({stamp for stamp in recent
+                                  if now - PROGRESS_WINDOW_NS <= stamp <= now})
+                recent.clear()
+                recent.extend(samples)
+                if len(samples) < 2:
+                    insufficient.append(topic)
+            return {"ready": not (missing or stale or insufficient), "missing": missing,
+                    "stale": stale, "insufficient_progress": insufficient, "ages_ms": ages}
+
+    def accept(self, topic, message, rx_ros_ns, *, rx_mono_ns, serialize):
+        with self.lock:
+            stopped = self._stopped()
             self.seen.add(topic)
-            if self.active:
-                try:
-                    self.writer.write(topic, serialized, stamp)
-                    self.counts[topic] += 1
-                except Exception as error:
-                    self.error = str(error)
-                    self.report.update(status="FAILED", error=self.error)
-                    self.active = False
-                    self.finished.set()
+            self.last_rx_monotonic_ns[topic] = max(
+                rx_mono_ns, self.last_rx_monotonic_ns.get(topic, rx_mono_ns))
+            self.recent_rx_monotonic_ns[topic].append(rx_mono_ns)
+            if (stopped or self.error or not self.active
+                    or rx_mono_ns < self.recording_started_monotonic_ns):
+                return
+            try:
+                serialized = serialize(message)
+                self.writer.write(topic, serialized, rx_ros_ns)
+                self.counts[topic] += 1
+            except Exception as error:
+                self._fail(error)
+
+    def _start(self):
+        deadline = self.clock() + 5_000_000_000
+        while True:
+            with self.lock:
+                if self._stopped() or self.error:
+                    raise RuntimeError(self.error or "录制已结束，不能复用旧录制器")
+                if self.active:
+                    return {"status": "PASS", "active": True}
+                now = self.clock()
+                health = self.readiness(now)
+                if now >= deadline:
+                    raise TimeoutError("录制传感器在5秒内未就绪：" + json.dumps(health, ensure_ascii=False))
+                if health["ready"]:
+                    # Hold the same lock from this fresh check through activation.
+                    # Callbacks entering during writer setup remain PREPARED frames.
+                    opened = self.clock()
+                    try:
+                        import rosbag2_py
+                        self.writer = rosbag2_py.SequentialWriter()
+                        self.writer.open(rosbag2_py.StorageOptions(uri=str(self.directory / "rosbag"), storage_id="sqlite3"),
+                                         rosbag2_py.ConverterOptions("", ""))
+                        for topic, kind in TOPICS.items():
+                            self.writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=kind, serialization_format="cdr"))
+                        activated = self.clock()
+                        self.report["writer_initialization_ms"] = (activated - opened) / 1_000_000
+                        health = self.readiness(activated)
+                        if self._stopped() or activated >= deadline or not health["ready"]:
+                            raise RuntimeError("录制初始化期间停止或传感器过期：" + json.dumps(health, ensure_ascii=False))
+                        self.recording_started_monotonic_ns = activated
+                        self.report.update(status="RECORDING", started_unix_ns=time.time_ns(),
+                                           started_monotonic_ns=activated)
+                        self.active = True
+                        self.persist()
+                    except Exception as error:
+                        self._fail(error)
+                        raise
+                    return {"status": "PASS", "active": True}
+            # Never wait while holding the callback lock.
+            self.sleep(0.02)
 
     def request(self, operation):
         if operation == "start":
-            deadline = time.monotonic() + 5
-            sensors = set(TOPICS) - {"/teleop/arm_commands", "/openpi/executed_joint_targets"}
-            while True:
-                with self.lock:
-                    ready = sensors <= self.seen
-                if ready:
-                    break
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"录制订阅尚未收到传感器消息：{sorted(sensors-self.seen)}")
-                time.sleep(0.02)
+            return self._start()
         with self.lock:
             if self.error:
                 raise RuntimeError(self.error)
             if operation == "status":
-                return {"status": "PASS", "active": self.active, "topics_seen": sorted(self.seen)}
-            if operation == "start":
-                if self.finished.is_set():
-                    raise RuntimeError("录制已结束，不能复用旧录制器")
-                if not self.active:
-                    import rosbag2_py
-                    writer = rosbag2_py.SequentialWriter()
-                    writer.open(rosbag2_py.StorageOptions(uri=str(self.directory / "rosbag"), storage_id="sqlite3"),
-                                rosbag2_py.ConverterOptions("", ""))
-                    for topic, kind in TOPICS.items():
-                        writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=kind, serialization_format="cdr"))
-                    self.writer, self.active = writer, True
-                    self.report.update(status="RECORDING", started_unix_ns=time.time_ns(), started_monotonic_ns=time.monotonic_ns())
-                    self.persist()
-                return {"status": "PASS", "active": True}
+                self._stopped()
+                return {"status": "PASS", "active": self.active, "topics_seen": sorted(self.seen),
+                        "sensor_readiness": self.readiness()}
             if operation == "stop":
                 self.close()
                 return {"status": "PASS", "active": False}
@@ -95,6 +163,7 @@ class BagCapture:
     def close(self):
         with self.lock:
             self.active = False
+            self.finished.set()
             writer, self.writer = self.writer, None
             if writer is not None:
                 # Humble closes on destruction; newer versions expose close().
@@ -163,7 +232,9 @@ def main():
     subscriptions = []
     for topic, kind in TOPICS.items():
         def callback(message, topic=topic):
-            capture.accept(topic, serialize_message(message), node.get_clock().now().nanoseconds)
+            rx_mono_ns = time.monotonic_ns()
+            rx_ros_ns = node.get_clock().now().nanoseconds
+            capture.accept(topic, message, rx_ros_ns, rx_mono_ns=rx_mono_ns, serialize=serialize_message)
         subscriptions.append(node.create_subscription(get_message(kind), topic, callback, qos))
 
     class Handler(socketserver.StreamRequestHandler):

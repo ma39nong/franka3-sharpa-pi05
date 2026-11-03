@@ -123,16 +123,7 @@ class Policy(BasePolicy):
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
         if context is not None:
-            weights = _rtc.prefix_weights(
-                context.inference_delay_steps,
-                context.prefix_attention_horizon,
-                context.prefix_attention_schedule,
-            )
-            sample_kwargs.update(
-                rtc_actions=jnp.asarray(rtc_target)[None, ...],
-                rtc_weights=jnp.asarray(weights, dtype=jnp.float32)[None, :, None],
-                rtc_max_guidance_weight=jnp.asarray(context.max_guidance_weight, dtype=jnp.float32),
-            )
+            sample_kwargs.update(self._rtc_sample_kwargs(context, rtc_target))
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
@@ -159,6 +150,18 @@ class Policy(BasePolicy):
         if context is not None:
             outputs[_rtc.RTC_RECEIPT_KEY] = _rtc.make_receipt(context)
         return outputs
+
+    def _rtc_sample_kwargs(self, context, rtc_target):
+        weights = _rtc.prefix_weights(
+            context.inference_delay_steps,
+            context.prefix_attention_horizon,
+            context.prefix_attention_schedule,
+        )
+        return dict(
+            rtc_actions=jnp.asarray(rtc_target)[None, ...],
+            rtc_weights=jnp.asarray(weights, dtype=jnp.float32)[None, :, None],
+            rtc_max_guidance_weight=jnp.asarray(context.max_guidance_weight, dtype=jnp.float32),
+        )
 
     @property
     def metadata(self) -> dict[str, Any]:

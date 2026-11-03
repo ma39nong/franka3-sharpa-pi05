@@ -49,6 +49,7 @@ def repository(tmp_path):
     for file in (shared / "sdk_direct_motion_ros.py", shared / "async_soft_motion_ros.py"):
         file.write_text("# RecordingGate integration marker\n")
     (shared / "async_soft_stream.py").write_text("CAPABILITY = 'sharpa-async-soft-rolling-v3'\n")
+    (shared / "camera_startup.py").write_text("# Camera startup gate fixture\n")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -58,6 +59,19 @@ def repository(tmp_path):
 
 def settings(repository, checkpoint, **kwargs):
     return plans.DeploymentSettings(str(repository), str(checkpoint), semantics="absolute", **kwargs)
+
+
+def test_camera_policy_is_explicit_and_frozen_in_approval(repository, checkpoint):
+    exclusive = settings(repository, checkpoint, camera_policy="exclusive").plan()
+    free = settings(repository, checkpoint, camera_policy="require_free").plan()
+    assert exclusive["hardware"][-1] == "--exclusive"
+    assert free["hardware"][-1] == "up"
+    assert exclusive["approval"] != free["approval"]
+    with pytest.raises(ValueError, match="相机策略"):
+        settings(repository, checkpoint, camera_policy="kill-anything").plan()
+    (repository / "deploy/fr3_sharpa_runtime/camera_startup.py").unlink()
+    with pytest.raises(ValueError, match="相机闸门"):
+        settings(repository, checkpoint).plan()
 
 
 def test_names_never_determine_semantics_and_binding_tracks_content(checkpoint, tmp_path):
@@ -199,13 +213,15 @@ def test_bag_writer_is_not_opened_during_prepare_and_closes_cleanly(tmp_path, mo
     module = types.SimpleNamespace(SequentialWriter=Writer, StorageOptions=lambda **kw: kw,
         ConverterOptions=lambda *a: a, TopicMetadata=lambda **kw: kw)
     monkeypatch.setitem(sys.modules, "rosbag2_py", module)
-    bag = BagCapture(tmp_path)
+    now = 10_000_000_000
+    bag = BagCapture(tmp_path, clock=lambda: now)
     for topic in TOPICS:
-        bag.accept(topic, b"prepare", 1)
+        for stamp in (now - 50_000_000, now):
+            bag.accept(topic, b"prepare", 1, rx_mono_ns=stamp, serialize=bytes)
     assert not writers and not any(bag.counts.values())
     bag.request("start")
     for topic in TOPICS:
-        bag.accept(topic, b"task", 2)
+        bag.accept(topic, b"task", 2, rx_mono_ns=now + 1, serialize=bytes)
     bag.request("stop")
     assert writers[0].closed and len(writers[0].rows) == len(TOPICS)
     assert all(row[1] == b"task" for row in writers[0].rows)
@@ -265,6 +281,25 @@ def test_each_restart_includes_up_and_new_initialization(repository, checkpoint,
     assert controller.commands.count("runtime") == 2
 
 
+def test_camera_startup_failure_never_spawns_execution_worker(repository, checkpoint, tmp_path):
+    controller = FakeDeployment(repository)
+    values = settings(repository, checkpoint, output=str(tmp_path / "records")).__dict__
+    controller.ready(values)
+    original = controller._command
+    def camera_failure(command, name, env, **kwargs):
+        if name == "hardware":
+            controller.commands.append(name)
+            raise RuntimeError("camera readiness failed")
+        return original(command, name, env, **kwargs)
+    controller._command = camera_failure
+    controller.start(values)
+    controller.thread.join(timeout=5)
+    assert controller.state["phase"] == "failed"
+    assert "camera readiness failed" in controller.state["message"]
+    assert "runtime" not in controller.commands
+    assert "hardware_cleanup" in controller.commands
+
+
 def test_cancel_during_model_start_never_launches_motion(repository, checkpoint, tmp_path):
     controller = FakeDeployment(repository)
     controller.abort_model = True
@@ -310,9 +345,10 @@ def test_stop_marker_prevents_more_writes_without_waiting_for_disable(tmp_path):
     calls = []
     capture.writer = types.SimpleNamespace(write=lambda *a: calls.append(a))
     capture.active = True
-    capture.accept("/teleop/arm_commands", b"before stop", 1)
+    capture.recording_started_monotonic_ns = 0
+    capture.accept("/teleop/arm_commands", b"before stop", 1, rx_mono_ns=1, serialize=bytes)
     marker.touch()
-    capture.accept("/teleop/arm_commands", b"during hand disable", 2)
+    capture.accept("/teleop/arm_commands", b"during hand disable", 2, rx_mono_ns=2, serialize=bytes)
     assert len(calls) == 1 and capture.finished.is_set() and not capture.active
 
 

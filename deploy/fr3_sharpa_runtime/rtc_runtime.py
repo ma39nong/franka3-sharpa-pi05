@@ -39,6 +39,7 @@ def run_rtc(runtime, observe, worker, first, initial_observation, args, *, clock
     def save(report):
         report.update(
             broker_mode="rtc",
+            train_rtc=bool(getattr(args, "train_rtc", False)),
             accepted_chunks=accepted,
             settings=asdict(settings),
             elapsed_s=clock() - started,
@@ -59,6 +60,12 @@ def run_rtc(runtime, observe, worker, first, initial_observation, args, *, clock
 
     try:
         metadata, actions, _ = first
+        trained = getattr(args, "train_rtc", False)
+        if trained:
+            from .train_rtc_contract import require_train_capabilities
+            require_train_capabilities(metadata)
+            if not 1 <= settings.initial_delay_steps <= min(25, metadata["train_rtc"]["max_delay"]):
+                raise ValueError("Train RTC commitment exceeds trained max delay")
         record(
             event="initial_prediction",
             metadata=metadata,
@@ -112,7 +119,8 @@ def run_rtc(runtime, observe, worker, first, initial_observation, args, *, clock
                 effective_hz = 30.0 / np.ceil(1.0 / args.execute_speed_scale)
                 remaining_s = ((50 - status["phase"]) / effective_hz
                                - max(0, clock() - status["sampled_monotonic_s"]))
-                reserve_s = max(1, max(delays)) / effective_hz + 0.05
+                budget = settings.initial_delay_steps if trained else max(delays)
+                reserve_s = max(1, budget) / effective_hz + 0.05
                 observation_budget_s = remaining_s - reserve_s
                 observation_started = clock()
                 observation_deadline = observation_started + observation_budget_s
@@ -159,7 +167,8 @@ def run_rtc(runtime, observe, worker, first, initial_observation, args, *, clock
                 context = worker.request(
                     {
                         "operation": "stream_snapshot",
-                        "delay_steps": max(delays),
+                        "delay_steps": settings.initial_delay_steps if trained else max(delays),
+                        "hard_prefix": trained,
                         "schedule": settings.prefix_attention_schedule,
                         "weight": settings.max_guidance_weight,
                     }

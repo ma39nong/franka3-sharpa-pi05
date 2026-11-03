@@ -220,7 +220,7 @@ def main() -> None:
                 if stream is None:
                     raise ValueError("No active RTC stream")
                 context = stream.snapshot(time.monotonic(), delay_steps=request["delay_steps"],
-                    schedule=request["schedule"], weight=request["weight"])
+                    schedule=request["schedule"], weight=request["weight"], hard_prefix=request.get("hard_prefix", False))
                 context["previous_actions"] = context["previous_actions"].tolist()
                 stream_event("snapshot", context=context)
                 print(json.dumps({"status": "PASS", "context": context}), file=protocol, flush=True)

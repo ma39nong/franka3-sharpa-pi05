@@ -4,7 +4,7 @@
 
 ## 工作机启动
 
-推荐在已配置工作机环境的 main 部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
+推荐在已配置工作机环境、包含所需模式的部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
 
 ```bash
 bash deploy/fr3_sharpa_control/ui.sh
@@ -12,7 +12,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
-1. 选择本机部署仓库和checkpoint目录，在主界面按训练配置选择模型动作类型：Absolute，或双臂Delta／双手Absolute，再点击识别权重，选择串行／RTC／Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
+1. 选择本机部署仓库和checkpoint目录，优先自动识别动作类型；没有训练证据时按训练配置选择Absolute或双臂Delta／双手Absolute。点击识别权重，按可用范围选择串行／RTC／Paper RTC／Train RTC／Train Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
 2. 点击**启动推理**。只检查权重并加载GPU、预热、核对服务身份，不启动硬件、相机、录制或机器人执行；即使选择了Home或录制，也不需要此时提供Home配置或ROS环境。推理端预热期间可以点**停止推理**取消。
 3. 等推理端显示就绪，选择Current/Home、速度、步数、轮数、录制和输出位置，点击**核对执行配置**。
 4. 点击**启动执行**。必须已有与当前仓库、提交、权重和模式匹配的已预热推理端；执行入口只检查/复用该服务，不会隐式加载或切换模型。每次执行都自动运行硬件 `up`，然后按配置开始执行。
@@ -85,6 +85,42 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta --check \
 
 Main提供普通串行、RTC和Paper RTC；Soft分支增加串行Soft和异步Soft。UI读取所选代码目录，只启用其中实际支持的模式。推荐两个分支各保留一个部署目录，在UI选择对应目录，不在运行中git switch。独立目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
 
+## 启动前部署独占相机
+
+主界面新增“启动前相机策略”，默认是“部署独占接管”，也可选“要求相机空闲”。核对配置会显示并冻结该选项；改动后需重新核对。点击启动执行即授权按此策略处理相机：独占模式会中断使用旧相机服务的遥操预览或录制，模型预热阶段不会接管相机。
+
+接管只针对 Docker 中标签为 teleop-cameras／openpi-cameras、命令为 triple_camera.launch.py、且挂载配置的三台序列号及头部/左右语义与本机部署配置完全一致的服务。使用不可变容器 ID 停止，检查容器 Running=false、PID=0，并等待可见USB/网络/驱动占用消失；不按容器名通配停止，不执行remove-orphans、USB reset或杀未知进程。部分相机重叠、无法核对配置或未知进程占用均拒绝启动，并记录容器名、命令、可见PID或设备句柄。操作系统权限可能限制占用诊断，不能将未列出PID当作设备一定空闲。
+
+释放后只启动一个部署相机服务。只读ROS闸门查询驱动 GetDeviceInfo 返回的实际序列号，校验头部cam0／左腕cam2／右腕cam1映射；要求三路有效RGB/BGR、唯一发布者、连续3秒稳定出图（头部至少18Hz、双腕至少25Hz、连续帧间隔不超过150ms），并复用runtime的200ms新鲜度及100ms时间对齐限制。通过后才启动机械臂/网关依赖；执行端连接SDK和Home前会再验证一次。
+
+相机锁跨同一用户的部署目录生效，持有至执行、失能确认及清理结束，运行中不允许另一个启动入口抢占。只读相机监控持续检查图像、时间戳和发布者身份；丢图、监控退出或心跳超时会向执行端发送一次SIGINT，等待原有失能与清理流程结束，不会在运动中自动重启相机。恢复需要结束后显式重新启动。未知占用不杀进程；失败时不自动恢复旧遥操服务。
+
+运行中若各路图像仍满足200ms源时间/接收时间新鲜度，但暂时找不到跨度不超过100ms的对齐组合，监控会继续接收新帧并重试，默认恢复窗口为0.3秒。计时从首次失败开始，收到新帧不重置计时；只有重新取得合格对齐观测才清零。窗口到期仍未恢复（或恢复结果到达时已超时）则退出。可在启动UI/执行端前设置 `SHARPA_CAMERA_ALIGNMENT_RECOVERY_SEC` 为0至0.5秒；0恢复原来的单次失败即退出行为。该窗口仅控制监控对短暂对齐抖动的退出判定，不保证运动暂停，也不扩展已有0.75秒健康心跳上限。
+
+等待期间只向stderr记录 `camera_alignment_wait` 及各路时间戳、年龄和历史范围，不发送PASS、不更新健康心跳、不向推理提供无效观测；恢复时记录 `camera_alignment_recovered`。实际模型观测仍须通过原来的100ms对齐与200ms新鲜度限制。时间戳过旧/未来、图像无效、发布者缺失/重复或身份变化仍按原规则立即报错，SDK及机械臂反馈watchdog保持不变。这里没有照搬数采的90秒启动等待或将150ms单路帧间隔当作跨相机对齐阈值。
+
+已知服务正常停止并不保证设备本身没有固件/USB问题；实际序列号或出图闸门不通过时仍会阻止Home。相关信息见hardware.log与runtime.log。所有在GUI中选择的main/Soft部署目录都必须同步相机闸门代码，旧目录会在配置阶段明确拒绝。
+
+首次更新后编译新增的相机身份查询消息（只编译消息，不启动设备）：
+
+```bash
+bash deploy/fr3_sharpa_runtime/build_messages.sh
+```
+
+只读占用核对（不停止现有服务、不打开相机）：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh camera-check
+```
+
+三终端启动需明确选择接管：
+
+```bash
+bash deploy/fr3_sharpa_runtime/hardware.sh up --exclusive
+```
+
+不带 --exclusive 时，发现同组已知服务也会报错，不会静默中断它。camera_probe只创建图像订阅及设备信息服务客户端，不创建运动发布器、不连接SDK。
+
 ## 自动录制和归档
 
 勾选录制后，UI在执行前检查ROS bag和视频依赖，提前建立独立录制进程和订阅，但此时不创建bag写入器。Home和初始首帧接近期间不写包。运动worker完成接近后，先取得录制就绪应答，再开始发送第一段任务chunk；RTC/异步Soft在首次stream播放前打开同一个门。
@@ -130,6 +166,8 @@ bash deploy/fr3_sharpa_control/record_execute.sh -- \
 
 ## 依赖与验证边界
 
+部署相机可单独使用 SDK 2.10.6 镜像，构建、启用与回退见 [相机 SDK 说明](../fr3_sharpa_runtime/CAMERA_SDK.md)。三路共用 SDK，保留原驱动与时序检查；此项不更新设备固件。
+
 ROS工具沿用工作机Pixi ros2环境、teleop_interfaces overlay、相机和SDK；录制依赖rosbag2_py，导出依赖同一ROS环境中的numpy和cv2（需可用MP4编码器）。可只检查依赖，不创建ROS节点和设备连接：
 
 ```bash
@@ -137,3 +175,32 @@ bash deploy/fr3_sharpa_control/record_session.sh check
 ```
 
 本次开发不自动安装或修改工作机SDK/ROS。缺依赖时，勾选录制的启动会在硬件up之前失败并显示日志。界面、模式组合、录制门、编号、停止和合成视频导出有离线测试；真实设备、DDS传感器吞吐与工作机编码环境还需现场验收。三路实时预览按约定留待下一阶段。
+
+## Train RTC
+
+新模式“Train RTC · 训练前缀条件”使用训练时 RTC 的硬前缀采样。选择完整 checkpoint，并在“训练记录”提供该次训练保存的运行 JSON；或把记录复制为 checkpoint 根目录的 `train_rtc_record.json`。核对记录中的 `rtc_max_delay > 0`、模型结构和统计后，界面才开放该模式。Paper/LoRA 权重不开放此入口。
+
+选择 Train RTC 后重新启动推理服务；命令对应 `--enable-train-rtc`，执行端对应 `--broker-mode rtc --train-rtc --speed fast`。界面设置承诺前缀预算为 `min(25, rtc_max_delay)`，沿用 current/Home、录制、停止和旧块播放机制。实际推理/安装超过预算则停止。服务必须完成全部静态前缀长度的预热才能连接执行流程。工作机 GPU 与实机验证仍待完成；命令及数据坐标约束见根 README 的 Train RTC 部署模式。
+
+
+## Train RTC 与 Train Paper RTC（train-rtc 分支）
+
+| 选项 | 训练权重 | 推理机制 |
+| --- | --- | --- |
+| RTC | 普通全量 Absolute／Delta | 推理时前缀引导 |
+| Paper RTC | 普通 Paper Delta | 逐时间步归一化、相关噪声及推理时前缀引导 |
+| Train RTC | `rtc_max_delay > 0` 的普通全量权重 | 训练前缀条件，采样全过程固定已承诺前缀 |
+| Train Paper RTC | Paper 与 RTC 联合训练权重 | Paper 归一化与相关噪声，加训练前缀条件 |
+
+本分支已合并 `codex/camera-exclusive-startup`。两份已审查的7999分别为：
+
+- `…tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1031_105906_trainRTC/7999`：选择 **Train RTC**。
+- `…tairan_tairan_sharpa_no_block_one_delta_paper_t3_s42_run01_rtc_d10_1031_151412/7999`：选择 **Train Paper RTC**，`timestamp_zscore_arms`、β=0.5。
+
+在UI中选择实际本机checkpoint目录，动作类型保留自动，点击识别权重。内置的精简训练证据位于 `../fr3_sharpa_runtime/training_records/`，通过Orbax manifest、参数元数据和统计文件摘要绑定这两份权重；改目录名不影响识别，其他权重不会仅凭相同统计或“rtc”目录名套用记录。完整复制 `params/` 和 `assets/`；仓库不包含权重。
+
+其他Train RTC权重需在“训练证据”选择对应训练JSON，或在checkpoint根目录放 `train_rtc_record.json`。命令行还可通过 `SHARPA_TRAIN_RTC_RECORD` 指定。联合训练记录中的Paper模式、β、std floor、资产摘要必须与checkpoint一致。识别后仅提供普通串行和对应的训练RTC模式；不会将联合权重误送给普通RTC／Paper RTC。
+
+两份权重均为30Hz、58D、50步，训练最大延迟10步。RTC速度固定Fast；界面的15是**重规划触发节点**，不是训练延迟。当前训练RTC调度固定承诺10步，约333ms；推理返回超出已承诺前缀窗口会停止执行。支持的前缀0..10均在模型服务启动时实际预热；联合模式还检查50／35／1步短参考，预热成功才允许执行。
+
+启动顺序保持“启动推理 → 等待就绪 → 核对执行配置 → 启动执行”。执行自动相机接管与硬件up，Current／Home、录制和停止清理沿用原流程。切换RTC类型需停止旧推理并重新启动。相机SDK镜像和ROS消息overlay仍需按[相机SDK说明](../fr3_sharpa_runtime/CAMERA_SDK.md)在工作机配置。

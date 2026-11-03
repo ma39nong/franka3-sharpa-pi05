@@ -1,0 +1,8 @@
+# Optional RGB-only head profile for this deployment, without source-repo edits.
+services:
+  openpi-cameras:
+    volumes:
+      - type: bind
+        source: ${SHARPA_CAMERA_CAM0_PARAMS:?Set an existing head-camera parameter file}
+        target: /workspace/franka_upper_body_teleop/ros_ws/src/teleop_camera_bringup/config/camera_primary_params.yaml
+        read_only: true

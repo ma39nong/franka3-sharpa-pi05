@@ -30,7 +30,12 @@ def test_observation_wait_is_bounded_and_preserves_worker_error(monkeypatch, tmp
     simulate(monkeypatch, tmp_path, 1.0, False, failure=failure)
 
 
-def simulate(monkeypatch, tmp_path, scale, late, *, failure=None):
+@pytest.mark.parametrize("late", [False, True])
+def test_train_rtc_async_budget_and_failure_record(monkeypatch, tmp_path, late):
+    simulate(monkeypatch, tmp_path, 1.0, late, trained=True)
+
+
+def simulate(monkeypatch, tmp_path, scale, late, *, failure=None, trained=False):
     clock = [1.0]
     log = []
 
@@ -51,8 +56,11 @@ def simulate(monkeypatch, tmp_path, scale, late, *, failure=None):
                 return {"status": "PASS", **self.plan.status(clock[0])}
             if op == "stream_snapshot":
                 context = self.plan.snapshot(
-                    clock[0], delay_steps=payload["delay_steps"], schedule=payload["schedule"], weight=payload["weight"]
+                    clock[0], delay_steps=payload["delay_steps"], schedule=payload["schedule"], weight=payload["weight"],
+                    hard_prefix=payload.get("hard_prefix", False)
                 )
+                if trained:
+                    assert payload["hard_prefix"] and context["prefix_attention_horizon"] == 5
                 context["previous_actions"] = context["previous_actions"].tolist()
                 return {"status": "PASS", "context": context}
             if op == "stream_install":
@@ -106,6 +114,7 @@ def simulate(monkeypatch, tmp_path, scale, late, *, failure=None):
     monkeypatch.setattr(rtc_runtime, "ThreadPoolExecutor", Pool)
     monkeypatch.setattr(rtc_runtime.time, "monotonic_ns", lambda: int(clock[0] * 1e9))
     args = SimpleNamespace(
+        train_rtc=trained,
         rtc_initial_delay_steps=5,
         rtc_delay_buffer_size=10,
         rtc_prefix_attention_schedule="exp",
@@ -117,7 +126,12 @@ def simulate(monkeypatch, tmp_path, scale, late, *, failure=None):
         execute_steps=15,
         num_chunks=5,
     )
-    first = ({"checkpoint": "fake"}, prediction(), None)
+    metadata = {"checkpoint": "fake"}
+    if trained:
+        metadata.update(rtc_algorithm="trained_prefix_conditioning", rtc_supported=True, rtc_warmed_up=True,
+                        rtc_protocol_version=1, rtc_action_dim=58, train_rtc={"max_delay": 10},
+                        rtc_warmed_prefix_lengths=list(range(11)))
+    first = (metadata, prediction(), None)
     call = lambda: rtc_runtime.run_rtc(
         Runtime(), observe, Worker(), first, observe(), args, clock=lambda: clock[0], sleep=sleep
     )

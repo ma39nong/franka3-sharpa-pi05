@@ -1,0 +1,37 @@
+{
+  "config": {
+    "fields": {
+      "model": {
+        "fields": {
+          "action_dim": 58,
+          "action_expert_variant": "gemma_300m",
+          "action_horizon": 50,
+          "max_token_len": 256,
+          "paligemma_variant": "gemma_2b",
+          "pi05": true,
+          "rtc_max_delay": 10
+        }
+      },
+      "data": {
+        "fields": {
+          "action_hz": 30.0,
+          "extra_delta_transform": true
+        }
+      }
+    }
+  },
+  "inputs": {
+    "norm_stats_sha256": "4bfa94693b0a4449b0a37d5b3f983f6c1bb97d641ea7270d93076f094dc93ced",
+    "norm_audit_sha256": "b196ec5a9a6a01c4a465b9ca9a10f0eb50d5b3551360ad1f6b2cb907418feb60"
+  },
+  "checkpoint_manifest_sha256": "7157012d30b3c745c9635f814e11259b9ece235b8cb8f149529d58e8058caabe",
+  "checkpoint_metadata_sha256": "78df4cd15c8e0c09c250299c846da7504ec5da44b1463df3757db647beea4df0",
+  "source": {
+    "training_record": "20261031_111206_941598_4126311.json",
+    "training_record_sha256": "1c7ba81f7b34440f3ada185e6de1b3ecaa492035daa37b7ad816a36f0cdcb333",
+    "git_commit": "c135c79cceade12f82c297334405c0fe96d1dc1a",
+    "config_name": "pi05_fr3_sharpa_1016_2_multimodal_rgb_fullft_v1_delta_30hz",
+    "run_name": "tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1031_105906_trainRTC",
+    "step": 7999
+  }
+}

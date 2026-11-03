@@ -82,7 +82,7 @@ bash deploy/fr3_sharpa_control/ui.sh --port 8768
 
 1. 在“部署仓库目录”选择本机代码目录，核对下方显示的实际分支。
 2. 在“Checkpoint 步骤目录”选择**直接包含 `params/`、`assets/` 的目录**，例如 `…/7999`；导出目录本身已包含这两个子目录时，直接选择该导出目录。
-3. 按训练配置选择“模型动作类型”。
+3. “模型动作类型”优先选择自动识别；证据不足时再按训练配置选择 Absolute／Delta。
 4. 点击“识别权重”，核对全量／LoRA、动作定义、归一化方式和可用模式。
 
 | 模型动作类型 | 含义 |
@@ -102,6 +102,8 @@ bash deploy/fr3_sharpa_control/ui.sh --port 8768
 | --- | --- | --- |
 | 全量 Absolute | 普通串行、RTC；Soft 目录可增加两种 Soft | 使用匹配的绝对动作统计 |
 | 全量普通 Delta | 普通串行、RTC；Soft 目录可增加两种 Soft | 双臂 Delta、双手 Absolute |
+| 全量 Train RTC（`train-rtc` 分支） | 普通串行、Train RTC | 需要匹配的 RTC 训练记录 |
+| 全量 Train Paper RTC（`train-rtc` 分支） | 普通串行、Train Paper RTC | 同时核对 RTC 训练记录和完整 Paper 资产 |
 | 全量 Paper Delta v1 | 普通串行、Paper RTC；已适配的 Soft 目录可增加两种 Soft | 普通 RTC 不适用于这套逐时间步统计 |
 | 未合并 Absolute LoRA | 普通串行 | 当前配方为 VLM rank 16／Expert rank 32 |
 

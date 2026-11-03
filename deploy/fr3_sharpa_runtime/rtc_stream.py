@@ -114,7 +114,7 @@ class RTCTimeline:
             "source_sha256": self.digest,
         }
 
-    def snapshot(self, now, *, delay_steps, schedule, weight):
+    def snapshot(self, now, *, delay_steps, schedule, weight, hard_prefix=False):
         if self.pending is not None:
             raise ValueError("Only one RTC prediction may be outstanding")
         phase = self.phase(now)
@@ -129,7 +129,7 @@ class RTCTimeline:
                 "source_sha256": self.digest,
                 "previous_actions": previous,
                 "inference_delay_steps": delay_steps,
-                "prefix_attention_horizon": min(25, length),
+                "prefix_attention_horizon": delay_steps if hard_prefix else min(25, length),
                 "prefix_attention_schedule": schedule,
                 "max_guidance_weight": weight,
             }
