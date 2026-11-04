@@ -94,11 +94,16 @@ class HardwareSession:
             raise RuntimeError("OpenPI cleanup incomplete: " + "; ".join(errors))
 
 
-def run_session(command, hardware, *, shutdown_grace_s=15, camera_monitor=None):
+def run_session(command, hardware, *, shutdown_grace_s=15, camera_monitor=None, parallel_home=False):
     """Forward termination to the runtime tree, then release its hardware containers."""
     child = None
     interrupted = None
     camera_failed = False
+    gate_read = gate_write = None
+    if parallel_home:
+        if camera_monitor is None:
+            raise ValueError("Parallel Home requires a camera monitor")
+        gate_read, gate_write = os.pipe()
 
     def forward(number, _frame):
         nonlocal interrupted
@@ -114,14 +119,34 @@ def run_session(command, hardware, *, shutdown_grace_s=15, camera_monitor=None):
     previous = {number: signal.signal(number, forward) for number in (signal.SIGINT, signal.SIGTERM)}
     status = 1
     try:
-        child = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL)
-        if interrupted is not None:
-            forward(interrupted, None)
+        launch_options = {}
+        if parallel_home:
+            from .startup_gate import CAMERA_GATE_ENV
+            launch_options = {"pass_fds": (gate_read,), "env": {**os.environ, CAMERA_GATE_ENV: str(gate_read)}}
+        child = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL, **launch_options)
+        if gate_read is not None:
+            os.close(gate_read)
+            gate_read = None
+        if interrupted is not None and child.poll() is None:
+            os.killpg(child.pid, interrupted)
         while True:
-            if camera_monitor is not None and not camera_monitor.healthy() and not camera_failed:
-                camera_failed = True
-                stderr("[camera] 运行中三路相机验证失败；停止执行并等待失能确认，不重启相机。")
-                forward(signal.SIGINT, None)
+            if camera_monitor is not None and not camera_failed and interrupted is None:
+                try:
+                    if gate_write is not None:
+                        if camera_monitor.startup_ready():
+                            os.write(gate_write, b"PASS\n")
+                            os.close(gate_write)
+                            gate_write = None
+                            stderr("[camera] 视频稳定性及映射检查通过；等待Home完成后获取新观测。")
+                    elif not camera_monitor.healthy():
+                        raise RuntimeError("运行中三路相机验证失败")
+                except Exception as error:
+                    camera_failed = True
+                    stderr(f"[camera] {error}；停止执行并等待失能确认，不重启相机。")
+                    forward(signal.SIGINT, None)
+                    if gate_write is not None:
+                        os.close(gate_write)
+                        gate_write = None
             try:
                 status = child.wait(timeout=0.1 if camera_monitor is not None else 1)
                 break
@@ -139,6 +164,9 @@ def run_session(command, hardware, *, shutdown_grace_s=15, camera_monitor=None):
                             status = child.wait()
                     break
     finally:
+        for fd in (gate_read, gate_write):
+            if fd is not None:
+                os.close(fd)
         if camera_monitor is not None:
             try:
                 camera_monitor.close()
@@ -174,24 +202,35 @@ def run_main():
         return
     from .camera_startup import CameraStartup
     from .camera_monitor import CameraMonitor
+    import argparse
+    from .shutdown import DisableSettings
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--sharpa-backend", default="sdk_direct")
+    parser.add_argument("--initialization", default="current")
+    parser.add_argument("--home", dest="initialization", action="store_const", const="home")
+    args, _ = parser.parse_known_args()
+    parallel_home = args.sharpa_backend == "sdk_direct" and args.initialization == "home"
     monitor = None
     try:
         startup = CameraStartup(hardware)
         owners = startup.inspect()
         if len(owners) != 1 or not hardware.is_openpi(owners[0], "openpi-cameras"):
             raise RuntimeError("执行前没有唯一部署相机服务；先运行hardware.sh up --exclusive")
-        monitor = CameraMonitor(startup.config).start()  # Camera-only gate BEFORE any SDK worker.
+        monitor = CameraMonitor(startup.config)
+        if parallel_home:
+            monitor.launch()
+        else:
+            monitor.start()  # Current/policy modes still validate before SDK startup.
     except BaseException:
-        hardware.cleanup()
+        try:
+            if monitor is not None:
+                monitor.close()
+        finally:
+            hardware.cleanup()
         raise
-    import argparse
-    from .shutdown import DisableSettings
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--sharpa-backend", default="sdk_direct")
-    args, _ = parser.parse_known_args()
     grace = DisableSettings.from_env().session_grace_s if args.sharpa_backend == "sdk_direct" else 15
     raise SystemExit(run_session([sys.executable, "-m", "deploy.fr3_sharpa_runtime.run", *sys.argv[1:]],
-                                 hardware, shutdown_grace_s=grace, camera_monitor=monitor))
+                                 hardware, shutdown_grace_s=grace, camera_monitor=monitor, parallel_home=parallel_home))
 
 
 if __name__ == "__main__":

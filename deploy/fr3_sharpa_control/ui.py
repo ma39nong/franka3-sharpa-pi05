@@ -37,13 +37,14 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <label>模型动作类型（优先按训练证据识别）</label><select id="semantics"><option value="auto">自动识别：训练记录／已核对权重</option><option value="absolute">Absolute：全部绝对关节位置</option><option value="delta">Delta：双臂增量，双手绝对位置</option></select>
 <div class="muted">已核对权重自动识别；证据不足时需提供训练 JSON 或按训练配置选择 Absolute／Delta。</div>
 <details><summary>训练证据（可选，用于交叉核对）</summary><label>归档训练 JSON（可选）</label><div class="path"><input id="training_record"><button onclick="browse('training_record',true)">选择文件</button></div></details>
+<label>训练 RTC 最大延迟（0 自动识别）</label><input id="train_rtc_max_delay" type="number" min="0" max="49" value="0"><div class="muted">新训练可附带 effective_config.json 或运行 JSON 自动识别。无训练记录时，按实际训练配置填写最大延迟（例如10），即确认使用训练前缀条件；Paper类型仍按权重资产校验。</div>
 <button onclick="inspect()" style="margin-top:14px">识别权重</button><div id="identity" class="notice">覆盖：30Hz／58D 的全量 Absolute、普通 Delta、Paper Delta、Train RTC、Train Paper RTC，以及 Absolute LoRA。Paper按资产识别；LoRA Delta与其他结构尚不支持。实际结构在GPU加载时再次核对。</div>
 </article><article class="card" id="execution-card"><h2>2 · 本次执行配置</h2>
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option><option value="soft-serial">串行 Soft</option><option value="soft-async">异步 Soft · 50→30→26＋4→20</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
 <label>启动前相机策略</label><select id="camera_policy"><option value="exclusive">部署独占接管：停止同组已知相机服务</option><option value="require_free">要求相机空闲：发现占用即报错</option></select>
-<div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。</div><label><input id="record" type="checkbox"> 录制 ROSbag，并在结束后生成三路及三联视频</label>
+<div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag，并在结束后生成三路及三联视频</label>
 <label>归档父目录</label><div class="path"><input id="output"><button onclick="browse('output')">选择目录</button></div><div class="muted">自动创建 日期/小时.分钟（如15.43）；同一分钟重启自动加后缀，不覆盖旧记录。</div>
 </article><article class="card" id="control-card"><h2>3 · 推理与执行</h2>
 <div class="control-line"><strong>推理端</strong><span id="modelState" class="muted">未启动</span><div class="actions"><button id="startModel" class="primary" onclick="startModel()">启动推理</button><button id="closeModel" class="stop" onclick="closeModel()" disabled>停止推理</button></div></div>
@@ -65,8 +66,8 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <script>
 let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','camera_policy'];
-function config(){let c={};for(let f of fields)c[f]=f==='record'?$(f).checked:['steps','rounds'].includes(f)?Number($(f).value):$(f).value;return c}
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','camera_policy','train_rtc_max_delay'];
+function config(){let c={};for(let f of fields)c[f]=f==='record'?$(f).checked:['steps','rounds','train_rtc_max_delay'].includes(f)?Number($(f).value):$(f).value;return c}
 async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
 function failure(e){$('error').textContent=e.message}
 function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('previewSummary').textContent='执行配置明细';$('start').disabled=true;$('error').textContent=''}
@@ -93,7 +94,7 @@ async function browse(target,file=false){if(busy)return;pickerTarget=target;pick
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelModes=null;updateModes();$('identity').textContent='权重配置已更改，请重新识别'}}
-(async()=>{let d=await api('info');token=d.token;for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(k==='record')$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);for(let f of ['checkpoint','training_record','semantics'])$(f).addEventListener('input',()=>{modelModes=null;updateModes();$('identity').textContent='权重配置已更改，请重新识别';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(k==='record')$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay'])$(f).addEventListener('input',()=>{modelModes=null;updateModes();$('identity').textContent='权重配置已更改，请重新识别';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500)})().catch(failure);
 </script></html>"""
 
 
@@ -166,7 +167,8 @@ def server_for(root, *, port=8766):
                 data = json.loads(self.rfile.read(size))
                 if self.path == "/api/inspect":
                     result = inspect_checkpoint(data["checkpoint"], training_record=data.get("training_record", ""),
-                                                semantics=data.get("semantics", "auto"), cache=controller.cache)
+                                                semantics=data.get("semantics", "auto"), cache=controller.cache,
+                                                train_rtc_max_delay=data.get("train_rtc_max_delay", 0))
                 elif self.path == "/api/preview":
                     result = controller.preview(data)
                 elif self.path == "/api/start-model":

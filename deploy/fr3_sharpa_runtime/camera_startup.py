@@ -85,10 +85,11 @@ class CameraStartup:
     @staticmethod
     def command(arguments, **kwargs):
         result = subprocess.run(
-            arguments, check=False, capture_output=True, text=True, timeout=kwargs.pop("timeout", 45), **kwargs
+            arguments, check=False, stdout=subprocess.PIPE, stderr=kwargs.pop("stderr", subprocess.PIPE),
+            text=True, timeout=kwargs.pop("timeout", 45), **kwargs
         )
         if result.returncode:
-            raise RuntimeError(f"命令失败（退出码{result.returncode}）：{' '.join(arguments)}\n{result.stderr[-8000:]}")
+            raise RuntimeError(f"命令失败（退出码{result.returncode}）：{' '.join(arguments)}\n{(result.stderr or result.stdout)[-8000:]}")
         return result.stdout
 
     def containers(self):
@@ -200,7 +201,7 @@ class CameraStartup:
             raise RuntimeError("三路相机启动验证失败：" + output)
         return report
 
-    def up(self, *, exclusive=False):
+    def up(self, *, exclusive=False, defer_camera_check=False):
         self.command(
             ["bash", str(Path(__file__).with_name("camera_probe.sh")), str(self.config), "--check"], timeout=15
         )
@@ -229,9 +230,12 @@ class CameraStartup:
             if len(items) != 1:
                 raise RuntimeError("未发现唯一的本部署相机容器")
             self.started = items[0]
-            print("[camera-startup] 核对实际序列号、三路RGB、连续频率及时间戳", file=sys.stderr, flush=True)
-            readiness = self.probe()
-            # Only start arm/Gateway dependencies AFTER cameras are verified.
+            print("[camera-startup] 相机已启动；视频验证交给受监督执行会话，与固定Home并行"
+                  if defer_camera_check else "[camera-startup] 核对实际序列号、三路RGB、连续频率及时间戳",
+                  file=sys.stderr, flush=True)
+            readiness = ({"status": "PENDING", "reason": "执行会话并行检查视频与固定Home；任务前必须汇合"}
+                         if defer_camera_check else self.probe())
+            # In deferred Home mode the supervised runtime owns the camera gate.
             self.command([*self.hardware.compose, "up", "-d", "franka-control", "teleop-control"])
             return {
                 "status": "PASS",
@@ -243,6 +247,17 @@ class CameraStartup:
         except BaseException as error:
             error.add_note("本次已停止的已知相机服务：" + json.dumps(self.stopped, ensure_ascii=False))
             if self.started is not None:
+                # Cleanup removes this container later. Preserve its driver output
+                # in the parent hardware.log before that evidence disappears.
+                try:
+                    logs = self.command(
+                        ["docker", "logs", "--timestamps", "--tail", "120", self.started["Id"]],
+                        timeout=5, stderr=subprocess.STDOUT,
+                    )
+                    print("[camera-startup] 相机驱动失败现场（清理前，最后120行）\n" + logs[-16000:],
+                          file=sys.stderr, flush=True)
+                except Exception as diagnostic_error:
+                    error.add_note(f"相机驱动日志采集失败：{diagnostic_error}")
                 # Immutable ID; never stop a replacement service or restart the old owner.
                 try:
                     self.stop(self.started)
@@ -259,6 +274,8 @@ def main():
     parser.add_argument(
         "--exclusive", action="store_true", help="Stop verified known same-camera services before startup"
     )
+    parser.add_argument("--defer-camera-check", action="store_true",
+                        help="Start controls now; supervised Home execution must validate cameras before task inference")
     args = parser.parse_args()
     with CameraLease():
         startup = CameraStartup()
@@ -269,7 +286,7 @@ def main():
                 "known_owners": [item.get("Name", item["Id"]) for item in startup.inspect()],
             }
             if args.inspect
-            else startup.up(exclusive=args.exclusive)
+            else startup.up(exclusive=args.exclusive, defer_camera_check=args.defer_camera_check)
         )
         print(json.dumps(result, ensure_ascii=False))
 

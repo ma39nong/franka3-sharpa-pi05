@@ -27,7 +27,7 @@ from .protocol import (DT_NS, LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE,
                        as_finite_action_chunk)
 from .ros_transport import construct_messages, validate_action_ranges, validate_gateway_admission
 from .sdk_direct import (DEFAULT_PREDICTION_CLIP_RAD, SharpaSdkDirectExecutor, action_prefix,
-                         chunk_command_frames, clip_hand_predictions, play_command_frames)
+                         chunk_command_frames, clip_hand_predictions, play_command_frames, prepare_command_with_limits)
 
 
 def main() -> None:
@@ -132,6 +132,7 @@ def main() -> None:
         )
 
         def publish_feedback():
+            last_error_log = float("-inf")
             while not feedback_stop.is_set():
                 try:
                     for side, publisher, hand in (
@@ -146,8 +147,13 @@ def main() -> None:
                         message.velocity = list(state.velocity)
                         message.effort = list(state.effort)
                         publisher.publish(message)
-                except Exception:
-                    pass
+                except Exception as error:
+                    now = time.monotonic()
+                    if now - last_error_log >= 1.0:
+                        stderr(json.dumps({"event": "sharpa_feedback_read_error", "side": side,
+                                           "error_type": type(error).__name__, "error": str(error),
+                                           "monotonic_ns": time.monotonic_ns()}))
+                        last_error_log = now
                 feedback_stop.wait(0.05)
 
         feedback_thread = threading.Thread(target=publish_feedback, daemon=True)
@@ -249,12 +255,37 @@ def main() -> None:
                                   "feedback_topics": ["/sharpa/left/joint_states",
                                                        "/sharpa/right/joint_states"]}),
                       file=protocol, flush=True)
+            elif operation == "feedback":
+                # Same freshness validator as motion; never subscribe to images.
+                deadline = time.monotonic() + 5.0
+                while True:
+                    try:
+                        current = fresh_feedback()
+                        break
+                    except (ValueError, RuntimeError) as error:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Home joint feedback not ready") from error
+                        time.sleep(0.02)
+                print(json.dumps({"status": "PASS", "operation": "feedback",
+                                  "state": current.state.tolist()}), file=protocol, flush=True)
             elif operation == "prepare":
                 target = target_chunk(request["target"])[0]
                 validate_action_ranges(target_chunk(target))
+                recovery = None
+                if request.get("home_recovery") is True:
+                    from .home_recovery import recover_before_home
+                    recovery = recover_before_home(executor, fresh_feedback,
+                        emit=lambda report: print(json.dumps(report), file=sys.stderr, flush=True))
                 current = fresh_feedback()
+                prepare_speed = float(request.get("speed_rad_s", args.speed_rad_s))
+                print(json.dumps({"event": "prepare_initial_feedback", "speed_rad_s": prepare_speed,
+                                  "measured_state_rad": current.state.tolist(), "target_rad": target.tolist()}),
+                      file=sys.stderr, flush=True)
+                # Reject an unreachable legal start before sending to either hand
+                # or publishing any arm frame. Never fake or clip feedback.
+                prepare_command_with_limits(current.state, current.state, speed_rad_s=prepare_speed)
                 approach = SlowApproach(target, current.state,
-                                        speed_rad_s=float(request.get("speed_rad_s", args.speed_rad_s)),
+                                        speed_rad_s=prepare_speed,
                                         # Keep prepare completion strictly inside
                                         # the execute FR3 first-target gate
                                         # (0.05 rad) without changing that gate.
@@ -270,13 +301,21 @@ def main() -> None:
                     if now - next_tick > DT_NS:
                         raise RuntimeError("Prepare 30Hz deadline missed; stopped")
                     current = fresh_feedback()
+                    previous_command = approach.previous.copy()
                     command, settled, last_error = approach.step(
                         current, now_ros_ns=node.get_clock().now().nanoseconds,
                         now_monotonic_ns=now, enforce_execute_delta=False)
+                    command, boundary_corrections = prepare_command_with_limits(
+                        command, previous_command, speed_rad_s=prepare_speed)
+                    approach.previous = command.copy()
+                    if boundary_corrections:
+                        print(json.dumps({"event": "prepare_hand_boundary_projection",
+                                          "corrections": boundary_corrections}), file=sys.stderr, flush=True)
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     next_tick += DT_NS
                 print(json.dumps({"status": "PASS", "operation": "prepare",
+                                  **({"home_recovery": recovery} if recovery is not None else {}),
                                   "published": True, "completed_ros_ns": node.get_clock().now().nanoseconds,
                                   "completed_monotonic_ns": time.monotonic_ns(),
                                   "maximum_pose_error_rad": last_error,

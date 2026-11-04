@@ -138,6 +138,8 @@ def prepare_before_observation(args):
 def observation_after_completion(args, report):
     # Require all seven real sensor stamps to follow settling, not a cached
     # pre-prepare snapshot. Existing freshness/sync checks still apply.
+    from .startup_gate import wait_for_cameras
+    wait_for_cameras()
     deadline = time.monotonic()+5
     while time.monotonic()<deadline:
         observation = live_observation(args.ros_overlay, args.prompt)
@@ -212,7 +214,13 @@ def execute_policy_prepare(args):
                     current = live_observation(args.ros_overlay, args.prompt)
             raise RuntimeError("Observation expired during inference; no new target/chunk will be sent "
                                f"(age={age / 1e6:.1f} ms, limit=200 ms; see inference_timing.jsonl)")
-        initial = live_observation(args.ros_overlay, args.prompt)
+        if home_arms is not None:
+            # Home consumes measured joints only. No model image snapshot may
+            # delay this branch while the supervisor validates the cameras.
+            feedback = worker.request({"operation": "feedback"})
+            initial = {"observation/state": np.asarray(feedback["state"], dtype=np.float32)}
+        else:
+            initial = live_observation(args.ros_overlay, args.prompt)
         # Only legacy policy prepare consumes an inference before the chunk loop.
         # Current mode uses this fresh observation for its first executable prediction.
         first = infer(initial) if initialization == "policy" else None
@@ -236,7 +244,7 @@ def execute_policy_prepare(args):
         if getattr(args, "broker_mode", "serial") == "rtc":
             if initial_target is not None:
                 prepared = worker.request({"operation": "prepare", "target": initial_target.tolist(),
-                    "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": 0.02})
+                    "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": 0.02, "home_recovery": True})
                 if prepared.get("status") != "PASS":
                     raise RuntimeError("Home failed before RTC")
                 initial = observation_after_completion(args, prepared)

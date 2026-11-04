@@ -1,0 +1,40 @@
+{
+  "config": {
+    "fields": {
+      "model": {
+        "fields": {
+          "action_dim": 58,
+          "action_expert_variant": "gemma_300m",
+          "action_horizon": 50,
+          "max_token_len": 256,
+          "paligemma_variant": "gemma_2b",
+          "paper_asset_sha256": "29daf292778d3f80a8cc28f6c76e0d824d3ccada91468334d678ba58ea7890f0",
+          "paper_beta": 0.5,
+          "paper_mode": "timestamp_zscore_arms",
+          "paper_std_floor": 0.0001,
+          "pi05": true,
+          "rtc_max_delay": 10
+        }
+      },
+      "data": {
+        "fields": {
+          "action_hz": 30.0,
+          "extra_delta_transform": true,
+          "paper_beta": 0.5,
+          "paper_mode": "timestamp_zscore_arms",
+          "paper_std_floor": 0.0001
+        }
+      }
+    }
+  },
+  "inputs": {
+    "norm_stats_sha256": "7ae86a376764ee399c58d3b4cd63d415ba26f7a59b3f9fc4a50b96b944557892",
+    "paper_bundle_sha256": "29daf292778d3f80a8cc28f6c76e0d824d3ccada91468334d678ba58ea7890f0"
+  },
+  "source": {
+    "training_record": "/home/tairan/workspace/code/tomato-openpi/logs/pi05_fr3_sharpa_1016_2_multimodal_rgb_fullft_v1_delta_30hz_ui_t3/tairan_tomato_sharpa_1016_2_multimodal_fullft_delta_s42_1102_1309_paper_t3/20261102_131448_621565_474815.json",
+    "training_record_sha256": "f4cf8c6ef58072b68971f5d6d859d48283e87558ef390caa533a5e8153fe9507"
+  },
+  "checkpoint_manifest_sha256": "ac27c033e558aac9465f5c18f8c9148caeffedc0dc06ccfbceb2352590fc40fb",
+  "checkpoint_metadata_sha256": "ad49f3f7502751cf40ec4abc1be200467ef9fbd4c3181d43cc17fb765891a5c4"
+}

@@ -10,3 +10,5 @@
 自动识别同时匹配 checkpoint 的 `params/manifest.ocdbt` 和 `params/_METADATA` 摘要，再核对统计和训练算法。目录名称、7999步数或相同统计本身不能触发该绑定。保持checkpoint内容不变时可以移动、改名；重新导出或重新保存的权重需要重新核验并提供匹配训练记录。显式指定的训练记录或checkpoint根目录的 `train_rtc_record.json` 优先。
 
 新增记录前必须独立核对训练代码、训练JSON、checkpoint元数据、统计摘要和Paper资产；不要复制现有记录后只改路径或步数。
+
+- `train-paper-rtc-1102-6000.json` / `train-paper-rtc-1102-7999.json`：2026-11-02 `…1102_1309_paper_t3` 的两个步骤，按服务器运行 JSON、checkpoint manifest/metadata 与统计/Paper bundle绑定。后续实验优先携带 effective_config 归档，或由操作员在 GUI 明确填写训练 RTC 最大延迟，无需扩展内置名单。

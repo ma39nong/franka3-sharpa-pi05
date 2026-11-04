@@ -110,6 +110,70 @@ def hand_joint_limits():
     return limits
 
 
+def _hand_bounds_float32(limits):
+    """Represent the driver's float64 interval strictly from the inside."""
+    lower, upper = limits[:, 0].astype(np.float32), limits[:, 1].astype(np.float32)
+    lower = np.where(lower.astype(np.float64) < limits[:, 0], np.nextafter(lower, np.float32(np.inf)), lower)
+    upper = np.where(upper.astype(np.float64) > limits[:, 1], np.nextafter(upper, np.float32(-np.inf)), upper)
+    return lower, upper
+
+
+def validate_hand_command(values, side, *, limits=None):
+    """Validate each hand before either SDK call; include the rejected angle."""
+    hand = np.asarray(values, dtype=np.float64)
+    if hand.shape != (22,) or not np.isfinite(hand).all():
+        raise ValueError(f"{side} Sharpa command requires 22 finite joint positions")
+    limits = hand_joint_limits() if limits is None else limits
+    outside = np.flatnonzero((hand < limits[:, 0]) | (hand > limits[:, 1]))
+    if outside.size:
+        joint = int(outside[0])
+        raise ValueError(
+            f"{side} Sharpa {SHARPA_JOINT_NAMES[joint]} command={hand[joint]:.10f} rad "
+            f"outside [{limits[joint, 0]:.10f}, {limits[joint, 1]:.10f}] rad; no hand command sent")
+    return tuple(float(x) for x in hand)
+
+
+def prepare_command_with_limits(command, previous, *, speed_rad_s):
+    """Keep prepare output inside driver limits and the existing per-tick speed.
+
+    Feedback is never altered. A boundary projection is allowed only when the
+    resulting command remains reachable from the previous command (or initial
+    measured state) within this prepare tick. Larger excursions fail closed.
+    This is separate from the model prediction clipping allowance.
+    """
+    candidate = np.asarray(command, dtype=np.float32).copy()
+    previous = np.asarray(previous, dtype=np.float64)
+    if (candidate.shape != (58,) or previous.shape != (58,)
+            or not np.isfinite(candidate).all() or not np.isfinite(previous).all()
+            or not np.isfinite(speed_rad_s) or speed_rad_s <= 0):
+        raise ValueError("Prepare requires finite 58D commands/feedback and positive speed")
+    limits = hand_joint_limits()
+    lower, upper = _hand_bounds_float32(limits)
+    step_budget = min(float(speed_rad_s) * DT_NS / 1e9, SDK_SLEW_LIMIT_RAD)
+    corrections = []
+    for side, part in (("left", LEFT_SHARPA_SLICE), ("right", RIGHT_SHARPA_SLICE)):
+        raw = candidate[part].copy()
+        adjusted = np.clip(raw, lower, upper)
+        for joint in np.flatnonzero(adjusted != raw):
+            dimension = part.start + int(joint)
+            movement = abs(float(adjusted[joint]) - previous[dimension])
+            if movement > step_budget or movement >= SDK_SLEW_LIMIT_RAD:
+                raise ValueError(
+                    f"Prepare {side} Sharpa {SHARPA_JOINT_NAMES[joint]}: "
+                    f"previous_or_initial_feedback={previous[dimension]:.10f} rad, "
+                    f"generated_command={float(raw[joint]):.10f} rad, "
+                    f"limits=[{limits[joint, 0]:.10f}, {limits[joint, 1]:.10f}] rad; "
+                    f"nearest legal command requires {movement:.10f} rad > allowed prepare step "
+                    f"{step_budget:.10f} rad (or SDK slew limit). "
+                    "Home stopped before sending this frame; inspect measured hand position/calibration")
+            corrections.append({"side": side, "joint": SHARPA_JOINT_NAMES[joint],
+                                "previous_rad": float(previous[dimension]), "original_rad": float(raw[joint]),
+                                "command_rad": float(adjusted[joint]), "movement_rad": movement})
+        validate_hand_command(adjusted, side, limits=limits)
+        candidate[part] = adjusted
+    return candidate, corrections
+
+
 def clip_hand_predictions(actions, *, execute_steps=15, max_correction_rad=DEFAULT_PREDICTION_CLIP_RAD):
     """Project only selected model hand targets; never clip Home or measured state."""
     if not np.isfinite(max_correction_rad) or max_correction_rad < 0:
@@ -118,9 +182,7 @@ def clip_hand_predictions(actions, *, execute_steps=15, max_correction_rad=DEFAU
     action_prefix(corrected, execute_steps)
     limits = hand_joint_limits()
     # Round bounds inward: float32(upper) can otherwise exceed the float64 driver limit.
-    lower, upper = limits[:, 0].astype(np.float32), limits[:, 1].astype(np.float32)
-    lower = np.where(lower.astype(np.float64) < limits[:, 0], np.nextafter(lower, np.float32(np.inf)), lower)
-    upper = np.where(upper.astype(np.float64) > limits[:, 1], np.nextafter(upper, np.float32(-np.inf)), upper)
+    lower, upper = _hand_bounds_float32(limits)
     corrections = []
     for side, part in (("left", LEFT_SHARPA_SLICE), ("right", RIGHT_SHARPA_SLICE)):
         raw = corrected[:execute_steps, part].copy()
@@ -223,8 +285,11 @@ class SharpaSdkDirectExecutor:
         if self._last_send is not None and now - self._last_send > self.cfg.watchdog_timeout_s:
             self.stop()
             raise RuntimeError("Sharpa SDK watchdog expired")
-        self.left.command_joint_position(tuple(float(x) for x in left))
-        self.right.command_joint_position(tuple(float(x) for x in right))
+        limits = hand_joint_limits()
+        left = validate_hand_command(left, "left", limits=limits)
+        right = validate_hand_command(right, "right", limits=limits)
+        self.left.command_joint_position(left)
+        self.right.command_joint_position(right)
         self._last_send = now
 
     def resume_stream(self) -> None:

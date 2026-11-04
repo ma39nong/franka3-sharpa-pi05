@@ -570,3 +570,37 @@ def test_model_port_probe_does_not_generate_invalid_http_handshakes():
 def test_ordinary_checkpoint_cannot_select_paper_rtc(repository, checkpoint):
     with pytest.raises(ValueError, match="不支持所选"):
         settings(repository, checkpoint, mode="paper-rtc", speed="fast").plan()
+
+
+def test_subprocess_failure_surfaces_camera_cause_in_gui_message(tmp_path, monkeypatch):
+    controller = control.DeploymentController(tmp_path)
+    controller.directory = tmp_path
+    (tmp_path / "hardware.log").write_text(
+        "Traceback (most recent call last):\n"
+        "RuntimeError: probe command failed\n"
+        "TimeoutError: 相机启动验证超时：应答缺失：['cam0']；未允许Home；{\"large\":1}\n"
+        "本次已停止的已知相机服务：[]\n"
+        "[camera-startup] driver logs\n[WARN] no frames\n")
+    process = types.SimpleNamespace(poll=lambda: 1, returncode=1)
+    monkeypatch.setattr(controller, "_spawn", lambda *args: process)
+    with pytest.raises(RuntimeError, match="cam0") as caught:
+        controller._command(["unused"], "hardware", {})
+    assert "未允许Home" in str(caught.value)
+    assert "large" not in str(caught.value)
+    assert control.command_failure_detail(tmp_path / "missing.log") == ""
+
+
+def test_only_supported_home_plan_defers_video_gate(repository, checkpoint, monkeypatch):
+    from deploy.fr3_sharpa_runtime import home_pose
+    monkeypatch.setattr(home_pose, "load_home", lambda *a, **kw: ({}, {}))
+    local = repository / ".deployment"
+    local.mkdir()
+    for name in ("operator_poses.yaml", "hand_home.json"):
+        (local / name).write_text("test home")
+    # A checkout without the supervised gate keeps its existing serial startup.
+    assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="home").plan()["hardware"]
+    (repository / "deploy/fr3_sharpa_runtime/startup_gate.py").write_text("# supported gate")
+    plan = settings(repository, checkpoint, initialization="home").plan()
+    assert "--defer-camera-check" in plan["hardware"]
+    assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="current").plan()["hardware"]
+    assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="home", mode="soft-async", steps=26).plan()["hardware"]
