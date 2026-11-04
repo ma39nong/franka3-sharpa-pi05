@@ -261,3 +261,59 @@ def test_camera_loss_interrupts_once_waits_for_runtime_then_cleans_without_resta
         ("monitor_closed",),
         ("hardware_cleanup",),
     ]
+
+
+def test_failed_camera_driver_logs_are_saved_before_cleanup(config, monkeypatch, capsys):
+    startup = FakeStartup(config)
+    real_command = startup.command
+
+    def command(args, **kwargs):
+        if args[:2] == ["docker", "logs"]:
+            startup.events.append(("driver-logs", args[-1]))
+            assert kwargs["timeout"] == 5
+            return "cam0: network device connection failed"
+        return real_command(args, **kwargs)
+
+    monkeypatch.setattr(startup, "command", command)
+    monkeypatch.setattr(startup, "probe", lambda: (_ for _ in ()).throw(RuntimeError("cam0 missing")))
+    with pytest.raises(RuntimeError, match="cam0 missing"):
+        startup.up(exclusive=True)
+    assert "network device connection failed" in capsys.readouterr().err
+    assert startup.events.index(("driver-logs", startup.deployed["Id"])) < startup.events.index(
+        ("stopped", startup.deployed["Id"]))
+    assert not any("franka-control" in event for event in startup.events)
+
+
+def test_driver_log_collection_failure_preserves_original_error_and_cleanup(config, monkeypatch):
+    startup = FakeStartup(config)
+    real_command = startup.command
+
+    def command(args, **kwargs):
+        if args[:2] == ["docker", "logs"]:
+            raise subprocess.TimeoutExpired(args, 5)
+        return real_command(args, **kwargs)
+
+    monkeypatch.setattr(startup, "command", command)
+    monkeypatch.setattr(startup, "probe", lambda: (_ for _ in ()).throw(RuntimeError("cam0 missing")))
+    with pytest.raises(RuntimeError, match="cam0 missing") as caught:
+        startup.up(exclusive=True)
+    assert any("日志采集失败" in note for note in caught.value.__notes__)
+    assert ("stopped", startup.deployed["Id"]) in startup.events
+
+
+def test_deferred_camera_gate_starts_controls_without_claiming_video_pass(config):
+    startup = FakeStartup(config)
+    command = startup.command
+    def deferred_command(args, **kwargs):
+        if args[-2:] == ["franka-control", "teleop-control"]:
+            startup.events.append(tuple(args))
+            return ""
+        return command(args, **kwargs)
+    startup.command = deferred_command
+    report = startup.up(exclusive=True, defer_camera_check=True)
+    assert report["status"] == "PASS"
+    assert report["readiness"]["status"] == "PENDING"
+    assert ("probe",) not in startup.events
+    assert not startup.ready
+    assert startup.events.index(("released",)) < len(startup.events) - 1
+    assert startup.events[-1][-2:] == ("franka-control", "teleop-control")

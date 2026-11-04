@@ -29,5 +29,5 @@ case "${1:-check}" in
     sharpa_python -m deploy.fr3_sharpa_runtime.camera_startup "$@"
     ;;
   stop) sharpa_python -m deploy.fr3_sharpa_runtime.hardware_session stop ;;
-  *) echo 'Usage: hardware.sh [check|camera-check|up [--exclusive]|stop]' >&2; exit 2 ;;
+  *) echo 'Usage: hardware.sh [check|camera-check|up [--exclusive] [--defer-camera-check]|stop]' >&2; exit 2 ;;
 esac

@@ -15,6 +15,12 @@ def resolve_training_record(checkpoint, record_path=None):
     candidate = root / "train_rtc_record.json"
     if candidate.is_file():
         return candidate.resolve()
+    # New training archives keep the effective dataclass config alongside the
+    # step directory, or inside the run's reproducibility directory.
+    for candidate in (root / "effective_config.json", root / "reproducibility/effective_config.json",
+                      root.parent / "reproducibility/effective_config.json"):
+        if candidate.is_file():
+            return candidate.resolve()
     manifest = root / "params/manifest.ocdbt"
     metadata = root / "params/_METADATA"
     if not manifest.is_file() or not metadata.is_file():
@@ -29,15 +35,58 @@ def resolve_training_record(checkpoint, record_path=None):
     return None
 
 
-def inspect_train_rtc(stats_path, checkpoint, record_path=None, *, paper_algorithm=None):
+def load_training_record(path, stats_path, *, paper_algorithm=None):
+    """Normalize legacy run JSON and new effective_config.json archives."""
+    record = json.loads(Path(path).read_text())
+    if "config" in record:
+        return record
+    fields = record.get("fields")
+    if not isinstance(fields, dict) or "model" not in fields or "data" not in fields:
+        raise ValueError("训练JSON必须是运行记录或effective_config.json")
+    model = fields["model"]["fields"]
+    # An effective config lacks legacy inputs hashes. Bind it to the verified
+    # Paper bundle, or compare the adjacent archived statistics for plain RTC.
+    if paper_algorithm:
+        if model.get("paper_asset_sha256") != paper_algorithm["bundle_sha256"]:
+            raise ValueError("训练配置的Paper资产摘要与checkpoint不一致")
+    else:
+        adjacent = Path(path).parent / "norm_stats.json"
+        if not adjacent.is_file():
+            raise ValueError("effective_config旁缺少norm_stats.json；请提供运行JSON或使用手动训练确认")
+        expected = json.loads(adjacent.read_text())
+        actual = json.loads(Path(stats_path).read_text())
+        if expected.get("norm_stats", expected) != actual.get("norm_stats", actual):
+            raise ValueError("effective_config归档统计与checkpoint不一致")
+    return {"config": record, "inputs": {
+        "norm_stats_sha256": hashlib.sha256(Path(stats_path).read_bytes()).hexdigest(),
+        "paper_bundle_sha256": paper_algorithm["bundle_sha256"] if paper_algorithm else None}}
+
+
+def inspect_train_rtc(stats_path, checkpoint, record_path=None, *, paper_algorithm=None,
+                      manual_delay=None, manual_semantics=None):
     path = resolve_training_record(checkpoint, record_path)
     if path is None:
-        return None
+        delay = manual_delay if manual_delay is not None else int(os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY", "0"))
+        if not delay:
+            return None
+        if type(delay) is not int or not 0 < delay < 50:
+            raise ValueError("手动训练RTC最大延迟必须为1..49整数")
+        semantics = "delta" if paper_algorithm else (manual_semantics or os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS"))
+        if semantics not in ("absolute", "delta"):
+            raise ValueError("手动训练RTC需明确选择Absolute或Delta动作类型")
+        binding = {"max_delay": delay, "semantics": semantics, "paper": paper_algorithm,
+                   "manifest": hashlib.sha256((Path(checkpoint) / "params/manifest.ocdbt").read_bytes()).hexdigest(),
+                   "stats": hashlib.sha256(Path(stats_path).read_bytes()).hexdigest()}
+        return {"max_delay": delay, "record": None, "manual_confirmation": True,
+                "record_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest(),
+                "semantics": semantics}
     path = Path(path).expanduser().resolve()
-    record = json.loads(path.read_text())
+    record = load_training_record(path, stats_path, paper_algorithm=paper_algorithm)
     fields = record["config"]["fields"]
     model, data = fields["model"]["fields"], fields["data"]["fields"]
     delay = model.get("rtc_max_delay", 0)
+    if manual_delay and manual_delay != delay:
+        raise ValueError("手动RTC延迟与训练记录冲突")
     if delay == 0:
         return None
     if type(delay) is not int or not 0 < delay < 50:

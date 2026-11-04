@@ -25,6 +25,23 @@ def interrupt(process):
             os.killpg(process.pid, signal.SIGINT)
 
 
+def command_failure_detail(path):
+    """Surface the subprocess cause without loading an unbounded log."""
+    try:
+        with Path(path).open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 16000))
+            lines = stream.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    prefixes = ("TimeoutError:", "RuntimeError:", "ValueError:", "FileNotFoundError:", "PermissionError:")
+    causes = [line.strip() for line in lines if line.strip().startswith(prefixes)]
+    if causes:
+        # Source-clock diagnostics may append a large JSON report to the cause.
+        return causes[-1].split("；{", 1)[0][:600]
+    return next((line.strip()[:600] for line in reversed(lines) if line.strip()), "")
+
+
 def port_listening(port):
     """Linux listen-table probe, without bogus HTTP handshakes in model logs."""
     for name in ("tcp", "tcp6"):
@@ -218,7 +235,9 @@ class DeploymentController:
                 raise TimeoutError(f"{name} 超时，请查看对应日志")
             time.sleep(0.1)
         if process.returncode:
-            raise RuntimeError(f"{name} 失败，退出码{process.returncode}，请查看对应日志")
+            folder = self.model_directory if name in ("model", "model_check") else self.directory
+            detail = command_failure_detail(folder / f"{name}.log") if folder else ""
+            raise RuntimeError(f"{name} 失败，退出码{process.returncode}；{detail or '请查看对应日志'}")
         if cancellable:
             self._cancelled()
 
@@ -404,7 +423,10 @@ class DeploymentController:
                 self._command(["bash", "deploy/fr3_sharpa_control/record_session.sh", "check"], "recording_check", env)
             camera_lease = CameraLease().acquire()
             env[LEASE_ENV] = str(camera_lease.fd)
-            self.update("hardware_up", "正在按相机策略核对占用、等待释放并验证三路图像；通过后才启动执行端")
+            self.update("hardware_up", (
+                "正在核对相机占用并启动硬件；随后并行验证视频与执行Home，均成功后才开始任务"
+                if "--defer-camera-check" in self.plan["hardware"] else
+                "正在按相机策略核对占用、等待释放并验证三路图像；通过后才启动执行端"))
             hardware_up = True  # Includes partially successful compose up.
             self._command(self.plan["hardware"], "hardware", env, timeout=180)
             self._require_model(self.plan, env)

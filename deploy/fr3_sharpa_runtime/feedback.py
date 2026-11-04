@@ -26,9 +26,13 @@ class LiveFeedback:
             raise ValueError("All four live feedback topics are required")
         for key, stamp, received in zip(FEEDBACK_KEYS, self.ros_stamps_ns, self.received_monotonic_ns, strict=True):
             if stamp <= 0 or not 0 <= now_ros_ns - stamp <= MAX_AGE_NS:
-                raise ValueError(f"Stale/future feedback timestamp: {FEEDBACK_TOPICS[key]}")
+                raise ValueError(f"Stale/future feedback timestamp: {FEEDBACK_TOPICS[key]}; "
+                                 f"source_age_ms={(now_ros_ns-stamp)/1e6:.3f}, "
+                                 f"receipt_age_ms={(now_monotonic_ns-received)/1e6:.3f}, "
+                                 f"source_stamp_ns={stamp}, now_ros_ns={now_ros_ns}")
             if not 0 <= now_monotonic_ns - received <= MAX_AGE_NS:
-                raise ValueError(f"Stale/future received feedback: {FEEDBACK_TOPICS[key]}")
+                raise ValueError(f"Stale/future received feedback: {FEEDBACK_TOPICS[key]}; "
+                                 f"receipt_age_ms={(now_monotonic_ns-received)/1e6:.3f}")
         if max(self.ros_stamps_ns) - min(self.ros_stamps_ns) > MAX_SPREAD_NS:
             raise ValueError("Live feedback timestamps are not synchronized")
 

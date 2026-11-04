@@ -98,7 +98,8 @@ def prepare_policy_validation():
              NORM_STATS.parent / "delta_paper.json", NORM_STATS.parent / "delta_paper.npz",
              NORM_STATS.parent / "norm_metadata.json",
              record or checkpoint / "train_rtc_record.json")
-    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[-1]))
+    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[-1]),
+               os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY"), os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS"))
     with _validation_lock:
         signature = _asset_signature(paths)
         if _validation_cache is not None:

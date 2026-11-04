@@ -66,7 +66,7 @@ def allocate_run(root, *, now=None):
             attempt += 1
 
 
-def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None):
+def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0):
     root = Path(checkpoint).expanduser().resolve()
     manifest, metadata = root / "params/manifest.ocdbt", root / "params/_METADATA"
     if not manifest.is_file() or not metadata.is_file():
@@ -95,7 +95,8 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
     from deploy.fr3_sharpa_runtime.train_rtc_contract import inspect_train_rtc
-    trained = inspect_train_rtc(stats, root, training_record or None, paper_algorithm=algorithm)
+    trained = inspect_train_rtc(stats, root, training_record or None, paper_algorithm=algorithm,
+                                manual_delay=train_rtc_max_delay, manual_semantics=semantics)
     if trained and lora:
         raise ValueError("Train RTC requires full checkpoint, excludes LoRA")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
@@ -104,10 +105,11 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if algorithm:
         detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
     if trained:
-        detected, source = trained["semantics"], "匹配统计与结构的Train RTC训练记录"
+        detected, source = trained["semantics"], ("操作员手动确认训练RTC及最大延迟" if trained.get("manual_confirmation") else "匹配统计与结构的Train RTC训练记录")
     cached_confirmation = False
     if training_record:
-        record = json.loads(Path(training_record).expanduser().read_text())
+        from deploy.fr3_sharpa_runtime.train_rtc_contract import load_training_record
+        record = load_training_record(Path(training_record).expanduser(), stats, paper_algorithm=algorithm)
         config = record["config"]["fields"]
         model, data = config["model"]["fields"], config["data"]["fields"]
         if (model["action_dim"], model["action_horizon"], model["max_token_len"], data["action_hz"]) != (58, 50, 256, 30):
@@ -167,6 +169,7 @@ class DeploymentSettings:
     training_record: str = ""
     semantics: str = "auto"
     camera_policy: str = "exclusive"
+    train_rtc_max_delay: int = 0
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -182,7 +185,10 @@ class DeploymentSettings:
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
         if self.mode.startswith("soft-") and self.steps != 26:
             raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
-        model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics, cache=cache)
+        if type(self.train_rtc_max_delay) is not int or not 0 <= self.train_rtc_max_delay < 50:
+            raise ValueError("训练RTC最大延迟必须为0..49整数，0表示自动识别")
+        model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
+                                   cache=cache, train_rtc_max_delay=self.train_rtc_max_delay)
         if not model["profile"]:
             raise ValueError(model["evidence"])
         if self.mode not in model["supported_modes"]:
@@ -251,7 +257,9 @@ class DeploymentSettings:
                 "home_files": home_files, "machine_root": str(machine),
                 "home_sha256": {key: fingerprint(path) for key, path in home_files.items()} if self.initialization == "home" else {},
                 "hardware": ["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "up",
-                             *(["--exclusive"] if self.camera_policy == "exclusive" else [])],
+                             *(["--exclusive"] if self.camera_policy == "exclusive" else []),
+                             *(["--defer-camera-check"] if self.initialization == "home"
+                               and self.mode != "soft-async" and (repo / shared / "startup_gate.py").is_file() else [])],
                 "service": ["bash", service, *common, *service_args],
                 "check": ["bash", runtime, *options, "--check"],
                 "execute": ["bash", runtime, *options, "--execute", "--enable-hardware", "--sharpa-backend", "sdk_direct"]}
@@ -265,6 +273,7 @@ def plan_environment(plan):
     from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile
     profile = get_model_profile(plan["model"]["profile"])
     env = dict(os.environ)
+    env.pop("SHARPA_CAMERA_GATE_FD", None)  # Only the current hardware supervisor may grant admission.
     # Machine/SDK paths stay; inference identity and service port are per plan.
     env.update({profile.checkpoint_env: plan["model"]["checkpoint"],
                 profile.norm_stats_env: plan["model"]["norm_stats"],
@@ -276,10 +285,15 @@ def plan_environment(plan):
     if overlay.is_dir():
         env.setdefault("SHARPA_ROS_MESSAGES_OVERLAY", str(overlay))
     env["PYTHONPATH"] = f"{root}:{root}/src:{root}/packages/openpi-client/src"
-    if plan["model"].get("train_rtc"):
-        env["SHARPA_TRAIN_RTC_RECORD"] = plan["model"]["train_rtc"]["record"]
-    else:
-        env.pop("SHARPA_TRAIN_RTC_RECORD", None)
+    for key in ("SHARPA_TRAIN_RTC_RECORD", "SHARPA_TRAIN_RTC_MAX_DELAY", "SHARPA_TRAIN_RTC_SEMANTICS"):
+        env.pop(key, None)
+    trained = plan["model"].get("train_rtc")
+    if trained:
+        if trained["record"]:
+            env["SHARPA_TRAIN_RTC_RECORD"] = trained["record"]
+        else:
+            env["SHARPA_TRAIN_RTC_MAX_DELAY"] = str(trained["max_delay"])
+            env["SHARPA_TRAIN_RTC_SEMANTICS"] = trained["semantics"]
     env.pop("SHARPA_RECORD_SOCKET", None)
     env.pop("SHARPA_CAMERA_LEASE_FD", None)  # Never inherit another stale run's lease.
     return env

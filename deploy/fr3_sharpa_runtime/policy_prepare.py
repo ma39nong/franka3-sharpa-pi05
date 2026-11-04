@@ -168,7 +168,8 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                   tolerance_rad=tolerance, home=home_metadata)
             prepared = transport.request({"operation": "prepare", "target": target.tolist(),
                                           "speed_rad_s": speed_rad_s,
-                                          "tolerance_rad": tolerance})
+                                          "tolerance_rad": tolerance,
+                                          **({"home_recovery": True} if initial_target is not None else {})})
             if home_metadata is not None:
                 prepared["home"] = home_metadata
             if prepared.get("status") != "PASS":

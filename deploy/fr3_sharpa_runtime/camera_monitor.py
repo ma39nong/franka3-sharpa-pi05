@@ -36,7 +36,8 @@ class CameraMonitor:
                 reports.append(json.loads(line))
         return reports
 
-    def start(self):
+    def launch(self):
+        """Launch read-only validation without waiting for its first PASS."""
         script = Path(__file__).with_name("camera_probe.sh")
         self.process = subprocess.Popen(
             ["bash", str(script), self.config, "--watch"],
@@ -44,21 +45,33 @@ class CameraMonitor:
             stdout=subprocess.PIPE,
             start_new_session=True,
         )
-        deadline = time.monotonic() + CAMERA_PROCESS_TIMEOUT_SEC
+        self.startup_deadline = time.monotonic() + CAMERA_PROCESS_TIMEOUT_SEC
+        return self
+
+    def startup_ready(self):
+        """Pending is distinct from healthy; failure must cancel Home."""
+        if self.process is None or self.process.poll() is not None:
+            raise RuntimeError("相机启动验证失败；取消Home并等待执行端失能确认，详见相机日志")
+        for report in self._reports():
+            if report.get("status") != "PASS":
+                raise RuntimeError("相机启动验证失败：" + json.dumps(report, ensure_ascii=False))
+            self.last_seen = report["checked_monotonic_ns"] / 1e9
+        if self.eof:
+            raise RuntimeError("相机监控进程提前关闭输出")
+        if self.last_seen is not None:
+            if not 0 <= time.monotonic() - self.last_seen < 0.75:
+                raise RuntimeError("相机启动验证心跳已过期")
+            return True
+        if time.monotonic() >= self.startup_deadline:
+            raise TimeoutError("相机监控启动超时")
+        return False
+
+    def start(self):
+        self.launch()
         try:
-            while time.monotonic() < deadline:
-                if self.process.poll() is not None:
-                    raise RuntimeError("执行前相机验证失败；不会连接SDK或Home，详见相机日志")
-                if not select.select([self.process.stdout], [], [], 0.1)[0]:
-                    continue
-                for report in self._reports():
-                    if report.get("status") == "PASS":
-                        self.last_seen = report["checked_monotonic_ns"] / 1e9
-                        if 0 <= time.monotonic() - self.last_seen < 0.75:
-                            return self
-                if self.eof:
-                    raise RuntimeError("相机监控进程提前关闭输出")
-            raise TimeoutError("执行前相机监控启动超时")
+            while not self.startup_ready():
+                time.sleep(0.05)
+            return self
         except BaseException:
             self.close()
             raise
