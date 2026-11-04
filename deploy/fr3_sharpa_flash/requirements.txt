@@ -1,0 +1,3 @@
+# Install only in the FLASH training-compatible environment; keep its JAX/Flax lock.
+msgpack>=1.0.5,<2
+websockets>=14,<16

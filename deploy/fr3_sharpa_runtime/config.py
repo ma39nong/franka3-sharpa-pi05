@@ -92,6 +92,28 @@ def prepare_policy_validation():
     """
     global _validation_cache
     checkpoint = require_checkpoint()
+    if MODEL_PROFILE.name == "flash-absolute":
+        from .flash_contract import inspect_flash
+        import json
+        path = checkpoint / "flash_deployment.json"
+        manifest = json.loads(path.read_text())
+        backend = os.environ.get("SHARPA_FLASH_REPO")
+        paths = [path, *(checkpoint / name for name in manifest["files"])]
+        adapter_root = Path(__file__).resolve().parents[2]
+        paths += [adapter_root / name for name in ("deploy/fr3_sharpa_flash/policy.py", "deploy/fr3_sharpa_flash/serve.py",
+                   "deploy/fr3_sharpa_flash/codec.py", "deploy/fr3_sharpa_runtime/flash_contract.py")]
+        if backend:
+            paths += [Path(backend) / name for name in manifest["backend"]["files"]]
+        context = (str(checkpoint), str(NORM_STATS), backend, MODEL_PROFILE)
+        with _validation_lock:
+            signature = _asset_signature(paths)
+            if _validation_cache and _validation_cache[:2] == (context, signature):
+                return _validation_cache[2]
+            verified = inspect_flash(checkpoint, norm_stats=NORM_STATS, backend=backend)
+            if signature != _asset_signature(paths):
+                raise ValueError("FLASH package changed during validation")
+            _validation_cache = (context, signature, verified)
+            return verified
     from .train_rtc_contract import resolve_training_record
     record = resolve_training_record(checkpoint)
     paths = (checkpoint / "params/manifest.ocdbt", checkpoint / "params/_METADATA", NORM_STATS,
@@ -139,7 +161,10 @@ def validate_policy_metadata(metadata):
         expected["training_action_supervision"] = MODEL_PROFILE.training_action_supervision
     # Robot execution depends on physical actions and checkpoint identity,
     # not on whether the model was trained with adapters or full parameters.
-    expected.update(prepare_policy_validation())
+    verified = prepare_policy_validation()
+    if MODEL_PROFILE.name == "flash-absolute":
+        verified = {key: value for key, value in verified.items() if key != "warmed_up"}
+    expected.update(verified)
     for key, value in expected.items():
         if metadata.get(key) != value:
             raise ValueError(f"Policy server {key}={metadata.get(key)!r} does not match deployment {value!r}")

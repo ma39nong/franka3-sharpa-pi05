@@ -15,6 +15,14 @@ from .model_profiles import validate_parameter_layout
 
 def checkpoint_contract():
     checkpoint = config.require_checkpoint()
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        from .flash_contract import inspect_flash
+        import os
+        return inspect_flash(checkpoint, norm_stats=config.NORM_STATS, backend=os.environ.get("SHARPA_FLASH_REPO"))
+    if (checkpoint / "flash_deployment.json").exists() or list((checkpoint / "assets").rglob("flash_manifest.json")):
+        from .flash_contract import declares_flash
+        if declares_flash(checkpoint):
+            raise ValueError("FLASH checkpoint requires flash-absolute profile; cannot load as ordinary Pi0")
     manifest = checkpoint / "params/manifest.ocdbt"
     tree_path = checkpoint / "params/_METADATA"
     if not manifest.is_file() or not tree_path.is_file():
@@ -69,6 +77,8 @@ def checkpoint_contract():
 
 
 def build_config():
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        raise ValueError("FLASH requires isolated serve_flash.sh; ordinary Policy transforms are forbidden")
     from openpi.models.pi0_config import Pi0Config
     from openpi.training.config import AssetsConfig, LeRobotFr3SharpaDataConfig, TrainConfig
 

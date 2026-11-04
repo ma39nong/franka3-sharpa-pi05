@@ -13,6 +13,8 @@ from .timing import TimedPolicy, timed_server_class
 
 
 def main() -> None:
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        raise ValueError("Use serve_flash.sh with isolated FLASH Python/source; do not use ordinary serve module")
     parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta}, --list-models")
     parser.add_argument("--port", type=int, default=config.POLICY_PORT)
     modes = parser.add_mutually_exclusive_group()

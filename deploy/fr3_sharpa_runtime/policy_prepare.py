@@ -192,7 +192,13 @@ def prepare_and_run_chunks(infer, acquire_after, transport, initial_observation,
                     adapted_chunk=adapted_chunk, execute_steps=execute_steps)
             event("execute", predicted_steps=50, execute_steps=execute_steps, prediction_clip_rad=prediction_clip_rad)
             command_started = time.monotonic()
-            completed = transport.request({"operation": "chunk", "actions": actions.tolist(),
+            flash_options = {}
+            if metadata.get("algorithm") == "flash":
+                from .flash_contract import execution_budget
+                from . import config
+                flash_options["flash_plan"] = {**observation["flash_context"],
+                    "max_plan_age_ms": execution_budget(config.require_checkpoint())}
+            completed = transport.request({**flash_options, "operation": "chunk", "actions": actions.tolist(),
                                            "execute_steps": execute_steps,
                                            "prediction_clip_rad": prediction_clip_rad,
                                            "execute_speed_scale": execute_speed_scale,

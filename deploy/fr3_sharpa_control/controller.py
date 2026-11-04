@@ -253,7 +253,7 @@ class DeploymentController:
                    "--", root, profile, mode, str(plan["port"])]
         try:
             result = subprocess.run(command, env=env, cwd=root, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, timeout=5)
+                                    stderr=subprocess.DEVNULL, timeout=120 if profile == "flash-absolute" else 5)
             if result.returncode == 0:
                 write_json(self.directory / "model_metadata.json", json.loads(result.stdout))
             return result.returncode == 0
@@ -418,6 +418,9 @@ class DeploymentController:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
         try:
             self._require_model(self.plan, env)
+            if self.plan["model"]["profile"] == "flash-absolute":
+                from deploy.fr3_sharpa_runtime.flash_contract import execution_budget
+                execution_budget(self.plan["model"]["checkpoint"])  # Fail before camera takeover or Home.
             self._command(self.plan["check"], "parameter_check", env)
             if self.plan["settings"]["record"]:
                 self._command(["bash", "deploy/fr3_sharpa_control/record_session.sh", "check"], "recording_check", env)

@@ -106,6 +106,9 @@ def live_observation(overlay: Path, prompt: str, **snapshot_options) -> dict:
         "_topic_stamp_ns": snapshot["topic_stamp_ns"],
         "_alignment": snapshot.get("alignment", {}),
     }
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        observation["observation/history"] = np.asarray(snapshot["history"], dtype=np.float32)
+        observation["flash_context"] = snapshot["flash_context"]
     observation["_timing"] = {**snapshot.get("timing", {}), **snapshot.get("serialization_timing", {}),
                               "ros_boundary_return_monotonic_ns": boundary_return_ns,
                               "json_decode_ms": json_decode_ms,
@@ -458,6 +461,13 @@ def main() -> None:
     args.initialization = args.initialization or "current"
     if args.sharpa_backend == "litchibot" and args.initialization == "home":
         parser.error("--home/--initialization home requires sdk_direct")
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        if args.broker_mode != "serial" or args.paper_rtc or args.train_rtc or args.train_paper_rtc:
+            parser.error("FLASH v1 supports serial Absolute only; no RTC/Paper/TrainRTC")
+        if args.mode == "execute" or args.execute:
+            from .flash_contract import execution_budget
+            config.prepare_policy_validation()
+            execution_budget(config.require_checkpoint())
     if args.execute_steps is None:
         args.execute_steps = 15 if args.sharpa_backend == "sdk_direct" else 50
     if not 1 <= args.execute_steps <= config.ACTION_HORIZON:
@@ -612,7 +622,11 @@ def main() -> None:
     if args.mode == "execute":
         preparation, observation = prepare_before_observation(args)
     else:
-        observation = load_sample(args.episode_parquet, args.prompt, args.sample_frame)
+        if config.MODEL_PROFILE.name == "flash-absolute":
+            from .flash_dataset import load_flash_sample
+            observation = load_flash_sample(args.episode_parquet, args.prompt, args.sample_frame)
+        else:
+            observation = load_sample(args.episode_parquet, args.prompt, args.sample_frame)
     metadata, actions, chunk = SharpaRuntime(args.policy_url).infer_chunk(observation)
     if args.mode == "execute" and not 0 <= time.monotonic_ns() - observation["_captured_monotonic_ns"] <= 200_000_000:
         raise RuntimeError("Observation expired during policy inference; no command will be published")

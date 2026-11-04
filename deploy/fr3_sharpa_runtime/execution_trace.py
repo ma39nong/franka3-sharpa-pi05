@@ -93,7 +93,14 @@ class ExecutionTraceWriter:
         action_array = np.asarray(actions, dtype=np.float32)
         if action_array.shape != (50, 58):
             raise ValueError(f"trace action shape must be (50, 58), got {action_array.shape}")
+        flash_fields = {}
+        if metadata.get("algorithm") == "flash":
+            flash_fields = {"flash": {"history_rad": np.asarray(observation_before["observation/history"]).tolist(),
+                "context": observation_before["flash_context"], "receipt": observation_before.get("_flash_receipt"),
+                "model_identity": observation_before.get("_flash_model_identity"),
+                "timing": observation_before.get("_flash_timing")}}
         return {
+            **flash_fields,
             "trace_id": self.trace_id,
             "chunk_index": int(chunk_index),
             "created_unix_ns": time.time_ns(),
@@ -114,7 +121,7 @@ class ExecutionTraceWriter:
             "action_shape": [50, 58],
             "action_unit": "rad",
             "action_representation": "absolute_joint_position",
-            "normalization_stage": "policy websocket output is post-Unnormalize",
+            "normalization_stage": ("flash_internal_denormalize" if flash_fields else "policy websocket output is post-Unnormalize"),
         }
 
     def begin_chunk(self, *, chunk_index: int, metadata: dict, observation_before: dict,

@@ -68,6 +68,17 @@ def allocate_run(root, *, now=None):
 
 def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0):
     root = Path(checkpoint).expanduser().resolve()
+    if (root / "flash_deployment.json").exists() or list((root / "assets").rglob("flash_manifest.json")):
+        from deploy.fr3_sharpa_runtime.flash_contract import declares_flash
+        if declares_flash(root):
+            if semantics == "delta" or training_record or train_rtc_max_delay:
+                raise ValueError("FLASH is Absolute only; excludes Delta/RTC training records")
+            from deploy.fr3_sharpa_runtime.flash_contract import inspect_flash, digest_json
+            found = inspect_flash(root, backend=os.environ.get("SHARPA_FLASH_REPO"))
+            return {**found, "profile": "flash-absolute", "semantics": "absolute", "finetune_mode": "full",
+                "identity": digest_json({key: found[key] for key in ("flash_manifest_sha256", "flash_backend_identity", "flash_adapter_identity")}),
+                "manifest_sha256": found["checkpoint_manifest_sha256"], "stats_sha256": found["normalization_sha256"],
+                "normalization": "flash_internal_quantile_absolute", "evidence": "FLASH sealed manifest / K6 stride1 NFE1 history8"}
     manifest, metadata = root / "params/manifest.ocdbt", root / "params/_METADATA"
     if not manifest.is_file() or not metadata.is_file():
         raise ValueError("请选择直接包含 params/ 和 assets/ 的完整 checkpoint 步骤目录")
@@ -203,8 +214,11 @@ class DeploymentSettings:
         full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
         service_args, runtime_args = [], []
-        port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
+        port = {"full": 18765, "lora": 18766, "full-delta": 18767, "flash-absolute": 18768}[model["profile"]]
         description = f"预测50，执行前{self.steps}，再观测推理"
+        if model["profile"] == "flash-absolute":
+            service = shared + "serve_flash.sh"
+            description = f"FLASH K6/stride1/NFE1/history8；预测50，串行执行前{self.steps}；无验证预算时禁止动作"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]

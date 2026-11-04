@@ -423,3 +423,5 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta \
 absolute 模型改用 `--model full` 与 `SHARPA_CHECKPOINT`。`--rtc-initial-delay-steps` 在 Train RTC 中表示固定的承诺前缀预算 d，取值为 `1..min(25, rtc_max_delay)`；UI 默认选择该上限。服务预热训练支持的每一个静态前缀长度，并核对前缀恢复为原绝对动作。旧轨迹先按当前观测转为训练动作空间并归一化，delta 仅作用于双臂；手部保持 absolute。推理完成及安装若超过 d 个节点则停止，不扩大到旧 RTC 的25步引导窗口。`--execute-steps` 仍是后台重规划触发节点数，与 d 不同。
 
 当前已接入代码与离线测试；完整 checkpoint 的 GPU 预热和机器人实机验证需在工作机完成。此模式不包含 Paper 的时间步归一化或相关噪声，不自动把旧 RTC 服务当作 Train RTC 服务。
+
+FLASH Absolute 首版适配、独立模型环境、包导出及待验证范围见 [FLASH 部署说明](deploy/fr3_sharpa_flash/README.md)。

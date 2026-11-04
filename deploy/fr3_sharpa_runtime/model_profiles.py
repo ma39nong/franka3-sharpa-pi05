@@ -23,7 +23,7 @@ class ModelProfile:
 
     @property
     def env_prefix(self):
-        return {"full": "SHARPA", "lora": "SHARPA_LORA", "full-delta": "SHARPA_FULL_DELTA"}[self.name]
+        return {"full": "SHARPA", "lora": "SHARPA_LORA", "full-delta": "SHARPA_FULL_DELTA", "flash-absolute": "SHARPA_FLASH"}[self.name]
 
     @property
     def checkpoint_env(self):
@@ -47,11 +47,13 @@ class ModelProfile:
 
     @property
     def trace_subdir(self):
-        folder = {"full": "fr3_sharpa_runtime", "lora": "fr3_sharpa_lora", "full-delta": "fr3_sharpa_full_delta"}[self.name]
+        folder = {"full": "fr3_sharpa_runtime", "lora": "fr3_sharpa_lora", "full-delta": "fr3_sharpa_full_delta", "flash-absolute": "fr3_sharpa_flash"}[self.name]
         return f".local/state/{folder}/execution_traces"
 
 
 MODEL_PROFILES = {
+    "flash-absolute": ModelProfile("flash-absolute", "pi05_fr3_sharpa_flash_absolute_k6_s1_deploy",
+                                   "gemma_2b", "gemma_300m", 18768),
     "full": ModelProfile("full", "pi05_fr3_sharpa_ab4_normal_rgb_fullft_absolute_30hz_deploy",
                          "gemma_2b", "gemma_300m", 18765),
     "lora": ModelProfile("lora", "pi05_fr3_sharpa_lora_absolute_30hz_deploy",

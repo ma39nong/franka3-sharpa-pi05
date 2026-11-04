@@ -36,6 +36,10 @@ def main() -> None:
     parser.add_argument("--speed-rad-s", type=float, default=0.03)
     parser.add_argument("--execute-speed-scale", type=float, default=1.0)
     args = parser.parse_args()
+    if config.MODEL_PROFILE.name == "flash-absolute":
+        from .flash_contract import execution_budget
+        config.prepare_policy_validation()
+        flash_budget = execution_budget(config.require_checkpoint())
     from .shutdown import DisableSettings, save_shutdown_report, stderr
     DisableSettings.from_env()  # Reject invalid shutdown bounds before touching devices.
     save_shutdown_report({"status": "PENDING", "reason": "SDK worker has not completed shutdown"})
@@ -343,12 +347,40 @@ def main() -> None:
                     actions, current.state, speed_scale=speed_scale,
                     execute_steps=execute_steps,
                     approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
+                flash_age = None
+                if config.MODEL_PROFILE.name == "flash-absolute":
+                    from .flash_contract import check_plan_age
+                    if request.get("flash_plan", {}).get("max_plan_age_ms") != flash_budget:
+                        raise ValueError("FLASH plan budget differs from sealed execution validation")
+                    flash_age = check_plan_age(request.get("flash_plan", {}), bridge_steps=bridge_frames,
+                                               speed_scale=speed_scale, now_ns=time.monotonic_ns())
+                elif "flash_plan" in request:
+                    raise ValueError("Unexpected FLASH plan for ordinary worker")
                 # A policy inference/observation boundary may exceed the
                 # hand driver's 0.25 s continuous-stream watchdog.  This is
                 # an explicit new command phase; continuity protection resumes
                 # from the first frame below and remains active within it.
                 executor.resume_stream()
+                flash_execution = {} if flash_age else None
+                frame_index = 0
                 def send_chunk_frame(frame):
+                    nonlocal frame_index
+                    if flash_execution is not None:
+                        now_send = time.monotonic_ns()
+                        if frame_index == 0:
+                            # Recheck immediately before the first output, after
+                            # any scheduling/logging overhead since planning.
+                            check_plan_age(request["flash_plan"], bridge_steps=bridge_frames,
+                                           speed_scale=speed_scale, now_ns=now_send)
+                            flash_execution["first_command_monotonic_ns"] = now_send
+                        if frame_index == bridge_frames:
+                            # Recorder.start() can wait after bridge completion.
+                            # Never consume a stale first model target after it.
+                            check_plan_age(request["flash_plan"], bridge_steps=0,
+                                           speed_scale=speed_scale, now_ns=now_send)
+                            flash_execution["first_model_target_monotonic_ns"] = now_send
+                        flash_execution["last_command_monotonic_ns"] = now_send
+                        frame_index += 1
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
                     publish_frame(frame)
 
@@ -365,6 +397,7 @@ def main() -> None:
                                   "predicted_policy_frames": len(actions), "execute_steps": execute_steps,
                                   "prediction_clipping": clipping_report,
                                   "executed_action_indices": [0, execute_steps - 1],
+                                  **({"flash_plan_age": flash_age, "flash_plan": request["flash_plan"], "flash_execution_timing": flash_execution} if flash_age else {}),
                                   "bridge_frames": bridge_frames,
                                   "completion": "commands_sent", "end_error_rad": error_by_group,
                                   "execute_speed_scale": speed_scale,

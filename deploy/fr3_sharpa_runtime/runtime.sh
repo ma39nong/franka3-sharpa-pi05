@@ -9,7 +9,11 @@ if [[ "$SHARPA_MODEL_PROFILE" != full ]]; then
   for argument in "$@"; do
     if [[ "$argument" == --execute || "$argument" == --mode=execute || ( "$previous" == --mode && "$argument" == execute ) ]]; then
       interpreter="${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}"
-      "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only > /dev/null
+      if [[ "$SHARPA_MODEL_PROFILE" == flash-absolute ]]; then
+        bash "$ROOT/deploy/fr3_sharpa_runtime/serve_flash.sh" --check-only > /dev/null
+      else
+        "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only > /dev/null
+      fi
       break
     fi
     previous="$argument"

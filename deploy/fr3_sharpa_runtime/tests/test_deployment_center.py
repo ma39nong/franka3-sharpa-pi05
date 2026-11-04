@@ -604,3 +604,10 @@ def test_only_supported_home_plan_defers_video_gate(repository, checkpoint, monk
     assert "--defer-camera-check" in plan["hardware"]
     assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="current").plan()["hardware"]
     assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="home", mode="soft-async", steps=26).plan()["hardware"]
+
+
+def test_generic_asset_filename_does_not_reclassify_ordinary_checkpoint(checkpoint):
+    extra = next((checkpoint / "assets").rglob("norm_stats.json")).parent / "flash_manifest.json"
+    extra.write_text('{"note": "generic artifact, no FLASH algorithm contract"}')
+    found = plans.inspect_checkpoint(checkpoint, semantics="absolute")
+    assert found["profile"] == "full"

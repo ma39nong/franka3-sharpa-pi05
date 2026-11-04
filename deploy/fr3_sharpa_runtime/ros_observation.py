@@ -172,11 +172,14 @@ class ObservationProvider:
             for key, topic in TOPICS.items():
                 self.subscriptions.append(self.node.create_subscription(
                     Image if key.startswith("cam") else JointState, topic,
-                    lambda message, selected=key: self.remember(selected, message),
+                    self.subscription_callback(key),
                     camera_qos if key.startswith("cam") else qos_profile_sensor_data))
         except BaseException:
             self.close()
             raise
+
+    def subscription_callback(self, key):
+        return lambda message: self.remember(key, message)
 
     def remember(self, key, message):
         now = time.monotonic_ns()
@@ -303,7 +306,12 @@ def write_snapshot(result):
 def persistent_main():
     """Read-only request/reply worker; idle time continues to spin subscriptions."""
     import select
-    provider = ObservationProvider(startup_stable_s=3.0)
+    import os
+    if os.environ.get("SHARPA_MODEL_PROFILE") == "flash-absolute":
+        from .flash_observation import FlashObservationProvider
+        provider = FlashObservationProvider(startup_stable_s=3.0)
+    else:
+        provider = ObservationProvider(startup_stable_s=3.0)
     try:
         while True:
             if not select.select([sys.stdin], [], [], 0)[0]:

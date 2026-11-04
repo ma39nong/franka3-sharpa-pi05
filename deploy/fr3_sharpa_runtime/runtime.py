@@ -45,6 +45,9 @@ class SharpaRuntime:
     def __init__(self, policy_url: str = config.POLICY_URL, *, paper_rtc=False, train_rtc=False):
         if not policy_url.startswith("ws://127.0.0.1:") and not policy_url.startswith("ws://localhost:"):
             raise ValueError("First runtime only accepts a loopback policy server")
+        self.flash = config.MODEL_PROFILE.name == "flash-absolute"
+        if self.flash and (paper_rtc or train_rtc):
+            raise ValueError("FLASH v1 only supports serial inference")
         self.paper_rtc = paper_rtc
         self.train_rtc = train_rtc
         self.policy_url = policy_url
@@ -76,6 +79,8 @@ class SharpaRuntime:
         if self.paper_rtc and not self.train_rtc:
             from .rtc_stream import require_paper_capabilities
             require_paper_capabilities(metadata)
+        if self.flash and require_rtc:
+            raise ValueError("FLASH v1 does not support RTC")
         if require_rtc:
             self._require_rtc(metadata)
         return metadata
@@ -91,7 +96,13 @@ class SharpaRuntime:
                   "client_imports_ready_monotonic_ns": time.monotonic_ns()}
         self.last_timing = timing
         start = time.monotonic_ns()
-        clean = validate_observation(observation)
+        if self.flash:
+            if rtc_context is not None:
+                raise ValueError("FLASH rejects RTC context")
+            from .flash_contract import validate_flash_observation
+            clean = validate_flash_observation(observation)
+        else:
+            clean = validate_observation(observation)
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=5) as ws:
@@ -130,6 +141,18 @@ class SharpaRuntime:
             rtc.validate_receipt(result.get("rtc"), rtc_context)
         elif "rtc" in result:
             raise ValueError("Unexpected RTC receipt for ordinary inference")
+        if self.flash:
+            ctx = clean["flash_context"]
+            receipt = result.get("flash_receipt", {})
+            expected = {key: ctx[key] for key in ("protocol_version", "request_id", "session_id", "observation_anchor_source_ns")}
+            expected["model_identity"] = metadata["flash_manifest_sha256"]
+            if receipt != expected:
+                raise ValueError("FLASH response receipt/identity mismatch")
+            observation["_flash_receipt"] = receipt
+            observation["_flash_model_identity"] = {key: metadata[key] for key in
+                ("flash_manifest_sha256", "flash_backend_identity", "normalization_sha256", "checkpoint_manifest_sha256")}
+        elif "flash_receipt" in result:
+            raise ValueError("Unexpected FLASH response for ordinary policy")
         self.last_receipt = result.get("rtc")
         actions = as_finite_action_chunk(result["actions"])
         # Fresh session for this single chunk; this version never splices chunks.
@@ -141,4 +164,6 @@ class SharpaRuntime:
         timing["action_adapter_ms"] = (time.monotonic_ns()-start)/1e6
         timing["action_adapter_end_monotonic_ns"] = time.monotonic_ns()
         self.last_timing = timing
+        if self.flash:
+            observation["_flash_timing"] = dict(timing)
         return metadata, actions, chunk
