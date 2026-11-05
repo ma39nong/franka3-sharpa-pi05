@@ -1,4 +1,4 @@
-"""Train RTC needs training evidence: tensor shapes cannot identify this algorithm."""
+"""Train RTC configuration from optional archives or explicit operator settings."""
 
 import hashlib
 import json
@@ -8,6 +8,9 @@ from pathlib import Path
 
 def resolve_training_record(checkpoint, record_path=None):
     """Explicit/local evidence wins; shipped records require exact checkpoint fingerprints."""
+    if os.environ.get("SHARPA_DEPLOY_MODEL_TYPE", "auto") != "auto":
+        path = record_path or os.environ.get("SHARPA_DEPLOY_TRAINING_RECORD")
+        return Path(path).expanduser().resolve() if path else None
     path = record_path or os.environ.get("SHARPA_TRAIN_RTC_RECORD")
     if path:
         return Path(path).expanduser().resolve()
@@ -63,15 +66,34 @@ def load_training_record(path, stats_path, *, paper_algorithm=None):
 
 
 def inspect_train_rtc(stats_path, checkpoint, record_path=None, *, paper_algorithm=None,
-                      manual_delay=None, manual_semantics=None):
-    path = resolve_training_record(checkpoint, record_path)
+                      manual_delay=None, manual_semantics=None, model_type=None):
+    selected = model_type or os.environ.get("SHARPA_DEPLOY_MODEL_TYPE", "auto")
+    manual = selected != "auto"
+    train_types = ("train-rtc-absolute", "train-rtc-delta", "train-paper-rtc")
+    # Explicit selection does not discover or copy adjacent training records.
+    # An explicitly supplied record remains an optional cross-check.
+    explicit = record_path or os.environ.get("SHARPA_DEPLOY_TRAINING_RECORD")
+    path = (Path(explicit).expanduser().resolve() if explicit else None) if manual else resolve_training_record(checkpoint, record_path)
+    if manual and selected not in train_types:
+        if path:
+            fields = load_training_record(path, stats_path, paper_algorithm=paper_algorithm)["config"]["fields"]
+            if fields["model"]["fields"].get("rtc_max_delay", 0):
+                raise ValueError("所选模型类型与提供的Train RTC训练记录冲突")
+        return None
+    if manual and selected in train_types:
+        if (selected == "train-paper-rtc") != bool(paper_algorithm):
+            raise ValueError("手动模型类型与Paper算法资产不一致")
+        delay = manual_delay if manual_delay is not None else int(os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY", "0"))
+        if not delay:
+            raise ValueError("手动选择Train RTC后，请填写训练RTC最大延迟（1..49）")
     if path is None:
         delay = manual_delay if manual_delay is not None else int(os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY", "0"))
         if not delay:
             return None
         if type(delay) is not int or not 0 < delay < 50:
             raise ValueError("手动训练RTC最大延迟必须为1..49整数")
-        semantics = "delta" if paper_algorithm else (manual_semantics or os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS"))
+        semantics = ("absolute" if selected == "train-rtc-absolute" else "delta") if manual else (
+            "delta" if paper_algorithm else (manual_semantics or os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS")))
         if semantics not in ("absolute", "delta"):
             raise ValueError("手动训练RTC需明确选择Absolute或Delta动作类型")
         binding = {"max_delay": delay, "semantics": semantics, "paper": paper_algorithm,
