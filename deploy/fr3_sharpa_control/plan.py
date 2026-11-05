@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -69,7 +70,7 @@ def allocate_run(root, *, now=None):
 def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto"):
     choices = {"auto": None, "full": "absolute", "full-delta": "delta", "lora": "absolute",
                "paper-delta": "delta", "train-rtc-absolute": "absolute", "train-rtc-delta": "delta",
-               "train-paper-rtc": "delta"}
+               "train-paper-rtc": "delta", "flash-absolute": "absolute"}
     if model_type not in choices:
         raise ValueError("不支持的模型类型")
     manual = model_type != "auto"
@@ -78,17 +79,19 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         if "train" not in model_type and train_rtc_max_delay:
             raise ValueError("训练RTC最大延迟仅适用于Train RTC模型")
     root = Path(checkpoint).expanduser().resolve()
-    if (root / "flash_deployment.json").exists() or list((root / "assets").rglob("flash_manifest.json")):
-        from deploy.fr3_sharpa_runtime.flash_contract import declares_flash
-        if declares_flash(root):
-            if semantics == "delta" or training_record or train_rtc_max_delay:
-                raise ValueError("FLASH is Absolute only; excludes Delta/RTC training records")
-            from deploy.fr3_sharpa_runtime.flash_contract import inspect_flash, digest_json
-            found = inspect_flash(root, backend=os.environ.get("SHARPA_FLASH_REPO"))
-            return {**found, "profile": "flash-absolute", "semantics": "absolute", "finetune_mode": "full",
-                "identity": digest_json({key: found[key] for key in ("flash_manifest_sha256", "flash_backend_identity", "flash_adapter_identity")}),
-                "manifest_sha256": found["checkpoint_manifest_sha256"], "stats_sha256": found["normalization_sha256"],
-                "normalization": "flash_internal_quantile_absolute", "evidence": "FLASH sealed manifest / K6 stride1 NFE1 history8"}
+    from deploy.fr3_sharpa_runtime.flash_contract import declares_flash
+    declared_flash = declares_flash(root)
+    if model_type == "flash-absolute" or (model_type == "auto" and declared_flash):
+        if semantics == "delta" or training_record or train_rtc_max_delay:
+            raise ValueError("FLASH is Absolute only; excludes Delta/RTC training records")
+        from deploy.fr3_sharpa_runtime.flash_contract import inspect_flash, digest_json
+        found = inspect_flash(root, backend=os.environ.get("SHARPA_FLASH_REPO"))
+        return {**found, "profile": "flash-absolute", "semantics": "absolute", "finetune_mode": "full",
+            "identity": digest_json({key: found[key] for key in ("flash_manifest_sha256", "flash_backend_identity", "flash_adapter_identity")}),
+            "manifest_sha256": found["checkpoint_manifest_sha256"], "stats_sha256": found["normalization_sha256"],
+            "normalization": "flash_internal_quantile_absolute", "evidence": "FLASH K6 stride1 NFE1 history8；直接读取原始checkpoint，无需导出契约"}
+    if declared_flash:
+        raise ValueError("FLASH checkpoint requires flash-absolute model type")
     manifest, metadata = root / "params/manifest.ocdbt", root / "params/_METADATA"
     if not manifest.is_file() or not metadata.is_file():
         raise ValueError("请选择直接包含 params/ 和 assets/ 的完整 checkpoint 步骤目录")
@@ -202,6 +205,7 @@ class DeploymentSettings:
     train_rtc_max_delay: int = 0
     model_type: str = "auto"
     rtc_initial_delay_steps: int = 0
+    flash_max_plan_age_ms: float = 0
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -223,8 +227,13 @@ class DeploymentSettings:
             raise ValueError("RTC初始延迟必须为0..25整数，0表示使用训练上限（最多25）")
         if self.rtc_initial_delay_steps and self.mode not in ("train-rtc", "train-paper-rtc"):
             raise ValueError("RTC初始延迟仅适用于Train RTC执行模式")
+        if (type(self.flash_max_plan_age_ms) not in (float, int)
+                or not math.isfinite(self.flash_max_plan_age_ms) or self.flash_max_plan_age_ms < 0):
+            raise ValueError("FLASH计划年龄上限必须为非负有限毫秒数（0关闭附加检查）")
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
                                    cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type)
+        if self.flash_max_plan_age_ms and model["profile"] != "flash-absolute":
+            raise ValueError("FLASH计划年龄参数仅适用于FLASH模型")
         if not model["profile"]:
             raise ValueError(model["evidence"])
         if self.mode not in model["supported_modes"]:
@@ -243,7 +252,7 @@ class DeploymentSettings:
         description = f"预测50，执行前{self.steps}，再观测推理"
         if model["profile"] == "flash-absolute":
             service = shared + "serve_flash.sh"
-            description = f"FLASH K6/stride1/NFE1/history8；预测50，串行执行前{self.steps}；无验证预算时禁止动作"
+            description = f"FLASH K6/stride1/NFE1/history8；预测50，串行执行前{self.steps}；支持连续多轮"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]
@@ -338,6 +347,7 @@ def plan_environment(plan):
         if not trained["record"] or plan["settings"].get("model_type", "auto") != "auto":
             env["SHARPA_TRAIN_RTC_MAX_DELAY"] = str(trained["max_delay"])
             env["SHARPA_TRAIN_RTC_SEMANTICS"] = trained["semantics"]
+    env["SHARPA_FLASH_MAX_PLAN_AGE_MS"] = str(plan["settings"].get("flash_max_plan_age_ms", 0))
     env.pop("SHARPA_RECORD_SOCKET", None)
     env.pop("SHARPA_CAMERA_LEASE_FD", None)  # Never inherit another stale run's lease.
     return env

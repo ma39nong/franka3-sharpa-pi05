@@ -424,4 +424,4 @@ absolute 模型改用 `--model full` 与 `SHARPA_CHECKPOINT`。`--rtc-initial-de
 
 当前已接入代码与离线测试；完整 checkpoint 的 GPU 预热和机器人实机验证需在工作机完成。此模式不包含 Paper 的时间步归一化或相关噪声，不自动把旧 RTC 服务当作 Train RTC 服务。
 
-FLASH Absolute 首版适配、独立模型环境、包导出及待验证范围见 [FLASH 部署说明](deploy/fr3_sharpa_flash/README.md)。
+FLASH Absolute 手动选择、原始checkpoint直读、独立模型环境及待验证范围见 [FLASH 部署说明](deploy/fr3_sharpa_flash/README.md)。

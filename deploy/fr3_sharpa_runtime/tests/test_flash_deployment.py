@@ -144,8 +144,7 @@ def test_sealed_package_inspection_never_imports_model_or_jax(package):
         'assert m["algorithm"]=="flash"; assert "jax" not in sys.modules; assert "openpi" not in sys.modules'
     )
     subprocess.run([sys.executable, "-c", code, str(root), str(repo)], check=True)
-    with pytest.raises(ValueError, match="execution disabled"):
-        fc.execution_budget(root)
+    assert fc.execution_budget(root) is None
 
 
 @pytest.mark.parametrize("damage", ["stats", "params", "backend", "manifest", "missing_blob"])
@@ -185,8 +184,7 @@ def test_flash_and_ordinary_profiles_are_mutually_exclusive(package, monkeypatch
     with pytest.raises(ValueError, match="requires flash-absolute"):
         model_loader.checkpoint_contract()
     (root / "flash_deployment.json").unlink()
-    with pytest.raises(FileNotFoundError):
-        inspect_checkpoint(root)  # declared FLASH assets may never fall back to full.
+    assert inspect_checkpoint(root)["profile"] == "flash-absolute"  # Original training step works without export.
 
 
 def test_model_repr_parser_rejects_code_execution():
@@ -571,7 +569,7 @@ def test_policy_calls_history_nfe1_and_returns_physical_actions_without_second_t
     assert result["flash_receipt"]["model_identity"] == "fake-manifest"
 
 
-def test_positive_execution_validation_is_bound_to_exact_package(package):
+def test_historical_report_is_optional_and_does_not_set_execution_parameters(package, monkeypatch):
     root, repo = package
     manifest_path = root / "flash_deployment.json"
     manifest = json.loads(manifest_path.read_text())
@@ -594,13 +592,16 @@ def test_positive_execution_validation_is_bound_to_exact_package(package):
     manifest["files"][relative] = {"sha256": fc.sha(path), "size": path.stat().st_size}
     manifest_path.write_text(json.dumps(manifest))
     fc.inspect_flash(root)
-    assert fc.execution_budget(root) == 200
+    assert fc.execution_budget(root) is None
+    monkeypatch.setenv("SHARPA_FLASH_MAX_PLAN_AGE_MS", "350")
+    assert fc.execution_budget(root) == 350
     report["normalization_sha256"] = "wrong-package"
     path.write_text(json.dumps(report))
     manifest["files"][relative] = {"sha256": fc.sha(path), "size": path.stat().st_size}
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="validation report"):
-        fc.inspect_flash(root)
+    fc.inspect_flash(root)  # Status/claims in a historical report are not startup gates.
+    path.unlink()
+    fc.inspect_flash(root)  # Even the old report copy itself is optional.
 
 
 def test_flash_ros_snapshot_uses_causal_images_at_same_history_anchor(monkeypatch):
@@ -679,7 +680,7 @@ def test_gui_capability_rejects_flash_rtc_and_preserves_serial(package):
         replace(settings, mode="rtc").plan()
 
 
-def test_cli_without_validated_budget_rejects_before_ros_or_sdk(package):
+def test_cli_without_report_reaches_existing_ros_preconditions_without_importing_sdk(package):
     root, repo = package
     env = {**os.environ, "SHARPA_MODEL_PROFILE": "flash-absolute", "SHARPA_FLASH_CHECKPOINT": str(root)}
     result = subprocess.run(
@@ -698,7 +699,7 @@ def test_cli_without_validated_budget_rejects_before_ros_or_sdk(package):
         check=False,
     )
     assert result.returncode != 0
-    assert "FLASH execution disabled" in result.stderr
+    assert "ROS modes require --ros-overlay" in result.stderr
     assert "rclpy" not in result.stderr
 
 
@@ -754,3 +755,108 @@ serve(Sink(), metadata, int(sys.argv[2]))
     finally:
         child.terminate()
         child.communicate(timeout=5)
+
+
+@pytest.fixture
+def native_step(package):
+    import shutil
+
+    root, repo = package
+    (root / "flash_deployment.json").unlink()
+    shutil.rmtree(root / "flash_assets")
+    return root, repo
+
+
+@pytest.mark.parametrize("original_config", [True, False])
+def test_native_step_and_manual_plan_need_no_generated_copies(native_step, original_config, monkeypatch):
+    from deploy.fr3_sharpa_control.plan import DeploymentSettings
+    from deploy.fr3_sharpa_control.plan import plan_environment
+    from deploy.fr3_sharpa_runtime import config
+    from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile
+
+    root, repo = native_step
+    if not original_config:
+        (root.parent / "flash_training_contract.json").unlink()
+        # Manual selection also works when only native parameters/stats were downloaded.
+        for name in ("flash_manifest.json", "flash_seal.json", "flash_validation.json"):
+            (root / "assets/flash-test" / name).unlink()
+    before = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    settings = DeploymentSettings(str(Path(__file__).resolve().parents[3]), str(root),
+                                  model_type="flash-absolute", mode="serial", steps=15, rounds=0)
+    plan = settings.plan()
+    assert plan["model"]["supported_modes"] == ["serial"]
+    assert plan["settings"]["rounds"] == 0
+    assert plan_environment(plan)["SHARPA_FLASH_MAX_PLAN_AGE_MS"] == "0"
+    assert fc.flash_settings(root)["model_config"]["action_q01"] == [-4.0] * 58
+    monkeypatch.setattr(config, "MODEL_PROFILE", get_model_profile("flash-absolute"))
+    monkeypatch.setattr(config, "CONFIG_NAME", fc.CONFIG_NAME)
+    monkeypatch.setattr(config, "CHECKPOINT", root)
+    monkeypatch.setattr(config, "NORM_STATS", root / "assets/flash-test/norm_stats.json")
+    monkeypatch.setattr(config, "_validation_cache", None)
+    monkeypatch.delenv("SHARPA_FLASH_REPO", raising=False)
+    expected = config.prepare_policy_validation()
+    # Server knows the backend path; client does not need another contract copy.
+    server = fc.inspect_flash(root, backend=repo)
+    server["warmed_up"] = True
+    config.validate_policy_metadata(server)
+    assert expected["flash_manifest_sha256"] == server["flash_manifest_sha256"]
+    assert before == {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    # Replacements still invalidate the lightweight client identity cache.
+    (root / "params/manifest.ocdbt").write_bytes(b"REPLACED PARAMETERS INDEX")
+    with pytest.raises(ValueError, match="does not match"):
+        config.validate_policy_metadata(server)
+
+
+def test_native_check_only_does_not_import_gpu_or_write_assets(native_step):
+    root, repo = native_step
+    code = (
+        "import sys; from deploy.fr3_sharpa_flash.serve import main; main(); "
+        "assert 'jax' not in sys.modules; assert 'openpi' not in sys.modules"
+    )
+    env = {**os.environ, "SHARPA_FLASH_CHECKPOINT": str(root), "SHARPA_FLASH_REPO": str(repo)}
+    result = subprocess.run([sys.executable, "-c", code, "--check-only"],
+                            env=env, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)["algorithm"] == "flash"
+    assert not (root / "flash_deployment.json").exists()
+    assert not (root / "flash_assets").exists()
+
+
+def test_native_metadata_only_download_is_not_a_complete_checkpoint(native_step):
+    root, _ = native_step
+    (root / "params/d/blob").unlink()
+    with pytest.raises(ValueError, match="full parameter data"):
+        fc.inspect_flash(root)
+
+
+def test_original_training_quantiles_must_match_selected_checkpoint(native_step):
+    root, _ = native_step
+    path = root.parent / "flash_training_contract.json"
+    training = json.loads(path.read_text())
+    training["model"] = training["model"].replace("-4.0", "-5.0")
+    path.write_text(json.dumps(training))
+    with pytest.raises(ValueError, match="quantiles"):
+        fc.inspect_flash(root)
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf", "garbage"])
+def test_optional_age_budget_rejects_invalid_values(value, monkeypatch):
+    monkeypatch.setenv("SHARPA_FLASH_MAX_PLAN_AGE_MS", value)
+    with pytest.raises(ValueError, match="nonnegative|could not convert"):
+        fc.execution_budget()
+
+
+def test_gui_flash_settings_override_old_environment_file(native_step, tmp_path):
+    root, _ = native_step
+    env_file = tmp_path / "flash.env"
+    env_file.write_text("export SHARPA_FLASH_CHECKPOINT=/stale/step\n"
+                        "export SHARPA_FLASH_NORM_STATS=/stale/stats.json\n"
+                        "export SHARPA_FLASH_MAX_PLAN_AGE_MS=999\n")
+    stats = root / "assets/flash-test/norm_stats.json"
+    env = {**os.environ, "SHARPA_FLASH_ENV_FILE": str(env_file), "SHARPA_FLASH_CHECKPOINT": str(root),
+           "SHARPA_FLASH_NORM_STATS": str(stats), "SHARPA_FLASH_MAX_PLAN_AGE_MS": "0"}
+    result = subprocess.run(["bash", "-c", 'source deploy/fr3_sharpa_runtime/model_env.sh --model flash-absolute; '
+                             'test "$SHARPA_FLASH_CHECKPOINT" = "$1" && '
+                             'test "$SHARPA_FLASH_NORM_STATS" = "$2" && '
+                             'test "$SHARPA_FLASH_MAX_PLAN_AGE_MS" = 0', "--", str(root), str(stats)],
+                            env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

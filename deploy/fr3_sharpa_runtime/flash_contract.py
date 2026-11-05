@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -98,9 +99,133 @@ def declares_flash(checkpoint):
     return False
 
 
+# Defaults match the audited 8000-step FullFT checkpoint. They configure the
+# inference architecture only; action quantiles always come from its own stats.
+MODEL_DEFAULTS = {
+    "pi05": True, "dtype": "bfloat16", "action_dim": 58, "action_horizon": 50,
+    "max_token_len": 256, "discrete_state_input": True, "freeze_vlm": False,
+    "poly_degree": 6, "history_steps": 8, "rtc_max_delay": 0,
+    "paligemma_variant": "gemma_2b", "action_expert_variant": "gemma_300m",
+    "history_reg_lambda": 0.1, "boundary_constraint": True,
+    "history_noise_std": 0.5, "consistency_weight": 1.0,
+}
+
+
+def flash_settings(checkpoint, *, norm_stats=None, backend=None):
+    """Read original assets in place; never export, copy or modify a checkpoint."""
+    root = Path(checkpoint).expanduser().resolve()
+    sealed = root / "flash_deployment.json"
+    manifest = json.loads(sealed.read_text()) if sealed.is_file() else None
+    candidates = sorted((root / "assets").rglob("norm_stats.json"))
+    if norm_stats:
+        stats_path = Path(norm_stats).expanduser().resolve()
+        if not stats_path.is_relative_to(root / "assets"):
+            raise ValueError("FLASH statistics must belong to selected checkpoint assets/")
+    elif len(candidates) == 1:
+        stats_path = candidates[0].resolve()
+    else:
+        raise ValueError("FLASH checkpoint assets/ must contain unique norm_stats.json")
+    stats = validate_stats(stats_path)
+    explicit = os.environ.get("SHARPA_FLASH_TRAINING_CONFIG")
+    records = [Path(explicit).expanduser()] if explicit else [
+        root / "flash_training_contract.json", root.parent / "flash_training_contract.json"]
+    record = next((p.resolve() for p in records if p.is_file()), None)
+    if explicit and record is None:
+        raise ValueError(f"Missing explicitly selected FLASH training configuration: {explicit}")
+    if manifest:
+        options = manifest["model_config"].copy()
+        tokenizer = root / manifest["tokenizer"]
+        source = "existing_deployment_manifest"
+    elif record:
+        options = parse_model_repr(json.loads(record.read_text())["model"])
+        tokenizer = None
+        source = "original_training_config"
+    else:
+        options = {**MODEL_DEFAULTS, **{
+            "action_" + key: stats["actions"][key] for key in ("q01", "q99")}}
+        tokenizer = None
+        source = "manual_flash_k6_s1_nfe1_history8"
+    for key, expected in MODEL_DEFAULTS.items():
+        if options.get(key) != expected:
+            raise ValueError(f"FLASH v1 model_config mismatch: {key} (expected {expected!r})")
+    for key in ("q01", "q99"):
+        if not np.array_equal(options.get("action_" + key), stats["actions"][key]):
+            raise ValueError("FLASH model quantiles must match checkpoint actions statistics")
+    selected_tokenizer = os.environ.get("SHARPA_FLASH_TOKENIZER")
+    if selected_tokenizer:
+        tokenizer = Path(selected_tokenizer).expanduser().resolve()
+    if tokenizer is None:
+        tokenizers = [root / "tokenizer.model",
+                      Path.home() / ".cache/openpi/big_vision/paligemma_tokenizer.model"]
+        if backend:
+            tokenizers.append(Path(backend) / ".cache/openpi/big_vision/paligemma_tokenizer.model")
+        tokenizer = next((p.resolve() for p in tokenizers if p.is_file()), tokenizers[1])
+    # A missing tokenizer can be configured before model startup; inspection of
+    # the selected weights itself does not import a tokenizer or model runtime.
+    return {"model_config": options, "norm_stats": str(stats_path),
+            "tokenizer": str(tokenizer), "configuration_source": source}
+
+
+def inspect_native_flash(checkpoint, *, norm_stats=None, backend=None):
+    """Check a native training step without any generated deployment sidecar."""
+    root = Path(checkpoint).expanduser().resolve()
+    settings = flash_settings(root, norm_stats=norm_stats, backend=backend)
+    completion = json.loads((root / "_CHECKPOINT_METADATA").read_text())
+    if not completion.get("commit_timestamp_nsecs"):
+        raise ValueError("FLASH checkpoint save has not committed")
+    for name in ("params/_METADATA", "params/manifest.ocdbt"):
+        if not (root / name).is_file():
+            raise ValueError(f"Missing FLASH checkpoint {name}")
+    if not any(p.is_file() and p.stat().st_size > 0 and "d" in p.relative_to(root / "params").parts[:-1]
+               for p in (root / "params").rglob("*")):
+        raise ValueError("FLASH requires full parameter data, not a metadata-only download")
+    entries = json.loads((root / "params/_METADATA").read_text())["tree_metadata"]
+    projections = {}
+    for entry in entries.values():
+        names = [part["key"] for part in entry.get("key_metadata", ())]
+        if any("lora" in str(name).lower() for name in names):
+            raise ValueError("FLASH v1 requires FullFT parameters, excludes LoRA")
+        if "action_in_proj" in names and "kernel" in names:
+            projections["input"] = entry["value_metadata"]["write_shape"][0]
+        if "action_out_proj" in names and "bias" in names:
+            projections["output"] = entry["value_metadata"]["write_shape"]
+    if projections != {"input": 58, "output": [58]}:
+        raise ValueError("FLASH requires native 58D projections; global tree checked during restore")
+    data_path = Path(settings["norm_stats"]).parent / "flash_manifest.json"
+    if data_path.is_file():
+        data = json.loads(data_path.read_text()).get("contract", {})
+        for key, expected in {"action_semantics": "absolute", "horizon": 50, "history": 8,
+                              "target": 54, "K": 6, "stride": 1, "joint_names": list(ORDER)}.items():
+            if data.get(key) != expected:
+                raise ValueError(f"FLASH training data configuration mismatch: {key}")
+    backend_identity = None
+    if backend:
+        repo = Path(backend).expanduser().resolve()
+        backend_identity = digest_json({name: sha(child(repo, name)) for name in BACKEND_FILES})
+    adapter_root = Path(__file__).resolve().parents[2]
+    adapter = digest_json({name: sha(adapter_root / name) for name in (
+        "deploy/fr3_sharpa_flash/policy.py", "deploy/fr3_sharpa_flash/serve.py",
+        "deploy/fr3_sharpa_flash/codec.py", "deploy/fr3_sharpa_runtime/flash_contract.py")})
+    params_hash = sha(root / "params/manifest.ocdbt")
+    stats_hash = sha(settings["norm_stats"])
+    # Historical wire field name retained for compatibility. This is an
+    # in-memory identity, not a file that the operator must create.
+    identity = digest_json({"params": params_hash, "stats": stats_hash, "model": settings["model_config"]})
+    return {**CAPABILITIES, "config_name": CONFIG_NAME, "checkpoint": str(root),
+            "norm_stats": settings["norm_stats"], "checkpoint_manifest_sha256": params_hash,
+            "normalization_sha256": stats_hash, "flash_manifest_sha256": identity,
+            "flash_backend_identity": backend_identity, "flash_adapter_identity": adapter,
+            "flash_implementation_version": "fr3-flash-v1", "configuration_source": settings["configuration_source"],
+            "action_order": ["left_arm_7", "left_hand_22", "right_arm_7", "right_hand_22"],
+            "camera_mapping": CAMERAS, "paper_algorithm": None, "train_rtc": None,
+            "training_action_supervision": "absolute", "model_finetune_mode": "full", "warmed_up": False}
+
+
 def inspect_flash(checkpoint, *, norm_stats=None, backend=None):
     root = Path(checkpoint).expanduser().resolve()
     path = root / "flash_deployment.json"
+    if not path.is_file():
+        return inspect_native_flash(root, norm_stats=norm_stats, backend=backend)
     manifest = json.loads(path.read_text())
     if manifest.get("schema_version") != VERSION:
         raise ValueError("Unsupported FLASH manifest schema")
@@ -144,6 +269,8 @@ def inspect_flash(checkpoint, *, norm_stats=None, backend=None):
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("FLASH requires native 58D projections; strict global tree checked during restore")
     for name, identity in files.items():
+        if name == manifest.get("execution_validation"):
+            continue  # A historical validation report is not a runtime dependency.
         item = child(root, name)
         if item.stat().st_size != identity["size"] or sha(item) != identity["sha256"]:
             raise ValueError(f"FLASH asset/parameter hash mismatch: {name}")
@@ -221,25 +348,10 @@ def inspect_flash(checkpoint, *, norm_stats=None, backend=None):
         for name, expected in source["files"].items():
             if sha(child(repo, name)) != expected:
                 raise ValueError(f"FLASH backend code mismatch: {name}")
-    # Bounds are provisional until paired sensor replay is available; execution
-    # additionally requires a sealed validation report and a finite age budget.
+    # Old sealed packages remain readable. Execution reports are optional
+    # historical artifacts and no longer decide whether this model can run.
     if manifest.get("history_max_sample_age_ns") != 75_000_000 or manifest.get("history_max_gap_ns") != 100_000_000:
         raise ValueError("Unsupported FLASH history bounds; use a new resampler version")
-    if manifest.get("execution_validation") is not None:
-        report = json.loads(child(root, manifest["execution_validation"]).read_text())
-        if (
-            manifest["execution_validation"] not in files
-            or report.get("checkpoint_manifest_sha256") != sha(root / "params/manifest.ocdbt")
-            or report.get("normalization_sha256") != sha(stats_path)
-            or report.get("flash_backend_identity") != digest_json(source)
-            or report.get("status") != "PASS"
-            or report.get("resampler_version") != RESAMPLER
-            or report.get("history_pairing_verified") is not True
-            or report.get("model_equivalence_verified") is not True
-            or report.get("max_plan_age_ms", 0) <= 0
-            or not np.isfinite(report["max_plan_age_ms"])
-        ):
-            raise ValueError("FLASH execution validation report is incomplete")
     adapter_root = Path(__file__).resolve().parents[2]
     adapter_files = (
         "deploy/fr3_sharpa_flash/policy.py",
@@ -347,20 +459,25 @@ def validate_flash_observation(observation):
     return clean
 
 
-def execution_budget(checkpoint):
-    root = Path(checkpoint)
-    manifest = json.loads((root / "flash_deployment.json").read_text())
-    if not manifest.get("execution_validation"):
-        raise ValueError(
-            "FLASH execution disabled: paired history/model validation and measured age budget are required"
-        )
-    report = json.loads(child(root, manifest["execution_validation"]).read_text())
-    return float(report["max_plan_age_ms"])
+def execution_budget(checkpoint=None):
+    """Optional operator age bound; paired-validation reports are not required.
+
+    0/unset disables this additional FLASH experiment. Existing sensor freshness,
+    joint limits, command deadlines and shutdown checks remain independent.
+    """
+    value = float(os.environ.get("SHARPA_FLASH_MAX_PLAN_AGE_MS", "0"))
+    if not np.isfinite(value) or value < 0:
+        raise ValueError("SHARPA_FLASH_MAX_PLAN_AGE_MS must be finite and nonnegative (0 disables)")
+    return value or None
+
+
+def check_plan_identity(plan):
+    if plan.get("protocol_version") != VERSION or not plan.get("request_id") or not plan.get("session_id"):
+        raise ValueError("Missing FLASH execution identity")
 
 
 def check_plan_age(plan, *, bridge_steps, speed_scale, now_ns):
-    if plan.get("protocol_version") != VERSION or not plan.get("request_id") or not plan.get("session_id"):
-        raise ValueError("Missing FLASH execution identity")
+    check_plan_identity(plan)
     budget = plan.get("max_plan_age_ms")
     captured = plan.get("captured_monotonic_ns")
     anchor_age = plan.get("anchor_age_at_capture_ns")
@@ -372,7 +489,7 @@ def check_plan_age(plan, *, bridge_steps, speed_scale, now_ns):
         or type(anchor_age) is not int
         or anchor_age < 0
     ):
-        raise ValueError("FLASH execution requires validated finite plan age budget")
+        raise ValueError("FLASH execution requires finite positive plan age budget")
     age = (now_ns - captured + anchor_age) / 1e6
     predicted = age + bridge_steps / 30 * 1000  # Bridge always emits at 30Hz; scale stretches policy nodes only.
     if age < 0 or predicted > budget:

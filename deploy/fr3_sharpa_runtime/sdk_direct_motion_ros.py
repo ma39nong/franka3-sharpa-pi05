@@ -349,11 +349,13 @@ def main() -> None:
                     approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
                 flash_age = None
                 if config.MODEL_PROFILE.name == "flash-absolute":
-                    from .flash_contract import check_plan_age
+                    from .flash_contract import check_plan_age, check_plan_identity
+                    check_plan_identity(request.get("flash_plan", {}))
                     if request.get("flash_plan", {}).get("max_plan_age_ms") != flash_budget:
-                        raise ValueError("FLASH plan budget differs from sealed execution validation")
-                    flash_age = check_plan_age(request.get("flash_plan", {}), bridge_steps=bridge_frames,
-                                               speed_scale=speed_scale, now_ns=time.monotonic_ns())
+                        raise ValueError("FLASH plan budget differs from selected execution settings")
+                    if flash_budget is not None:
+                        flash_age = check_plan_age(request.get("flash_plan", {}), bridge_steps=bridge_frames,
+                                                   speed_scale=speed_scale, now_ns=time.monotonic_ns())
                 elif "flash_plan" in request:
                     raise ValueError("Unexpected FLASH plan for ordinary worker")
                 # A policy inference/observation boundary may exceed the
@@ -361,7 +363,7 @@ def main() -> None:
                 # an explicit new command phase; continuity protection resumes
                 # from the first frame below and remains active within it.
                 executor.resume_stream()
-                flash_execution = {} if flash_age else None
+                flash_execution = {} if config.MODEL_PROFILE.name == "flash-absolute" else None
                 frame_index = 0
                 def send_chunk_frame(frame):
                     nonlocal frame_index
@@ -370,14 +372,16 @@ def main() -> None:
                         if frame_index == 0:
                             # Recheck immediately before the first output, after
                             # any scheduling/logging overhead since planning.
-                            check_plan_age(request["flash_plan"], bridge_steps=bridge_frames,
-                                           speed_scale=speed_scale, now_ns=now_send)
+                            if flash_budget is not None:
+                                check_plan_age(request["flash_plan"], bridge_steps=bridge_frames,
+                                               speed_scale=speed_scale, now_ns=now_send)
                             flash_execution["first_command_monotonic_ns"] = now_send
                         if frame_index == bridge_frames:
                             # Recorder.start() can wait after bridge completion.
                             # Never consume a stale first model target after it.
-                            check_plan_age(request["flash_plan"], bridge_steps=0,
-                                           speed_scale=speed_scale, now_ns=now_send)
+                            if flash_budget is not None:
+                                check_plan_age(request["flash_plan"], bridge_steps=0,
+                                               speed_scale=speed_scale, now_ns=now_send)
                             flash_execution["first_model_target_monotonic_ns"] = now_send
                         flash_execution["last_command_monotonic_ns"] = now_send
                         frame_index += 1
@@ -397,7 +401,7 @@ def main() -> None:
                                   "predicted_policy_frames": len(actions), "execute_steps": execute_steps,
                                   "prediction_clipping": clipping_report,
                                   "executed_action_indices": [0, execute_steps - 1],
-                                  **({"flash_plan_age": flash_age, "flash_plan": request["flash_plan"], "flash_execution_timing": flash_execution} if flash_age else {}),
+                                  **({"flash_plan_age": flash_age, "flash_plan": request["flash_plan"], "flash_execution_timing": flash_execution} if flash_execution is not None else {}),
                                   "bridge_frames": bridge_frames,
                                   "completion": "commands_sent", "end_error_rad": error_by_group,
                                   "execute_speed_scale": speed_scale,

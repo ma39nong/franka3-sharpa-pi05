@@ -95,16 +95,26 @@ def prepare_policy_validation():
     if MODEL_PROFILE.name == "flash-absolute":
         from .flash_contract import inspect_flash
         import json
+        from .flash_contract import BACKEND_FILES
         path = checkpoint / "flash_deployment.json"
-        manifest = json.loads(path.read_text())
         backend = os.environ.get("SHARPA_FLASH_REPO")
-        paths = [path, *(checkpoint / name for name in manifest["files"])]
+        if path.is_file():
+            manifest = json.loads(path.read_text())
+            paths = [path, *(checkpoint / name for name in manifest["files"] if name != manifest.get("execution_validation"))]
+        else:
+            paths = [path, checkpoint / "_CHECKPOINT_METADATA", checkpoint / "params/manifest.ocdbt",
+                     checkpoint / "params/_METADATA", NORM_STATS,
+                     NORM_STATS.parent / "flash_manifest.json",
+                     checkpoint / "flash_training_contract.json", checkpoint.parent / "flash_training_contract.json"]
+            if os.environ.get("SHARPA_FLASH_TRAINING_CONFIG"):
+                paths.append(Path(os.environ["SHARPA_FLASH_TRAINING_CONFIG"]).expanduser())
+            paths.extend(p for p in (checkpoint / "params").rglob("*") if p.is_file())
         adapter_root = Path(__file__).resolve().parents[2]
         paths += [adapter_root / name for name in ("deploy/fr3_sharpa_flash/policy.py", "deploy/fr3_sharpa_flash/serve.py",
                    "deploy/fr3_sharpa_flash/codec.py", "deploy/fr3_sharpa_runtime/flash_contract.py")]
         if backend:
-            paths += [Path(backend) / name for name in manifest["backend"]["files"]]
-        context = (str(checkpoint), str(NORM_STATS), backend, MODEL_PROFILE)
+            paths += [Path(backend) / name for name in BACKEND_FILES]
+        context = (str(checkpoint), str(NORM_STATS), backend, MODEL_PROFILE, os.environ.get("SHARPA_FLASH_TRAINING_CONFIG"))
         with _validation_lock:
             signature = _asset_signature(paths)
             if _validation_cache and _validation_cache[:2] == (context, signature):
@@ -163,7 +173,7 @@ def validate_policy_metadata(metadata):
     # not on whether the model was trained with adapters or full parameters.
     verified = prepare_policy_validation()
     if MODEL_PROFILE.name == "flash-absolute":
-        verified = {key: value for key, value in verified.items() if key != "warmed_up"}
+        verified = {key: value for key, value in verified.items() if key != "warmed_up" and not (key == "flash_backend_identity" and value is None)}
     expected.update(verified)
     for key, value in expected.items():
         if metadata.get(key) != value:

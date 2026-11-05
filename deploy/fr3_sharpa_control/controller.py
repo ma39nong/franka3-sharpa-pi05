@@ -420,7 +420,7 @@ class DeploymentController:
             self._require_model(self.plan, env)
             if self.plan["model"]["profile"] == "flash-absolute":
                 from deploy.fr3_sharpa_runtime.flash_contract import execution_budget
-                execution_budget(self.plan["model"]["checkpoint"])  # Fail before camera takeover or Home.
+                execution_budget(self.plan["model"]["checkpoint"])  # Validate optional age setting before camera takeover or Home.
             self._command(self.plan["check"], "parameter_check", env)
             if self.plan["settings"]["record"]:
                 self._command(["bash", "deploy/fr3_sharpa_control/record_session.sh", "check"], "recording_check", env)

@@ -1,11 +1,13 @@
 """Native FLASH preprocessing and strict full-parameter inference, isolated env."""
 
 import json
+import os
 from pathlib import Path
 import time
 
 import numpy as np
 
+from deploy.fr3_sharpa_runtime.flash_contract import flash_settings
 from deploy.fr3_sharpa_runtime.flash_contract import validate_flash_observation
 
 IMAGE_KEYS = {
@@ -75,8 +77,8 @@ class FlashPolicy:
         from openpi.shared import nnx_utils
 
         root = Path(checkpoint)
-        manifest = json.loads((root / "flash_deployment.json").read_text())
-        options = manifest["model_config"].copy()
+        settings = flash_settings(root, norm_stats=metadata["norm_stats"], backend=os.environ.get("SHARPA_FLASH_REPO"))
+        options = settings["model_config"].copy()
         for key in ("action_q01", "action_q99"):
             options[key] = tuple(options[key])
         model_config = Pi0FlashConfig(**options)
@@ -85,7 +87,7 @@ class FlashPolicy:
         self.model = model_config.load(params, remove_extra_params=False)
         self.sample = nnx_utils.module_jit(self.model.sample_actions, static_argnames=("num_steps",))
         self.stats = json.loads(Path(metadata["norm_stats"]).read_text())["norm_stats"]
-        self.tokenizer = load_tokenizer(root / manifest["tokenizer"])
+        self.tokenizer = load_tokenizer(settings["tokenizer"])
         self.rng = jax.random.key(0)
         self.metadata = metadata
 

@@ -5,7 +5,7 @@ source "$ROOT/deploy/fr3_sharpa_runtime/model_env.sh" --model flash-absolute "$@
 set -- "${SHARPA_MODEL_ARGS[@]}"
 : "${SHARPA_FLASH_REPO:?Set training FLASH source directory}"
 : "${SHARPA_FLASH_PYTHON:?Set independent FLASH Python interpreter}"
-: "${SHARPA_FLASH_CHECKPOINT:?Set complete sealed FLASH checkpoint step}"
+: "${SHARPA_FLASH_CHECKPOINT:?Set complete FLASH checkpoint step}"
 [[ "$SHARPA_FLASH_PYTHON" == /* && "$SHARPA_FLASH_REPO" == /* && -x "$SHARPA_FLASH_PYTHON" && -f "$SHARPA_FLASH_REPO/src/openpi/models/pi0_flash.py" ]] || {
   echo 'Missing FLASH interpreter/source; do not substitute the old deployment environment' >&2; exit 1;
 }

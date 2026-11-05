@@ -1,4 +1,4 @@
-"""Seal an already completed training step; no model creation or dataset scan."""
+"""Optional legacy archive export; native FLASH deployment does not require it."""
 
 import argparse
 import json

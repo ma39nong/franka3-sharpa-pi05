@@ -234,3 +234,5 @@ Home 目标和从反馈生成的中间指令分别检查。双手每次发送前
 选择checkpoint步骤目录后，直接选择模型类型：Full Absolute、Full Delta、LoRA Absolute、Paper Delta、Train RTC Absolute/Delta或Train Paper RTC。无需另行生成或复制部署契约；训练JSON为可选核对项，手动模式不自动采用旁边的旧训练记录。原有自动识别保留为兼容选项。
 
 Train RTC需填写实际训练的最大延迟（1..49），可设置初始延迟（1..min(25,训练上限)，0自动）；重规划触发节点仍由执行配置填写。普通RTC无需训练最大延迟。界面仅开放所选模型支持的模式，Paper继续读取原有归一化和噪声资产。权重结构、配套统计、服务预热、关节范围、反馈新鲜度及停止收尾检查保留。
+
+FLASH分支额外支持手动选择FLASH Absolute。直接读取原始checkpoint和已有训练配置，无需导出 `flash_deployment.json`、复制契约或提供执行验证报告；仅支持普通串行。详见 [FLASH部署说明](../fr3_sharpa_flash/README.md)。
