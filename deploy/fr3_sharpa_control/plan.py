@@ -66,7 +66,17 @@ def allocate_run(root, *, now=None):
             attempt += 1
 
 
-def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0):
+def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto"):
+    choices = {"auto": None, "full": "absolute", "full-delta": "delta", "lora": "absolute",
+               "paper-delta": "delta", "train-rtc-absolute": "absolute", "train-rtc-delta": "delta",
+               "train-paper-rtc": "delta"}
+    if model_type not in choices:
+        raise ValueError("不支持的模型类型")
+    manual = model_type != "auto"
+    if manual:
+        semantics = choices[model_type]
+        if "train" not in model_type and train_rtc_max_delay:
+            raise ValueError("训练RTC最大延迟仅适用于Train RTC模型")
     root = Path(checkpoint).expanduser().resolve()
     if (root / "flash_deployment.json").exists() or list((root / "assets").rglob("flash_manifest.json")):
         from deploy.fr3_sharpa_runtime.flash_contract import declares_flash
@@ -95,6 +105,11 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     lora = any("lora" in key.lower() for key in entries)
     if algorithm and lora:
         raise ValueError("Paper目前仅支持全量delta，不能套用LoRA")
+    if manual:
+        if (model_type == "lora") != lora:
+            raise ValueError("手动模型类型与LoRA/全量参数结构不一致")
+        if (model_type in ("paper-delta", "train-paper-rtc")) != bool(algorithm):
+            raise ValueError("手动模型类型与Paper归一化/噪声资产不一致")
     validate_parameter_layout(entries, get_model_profile("lora" if lora else "full"))
     projections = {}
     for entry in entries.values():
@@ -107,7 +122,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
     from deploy.fr3_sharpa_runtime.train_rtc_contract import inspect_train_rtc
     trained = inspect_train_rtc(stats, root, training_record or None, paper_algorithm=algorithm,
-                                manual_delay=train_rtc_max_delay, manual_semantics=semantics)
+                                manual_delay=train_rtc_max_delay, manual_semantics=semantics, model_type=model_type)
     if trained and lora:
         raise ValueError("Train RTC requires full checkpoint, excludes LoRA")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
@@ -134,6 +149,10 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             raise ValueError("训练记录与Paper资产的delta语义冲突")
         detected = "delta" if data["extra_delta_transform"] else "absolute"
         source = "匹配统计和模型结构的训练记录"
+    if manual:
+        if training_record and detected and detected != semantics:
+            raise ValueError("手动模型类型与提供的训练记录冲突")
+        detected, source = semantics, "操作员手动选择模型类型（训练JSON可选，无需契约副本）"
     if cache and not detected:
         binding = Path(cache) / f"{identity}.json"
         if binding.is_file():
@@ -181,6 +200,8 @@ class DeploymentSettings:
     semantics: str = "auto"
     camera_policy: str = "exclusive"
     train_rtc_max_delay: int = 0
+    model_type: str = "auto"
+    rtc_initial_delay_steps: int = 0
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -198,8 +219,12 @@ class DeploymentSettings:
             raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
         if type(self.train_rtc_max_delay) is not int or not 0 <= self.train_rtc_max_delay < 50:
             raise ValueError("训练RTC最大延迟必须为0..49整数，0表示自动识别")
+        if type(self.rtc_initial_delay_steps) is not int or not 0 <= self.rtc_initial_delay_steps <= 25:
+            raise ValueError("RTC初始延迟必须为0..25整数，0表示使用训练上限（最多25）")
+        if self.rtc_initial_delay_steps and self.mode not in ("train-rtc", "train-paper-rtc"):
+            raise ValueError("RTC初始延迟仅适用于Train RTC执行模式")
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
-                                   cache=cache, train_rtc_max_delay=self.train_rtc_max_delay)
+                                   cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type)
         if not model["profile"]:
             raise ValueError(model["evidence"])
         if self.mode not in model["supported_modes"]:
@@ -225,7 +250,9 @@ class DeploymentSettings:
             if self.mode in ("train-rtc", "train-paper-rtc"):
                 if not (repo / shared / "train_rtc.py").is_file():
                     raise ValueError("所选仓库缺少Train RTC适配")
-                runtime_args += ["--train-paper-rtc" if self.mode == "train-paper-rtc" else "--train-rtc", "--rtc-initial-delay-steps", str(min(25, model["train_rtc"]["max_delay"]))]
+                if self.rtc_initial_delay_steps > min(25, model["train_rtc"]["max_delay"]):
+                    raise ValueError("RTC初始延迟不能超过训练最大延迟或25")
+                runtime_args += ["--train-paper-rtc" if self.mode == "train-paper-rtc" else "--train-rtc", "--rtc-initial-delay-steps", str(self.rtc_initial_delay_steps or min(25, model["train_rtc"]["max_delay"]))]
             if self.mode == "train-paper-rtc" and not (repo / shared / "train_paper_rtc.py").is_file():
                 raise ValueError("所选仓库缺少Train Paper RTC适配")
             if self.mode == "paper-rtc":
@@ -292,20 +319,23 @@ def plan_environment(plan):
     env.update({profile.checkpoint_env: plan["model"]["checkpoint"],
                 profile.norm_stats_env: plan["model"]["norm_stats"],
                 profile.port_env: str(plan["port"] if plan["settings"]["mode"] != "soft-async" else plan["port"] - 100),
-                "SHARPA_MODEL_PROFILE": profile.name})
+                "SHARPA_MODEL_PROFILE": profile.name,
+                "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
     env.setdefault("SHARPA_PYTHON", sys.executable)
     overlay = Path(plan["machine_root"]) / ".deployment/sharpa_ros_messages/install"
     if overlay.is_dir():
         env.setdefault("SHARPA_ROS_MESSAGES_OVERLAY", str(overlay))
     env["PYTHONPATH"] = f"{root}:{root}/src:{root}/packages/openpi-client/src"
-    for key in ("SHARPA_TRAIN_RTC_RECORD", "SHARPA_TRAIN_RTC_MAX_DELAY", "SHARPA_TRAIN_RTC_SEMANTICS"):
+    for key in ("SHARPA_DEPLOY_TRAINING_RECORD", "SHARPA_TRAIN_RTC_RECORD", "SHARPA_TRAIN_RTC_MAX_DELAY", "SHARPA_TRAIN_RTC_SEMANTICS"):
         env.pop(key, None)
     trained = plan["model"].get("train_rtc")
     if trained:
         if trained["record"]:
             env["SHARPA_TRAIN_RTC_RECORD"] = trained["record"]
-        else:
+            if plan["settings"].get("model_type", "auto") != "auto":
+                env["SHARPA_DEPLOY_TRAINING_RECORD"] = trained["record"]
+        if not trained["record"] or plan["settings"].get("model_type", "auto") != "auto":
             env["SHARPA_TRAIN_RTC_MAX_DELAY"] = str(trained["max_delay"])
             env["SHARPA_TRAIN_RTC_SEMANTICS"] = trained["semantics"]
     env.pop("SHARPA_RECORD_SOCKET", None)

@@ -228,3 +228,9 @@ bash deploy/fr3_sharpa_control/record_session.sh check
 Home 目标和从反馈生成的中间指令分别检查。双手每次发送前先同时验证两边的22个关节，避免发现右手非法目标前已发送左手。错误给出侧别、关节、实际角度及原驱动范围；`runtime.log` 的 `prepare_initial_feedback` 保存 Home 开始时真实58D反馈和目标，供追查边界偏差。
 
 若反馈在限位附近，Home 中间指令只能在现有 `prepare_speed_rad_s × 1/30秒` 的单步预算及严格 SDK slew 范围内收敛至合法边界；浮点边界取可表示的区间内值。真实反馈、Home 目标和原驱动限位均不修改。不套用模型预测的0.05rad裁剪额度。若距离合法边界超过该单步预算，Home 在下发前拒绝并报告数值，应检查真实手指位置和标定，不能通过扩大限位强行启动。
+
+## 手动配置模型
+
+选择checkpoint步骤目录后，直接选择模型类型：Full Absolute、Full Delta、LoRA Absolute、Paper Delta、Train RTC Absolute/Delta或Train Paper RTC。无需另行生成或复制部署契约；训练JSON为可选核对项，手动模式不自动采用旁边的旧训练记录。原有自动识别保留为兼容选项。
+
+Train RTC需填写实际训练的最大延迟（1..49），可设置初始延迟（1..min(25,训练上限)，0自动）；重规划触发节点仍由执行配置填写。普通RTC无需训练最大延迟。界面仅开放所选模型支持的模式，Paper继续读取原有归一化和噪声资产。权重结构、配套统计、服务预热、关节范围、反馈新鲜度及停止收尾检查保留。
