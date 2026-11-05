@@ -13,7 +13,7 @@ from .timing import TimedPolicy, timed_server_class
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta}, --list-models")
+    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta,mamba,mamba-delta}, --list-models")
     parser.add_argument("--port", type=int, default=config.POLICY_PORT)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check-only", action="store_true", help="Check metadata/statistics without loading weights")
@@ -24,6 +24,9 @@ def main() -> None:
     parser.add_argument("--enable-train-rtc", action="store_true", help="Use trained hard-prefix conditioning (requires training record)")
     parser.add_argument("--enable-train-paper-rtc", action="store_true", help="Paper noise/normalization with trained hard-prefix conditioning")
     args = parser.parse_args()
+    is_mamba = config.MODEL_PROFILE.architecture == "pi05_mamba3_jax"
+    if is_mamba and (args.enable_rtc or args.enable_paper_rtc):
+        parser.error("Mamba rejects soft RTC; use --enable-train-rtc or --enable-train-paper-rtc with trained weights")
     if args.enable_train_paper_rtc:
         if args.enable_rtc or args.enable_train_rtc or args.enable_paper_rtc:
             parser.error("Use --enable-train-paper-rtc alone")
@@ -84,6 +87,10 @@ def main() -> None:
     elif args.enable_paper_rtc:
         from .paper_rtc import PaperRTCPolicy
         policy_options["policy_class"] = PaperRTCPolicy
+    if is_mamba:
+        from .mamba_model import MambaPolicy, MambaTrainRTCPolicy, MambaTrainPaperRTCPolicy
+        policy_options["policy_class"] = (MambaTrainPaperRTCPolicy if args.enable_train_paper_rtc else
+                                          MambaTrainRTCPolicy if args.enable_train_rtc else MambaPolicy)
     policy = policy_config.create_trained_policy(
         training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT,
         rtc_action_repack=canonical_prefix if args.enable_rtc else None, **policy_options)
@@ -130,6 +137,12 @@ def main() -> None:
         metadata.update(rtc_warmed_up=True, rtc_smoke_action_shape=[50, 58],
                         rtc_warm_infer_ms=guided["policy_timing"]["infer_ms"])
         print(f"RTC guided Warmup OK: 58D, {metadata['rtc_warm_infer_ms']:.1f} ms warmed model sampling", flush=True)
+    if is_mamba:
+        from .mamba_contract import IDENTITY_KEYS
+        after = checkpoint_contract()
+        for key in (*IDENTITY_KEYS, "checkpoint_manifest_sha256", "normalization_sha256", "paper_algorithm", "train_rtc"):
+            if metadata[key] != after[key]:
+                raise ValueError(f"Mamba assets changed during model loading/warmup: {key}")
     metadata.update(warmed_up=True, smoke_action_shape=list(actions.shape), smoke_finite=True)
     print(f"Warmup OK: actions=(50, 58), {config.MODEL_PROFILE.name}, absolute, 30 Hz", flush=True)
     if args.report:

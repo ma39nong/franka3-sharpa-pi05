@@ -1,0 +1,25 @@
+{
+  "repository": "https://github.com/LTT-BIT/tomato-openpi",
+  "commit": "0117bb5bdc26874082cb462764131cfad037df7a",
+  "source_sha256": {
+    "src/openpi/models/mamba3/__init__.py": "e048d27aab076953e6dae3053bd2470a2b909b8499e0aec63d83a7392ebd8199",
+    "src/openpi/models/mamba3/action_expert.py": "588b058929f84b1a64f433857f42547e35c2688769fd13ce0d69b81f238a3ed9",
+    "src/openpi/models/mamba3/config.py": "3810bd3fd213a8f2e1f3a69f234373043ba9d8bc5dbd98486d0aa442e126b2ba",
+    "src/openpi/models/mamba3/context_compressor.py": "4db69215ee239d95f6cfd7dd46b41941c259403c95f2e5efc6846fee080c95b7",
+    "src/openpi/models/mamba3/core.py": "98873594d1c27e5adb3b73ef9fcf624c39ed7f26d415896a2eb50972aab5fd50",
+    "src/openpi/models/mamba3/mixer.py": "42a72483c3104e42855dcfe4c138bb81121a9b9a9a3ea4ddec0f9f132aad0a9a",
+    "src/openpi/models/pi0_mamba.py": "06f4687fc74c8d3ce9ac9193ce94d0730b9d0e08ef98a624e6ee4e552f4d0b7f",
+    "src/openpi/models/pi0_mamba_config.py": "9ae9aeb71b6e2272641458ebbb757c523f0478db8b1b5c22c5732fdc71d36146",
+    "src/openpi/models/pi0_mamba_paper.py": "19201f1c52b04dad41d47024de61493eddaf3c68218197e9621b849143fa82db",
+    "src/openpi/models/rtc.py": "e2d756463f407571c9db01181b1755c7a35ab7de36ef1a8b8b1c911cfa6dd2ed",
+    "third_party/mamba3/LICENSE-MambaAct": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+    "third_party/mamba3/LICENSE-jax": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "third_party/mamba3/NOTICE": "23a02662d8f70e6ce0fdf0e37f1fd8758b40c57891c471b960e0e3dc32adeaef"
+  },
+  "ported_tests": {
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_numerics.py": {
+      "source": "tests/test_mamba3_core.py",
+      "source_sha256": "df3099ec018b18012dee474ce4fab0002dbc07db62975d0e813291f703289377"
+    }
+  }
+}

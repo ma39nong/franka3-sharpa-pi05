@@ -93,13 +93,22 @@ def prepare_policy_validation():
     global _validation_cache
     checkpoint = require_checkpoint()
     from .train_rtc_contract import resolve_training_record
-    record = resolve_training_record(checkpoint)
+    from .mamba_contract import architecture_files, IDENTITY_KEYS
+    is_mamba = MODEL_PROFILE.architecture == "pi05_mamba3_jax"
+    record = None if is_mamba else resolve_training_record(checkpoint)
     paths = (checkpoint / "params/manifest.ocdbt", checkpoint / "params/_METADATA", NORM_STATS,
              NORM_STATS.parent / "delta_paper.json", NORM_STATS.parent / "delta_paper.npz",
              NORM_STATS.parent / "norm_metadata.json",
              record or checkpoint / "train_rtc_record.json")
-    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[-1]),
-               os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY"), os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS"))
+    # Include both presence and identity, so adding/removing a second manifest
+    # invalidates the cached gate, including on the old Transformer profiles.
+    mamba_paths = architecture_files(checkpoint)
+    paths += tuple(mamba_paths) or (NORM_STATS.parent / "mamba_architecture.json",)
+    inventory = tuple(str(p.resolve()) for p in mamba_paths)
+    if is_mamba:
+        inventory += tuple(str(p.resolve()) for p in sorted((checkpoint / "assets").rglob("norm_stats.json")))
+    context = (str(checkpoint.resolve()), str(NORM_STATS.resolve()), MODEL_PROFILE, CONFIG_NAME, str(paths[6]),
+               os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY"), os.environ.get("SHARPA_TRAIN_RTC_SEMANTICS"), inventory)
     with _validation_lock:
         signature = _asset_signature(paths)
         if _validation_cache is not None:
@@ -109,11 +118,14 @@ def prepare_policy_validation():
             if context == previous_context and previous_signature[1] is not None and signature[1] is None:
                 raise ValueError("Checkpoint metadata removed after validation; execution blocked")
         # Never cache failed/incomplete validation, or assets modified during it.
-        if signature[1] is not None:
+        if is_mamba or signature[1] is not None:
             from .model_loader import checkpoint_contract
             contract = checkpoint_contract()
             verified = {key: contract[key] for key in (
                 "checkpoint_manifest_sha256", "normalization_sha256", "paper_algorithm")}
+            if is_mamba:
+                verified.update({key: contract[key] for key in IDENTITY_KEYS})
+                verified["train_rtc"] = contract["train_rtc"]
             if contract.get("train_rtc"):
                 verified["train_rtc"] = contract["train_rtc"]
         else:

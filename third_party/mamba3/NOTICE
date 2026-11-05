@@ -1,0 +1,64 @@
+Mamba-3 JAX SISO extraction and MambaAct action architecture
+
+JAX numerical source: jax-state-spaces/mamba3-jax
+Commit: ffa55848fc513ca91aa330bda4c33c86dab74827
+Original path: mamba3_jax/modeling.py
+Copyright 2026 Cosmo Santoni. Apache-2.0 (LICENSE-jax).
+
+Action/compressor source: giakhuyendihoc/MambaAct
+Commit: 97414cfffc82225c6be34abf486f06c7eb11d22d
+Original paths:
+ openpi/src/openpi/models_pytorch/pi0_mamba_pytorch.py
+ mamba/mamba_ssm/modules/mamba3.py
+Copyright (c) 2026, Dao AI Lab, Goombalab (vendored Mamba core).
+Apache-2.0 (LICENSE-MambaAct).
+
+Modified files and adaptations:
+ src/openpi/models/mamba3/core.py: extract stateless SISO SSD, remove packed
+ sequences, retain triangular/chunk math; explicitly highest-precision dot
+ accumulation to meet FP32 tolerances on CUDA as well as CPU.
+ src/openpi/models/mamba3/mixer.py: minimum SISO NNX wrapper for Flax 0.10.2;
+ no LM, MIMO or carry cache; explicit compute dtype and FP32 sensitive math.
+ src/openpi/models/mamba3/action_expert.py: Torch gated FiLM/FFN/time blocks
+ ported to NNX; no cross-attention/history/early-exit variants.
+ src/openpi/models/mamba3/context_compressor.py: masked integer-boundary pooling
+ and global-query MHA ported to NNX with safe all-empty rows. All three camera
+ streams participate in fixed base/left/right order, followed by all prompt
+ slots (including discretized state text). No two-camera token slicing.
+
+Verified hyperparameter correspondence (not a claim of paper reproduction):
+ d_model/hidden_size=512, depth=4, d_state/state_size=64, expand=1,
+ headdim/head_dim=64, chunk_size=64, is_mimo=false, ngroups=1,
+ rope_fraction=.5, A_floor=1e-4, B/C RMS epsilon=1e-5, dt_min=.001,
+ dt_max=.1, dt_init_floor=1e-4, is_outproj_norm=false, mixer bias=false,
+ MHA heads=8, dropout=0, FFN=2048, FiLM hidden=2048, RMS epsilon=1e-6,
+ vision/language/global budget=44/16/4. Time projection and final FiLM weight
+ start at zero; FiLM gate bias=log(.2/.8). Computation is BF16 for projections,
+ FP32 for SSM/norm reductions/loss; trainable parameter storage stays FP32.
+
+Differences from official Torch execution: JAX reference SSD rather than fused
+ CUDA kernels, repository SigLIP/Gemma bridge without early exit, three cameras,
+ 58 actions over 50 frames, Pi05 time embedding and FM direction. All numerical
+ comparisons align parameter layouts; none demonstrate fused-kernel parity.
+
+Nonzero dense kernels use the repository NNX LeCun initializer rather than
+Torch Linear Kaiming/MHA Xavier initializers; all new biases are zero except
+FiLM gate bias. Parity tests transfer the same kernel values and account for
+layouts; RNG/initial-weight parity with Torch is not claimed.
+
+Deployment port in franka3-sharpa-pi05 (2026-11-05):
+ Training source: LTT-BIT/tomato-openpi
+ Commit: 0117bb5bdc26874082cb462764131cfad037df7a
+ Original file hashes: deployment_source.json (source_sha256, not local hashes).
+ Numerical core/action/compressor and rtc.py copied without behavioral changes.
+ pi0_mamba.py uses an equivalent local standard-normal noise helper because
+ deployment Pi0 has no noise method. Existing Gemma, SigLIP and Pi0 unchanged.
+ pi0_mamba_config.py carries rtc_max_delay locally and strictly restores every
+ shape/dtype/finite parameter without intersection or BF16 storage coercion.
+ pi0_mamba_paper.py defines the same serialized Paper fields directly, drops
+ training-only hooks, preserves time-major z @ L.T, and authenticates restored
+ correlation state against checkpoint-owned Paper assets.
+ Tests/test_mamba_numerics.py derives from the pinned training core tests;
+ only its evidence output helper/imports are adapted for deployment.
+ config_schema.json records the source dataclass field sets/defaults for the
+ disk-only validator; it does not define a checkpoint's actual hyperparameters.

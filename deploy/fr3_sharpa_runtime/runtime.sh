@@ -3,8 +3,33 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/deploy/fr3_sharpa_runtime/model_env.sh" "$@"
 set -- "${SHARPA_MODEL_ARGS[@]}"
+# Mamba admission is disk-only and happens before ROS overlays/hardware sessions.
+if [[ "$SHARPA_MODEL_PROFILE" == mamba || "$SHARPA_MODEL_PROFILE" == mamba-delta ]]; then
+  mamba_help=false
+  mamba_rtc_flags=()
+  mamba_broker=""
+  previous=""
+  for argument in "$@"; do
+    case "$argument" in
+      --help|-h) mamba_help=true ;;
+      --train-rtc) mamba_rtc_flags+=(--enable-train-rtc) ;;
+      --train-paper-rtc) mamba_rtc_flags+=(--enable-train-paper-rtc) ;;
+      --paper-rtc) echo 'Mamba rejects soft Paper RTC; use --train-paper-rtc' >&2; exit 2 ;;
+      --broker-mode=*) mamba_broker="${argument#--broker-mode=}" ;;
+    esac
+    if [[ "$previous" == --broker-mode ]]; then mamba_broker="$argument"; fi
+    previous="$argument"
+  done
+  if ! $mamba_help; then
+    if [[ "$mamba_broker" == rtc && ${#mamba_rtc_flags[@]} -eq 0 ]]; then
+      echo 'Mamba RTC requires --train-rtc or --train-paper-rtc' >&2; exit 2
+    fi
+    interpreter="${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}"
+    "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only "${mamba_rtc_flags[@]}" > /dev/null
+  fi
+fi
 # Explicit alternate-model validation must happen before any hardware session is entered.
-if [[ "$SHARPA_MODEL_PROFILE" != full ]]; then
+if [[ "$SHARPA_MODEL_PROFILE" != full && "$SHARPA_MODEL_PROFILE" != mamba && "$SHARPA_MODEL_PROFILE" != mamba-delta ]]; then
   previous=""
   for argument in "$@"; do
     if [[ "$argument" == --execute || "$argument" == --mode=execute || ( "$previous" == --mode && "$argument" == execute ) ]]; then

@@ -12,6 +12,7 @@ class ModelProfile:
     vlm_rank: int | None = None
     expert_rank: int | None = None
     extra_delta_transform: bool = False
+    architecture: str = "transformer"
 
     @property
     def finetune_mode(self):
@@ -23,7 +24,8 @@ class ModelProfile:
 
     @property
     def env_prefix(self):
-        return {"full": "SHARPA", "lora": "SHARPA_LORA", "full-delta": "SHARPA_FULL_DELTA"}[self.name]
+        return {"full": "SHARPA", "lora": "SHARPA_LORA", "full-delta": "SHARPA_FULL_DELTA",
+                "mamba": "SHARPA_MAMBA", "mamba-delta": "SHARPA_MAMBA_DELTA"}[self.name]
 
     @property
     def checkpoint_env(self):
@@ -47,7 +49,8 @@ class ModelProfile:
 
     @property
     def trace_subdir(self):
-        folder = {"full": "fr3_sharpa_runtime", "lora": "fr3_sharpa_lora", "full-delta": "fr3_sharpa_full_delta"}[self.name]
+        folder = {"full": "fr3_sharpa_runtime", "lora": "fr3_sharpa_lora", "full-delta": "fr3_sharpa_full_delta",
+                  "mamba": "fr3_sharpa_mamba", "mamba-delta": "fr3_sharpa_mamba_delta"}[self.name]
         return f".local/state/{folder}/execution_traces"
 
 
@@ -58,6 +61,11 @@ MODEL_PROFILES = {
                          "gemma_2b_lora", "gemma_300m_lora", 18766, 16, 32),
     "full-delta": ModelProfile("full-delta", "pi05_fr3_sharpa_1016_2_fullft_delta_30hz_deploy",
                                "gemma_2b", "gemma_300m", 18767, extra_delta_transform=True),
+    "mamba": ModelProfile("mamba", "pi05_fr3_sharpa_mamba3_absolute_30hz_deploy",
+                          "gemma_2b", "gemma_300m", 18768, architecture="pi05_mamba3_jax"),
+    "mamba-delta": ModelProfile("mamba-delta", "pi05_fr3_sharpa_mamba3_paper_delta_30hz_deploy",
+                                "gemma_2b", "gemma_300m", 18769, extra_delta_transform=True,
+                                architecture="pi05_mamba3_jax"),
 }
 
 
@@ -103,6 +111,7 @@ def validate_parameter_layout(entries, profile):
 def registry_metadata():
     """Describe available recipes without requiring weights, ROS or a GPU."""
     return [{"name": p.name, "config_name": p.config_name,
+             "model_architecture": p.architecture,
              "paligemma_variant": p.paligemma_variant, "action_expert_variant": p.action_expert_variant,
              "action_hz": 30, "action_dim": 58, "action_horizon": 50,
              "training_action_supervision": p.training_action_supervision,

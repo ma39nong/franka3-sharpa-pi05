@@ -1,0 +1,86 @@
+{
+  "mixer_float32": {
+    "forward_relative_l2": 1.8418371894313168e-07,
+    "forward_max_abs": 3.725290298461914e-08,
+    "forward_limit": 0.0001
+  },
+  "mixer_float32_gradients": {
+    "parameters": {
+      "B_bias": {
+        "relative_l2": 1.4194017694535432e-07,
+        "max_abs": 5.4569682106375694e-12
+      },
+      "B_norm/weight": {
+        "relative_l2": 1.547616079733416e-07,
+        "max_abs": 1.4551915228366852e-11
+      },
+      "C_bias": {
+        "relative_l2": 2.240147836118922e-07,
+        "max_abs": 1.0913936421275139e-11
+      },
+      "C_norm/weight": {
+        "relative_l2": 2.3559263695460686e-07,
+        "max_abs": 1.0913936421275139e-11
+      },
+      "D": {
+        "relative_l2": 2.713579760893481e-07,
+        "max_abs": 1.7462298274040222e-10
+      },
+      "dt_bias": {
+        "relative_l2": 1.7108027350332122e-07,
+        "max_abs": 4.3655745685100555e-11
+      },
+      "in_proj/kernel": {
+        "relative_l2": 2.015291755697035e-07,
+        "max_abs": 4.3655745685100555e-11
+      },
+      "out_proj/kernel": {
+        "relative_l2": 1.8696722747790773e-07,
+        "max_abs": 2.1827872842550278e-11
+      }
+    },
+    "relative_limit": 0.001
+  },
+  "mixer_bfloat16": {
+    "forward_relative_l2": 0.0,
+    "forward_max_abs": 0.0,
+    "forward_limit": 0.03
+  },
+  "mixer_bfloat16_gradients": {
+    "parameters": {
+      "B_bias": {
+        "relative_l2": 1.607071453690878e-07,
+        "max_abs": 5.4569682106375694e-12
+      },
+      "B_norm/weight": {
+        "relative_l2": 9.404452327999024e-08,
+        "max_abs": 7.275957614183426e-12
+      },
+      "C_bias": {
+        "relative_l2": 1.1829660451212476e-07,
+        "max_abs": 7.275957614183426e-12
+      },
+      "C_norm/weight": {
+        "relative_l2": 1.4521090463404107e-07,
+        "max_abs": 7.275957614183426e-12
+      },
+      "D": {
+        "relative_l2": 8.094022518889687e-08,
+        "max_abs": 5.820766091346741e-11
+      },
+      "dt_bias": {
+        "relative_l2": 1.2746556876663817e-07,
+        "max_abs": 2.9103830456733704e-11
+      },
+      "in_proj/kernel": {
+        "relative_l2": 0.0,
+        "max_abs": 0.0
+      },
+      "out_proj/kernel": {
+        "relative_l2": 0.0,
+        "max_abs": 0.0
+      }
+    },
+    "relative_limit": 0.05
+  }
+}

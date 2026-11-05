@@ -389,7 +389,7 @@ def run_preflight_only(args) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta}, --list-models")
+    parser = argparse.ArgumentParser(epilog="Shell launcher options: --model {full,lora,full-delta,mamba,mamba-delta}, --list-models")
     parser.add_argument("--mode", choices=("dry-run", "ros-test", "preflight-only", "prepare", "execute", "handoff-verify", "check"), default="dry-run")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="Print model/execution settings without ROS, SDK or model loading")
@@ -481,6 +481,11 @@ def main() -> None:
             parser.error("RTC supports current or Home initialization, not legacy policy prepare")
         if args.num_chunks == 1 or args.num_chunks < 0 or not 1 <= args.execute_steps <= 24:
             parser.error("RTC needs --num-chunks 0 or >=2 and --execute-steps in [1, 24] (replan interval)")
+    if config.MODEL_PROFILE.architecture == "pi05_mamba3_jax":
+        from .model_loader import checkpoint_contract
+        checkpoint_contract()  # Also for --check and direct Python execution, before hardware.
+        if args.broker_mode == "rtc" and not args.train_rtc:
+            parser.error("Mamba RTC requires trained hard-prefix mode (--train-rtc/--train-paper-rtc)")
     from .profiles import resolve_speed
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name

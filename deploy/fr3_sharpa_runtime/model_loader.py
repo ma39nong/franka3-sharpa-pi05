@@ -19,7 +19,25 @@ def checkpoint_contract():
     tree_path = checkpoint / "params/_METADATA"
     if not manifest.is_file() or not tree_path.is_file():
         raise ValueError("Missing complete Orbax params metadata/manifest")
+    from .mamba_contract import architecture_files, inspect_mamba
+    is_mamba = config.MODEL_PROFILE.architecture == "pi05_mamba3_jax"
+    if is_mamba:
+        metadata = inspect_mamba(checkpoint, config.NORM_STATS, profile=config.MODEL_PROFILE)
+        return {**metadata, "config_name": config.CONFIG_NAME, "checkpoint": str(checkpoint),
+            "norm_stats": str(config.NORM_STATS), "model_finetune_mode": "full",
+            "training_action_supervision": config.MODEL_PROFILE.training_action_supervision,
+            "delta_reference": "chunk_start_measured_joint_positions" if config.MODEL_PROFILE.extra_delta_transform else None,
+            "delta_dimensions": list(range(7)) + list(range(29, 36)) if config.MODEL_PROFILE.extra_delta_transform else [],
+            "paligemma_variant": config.MODEL_PROFILE.paligemma_variant,
+            "action_expert_variant": config.MODEL_PROFILE.action_expert_variant, "lora_recipe": None,
+            "action_dim": config.ACTION_DIM, "action_horizon": config.ACTION_HORIZON, "action_hz": config.ACTION_HZ,
+            "action_representation": "absolute_joint_position", "action_order": config.ACTION_ORDER,
+            "camera_mapping": config.CAMERA_MAPPING, "warmed_up": False}
+    if architecture_files(checkpoint):
+        raise ValueError("Mamba checkpoint requires an explicit mamba/mamba-delta profile")
     entries = json.loads(tree_path.read_text())["tree_metadata"]
+    from .mamba_contract import reject_mamba_without_manifest
+    reject_mamba_without_manifest(entries)
     validate_parameter_layout(entries, config.MODEL_PROFILE)
     projection_shapes = {}
     for entry in entries.values():
@@ -69,6 +87,9 @@ def checkpoint_contract():
 
 
 def build_config():
+    if config.MODEL_PROFILE.architecture == "pi05_mamba3_jax":
+        from .mamba_model import build_config as build_mamba
+        return build_mamba(checkpoint_contract(), config)
     from openpi.models.pi0_config import Pi0Config
     from openpi.training.config import AssetsConfig, LeRobotFr3SharpaDataConfig, TrainConfig
 

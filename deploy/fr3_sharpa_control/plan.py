@@ -75,8 +75,28 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if len(paths) != 1:
         raise ValueError("checkpoint assets/ 必须包含唯一配套 norm_stats.json")
     stats = paths[0]
+    from deploy.fr3_sharpa_runtime.mamba_contract import architecture_files
+    if architecture_files(root):
+        if training_record or train_rtc_max_delay:
+            raise ValueError("Mamba RTC evidence comes only from its bound architecture manifest")
+        from deploy.fr3_sharpa_runtime.mamba_contract import inspect_mamba
+        verified = inspect_mamba(root, stats)
+        detected = "delta" if verified["paper_algorithm"] else "absolute"
+        if semantics not in ("auto", detected):
+            raise ValueError("Mamba action semantics conflict with the architecture manifest")
+        trained = verified["train_rtc"]
+        return {**{k: v for k, v in verified.items() if k != "mamba_model"},
+            "checkpoint": str(root), "norm_stats": str(stats), "identity": hashlib.sha256(
+                json.dumps(verified, sort_keys=True).encode()).hexdigest(),
+            "manifest_sha256": verified["checkpoint_manifest_sha256"], "stats_sha256": verified["normalization_sha256"],
+            "profile": verified["model_profile"], "finetune_mode": "full", "semantics": detected,
+            "normalization": verified["mamba_normalization"], "evidence": "已校验Mamba架构、统计和训练RTC字段",
+            "supported_modes": ["serial"] + (["train-paper-rtc" if verified["paper_algorithm"] else "train-rtc"] if trained else []),
+            "action_dim": 58, "action_horizon": 50, "action_hz": 30}
     values = json.loads(stats.read_text())["norm_stats"]
     entries = json.loads(metadata.read_text())["tree_metadata"]
+    from deploy.fr3_sharpa_runtime.mamba_contract import reject_mamba_without_manifest
+    reject_mamba_without_manifest(entries)
     from deploy.fr3_sharpa_runtime.paper_contract import inspect_paper, validate_stats, algorithm_identity
     algorithm = inspect_paper(stats, entries)
     validate_stats(values, paper_algorithm=algorithm)
@@ -203,7 +223,8 @@ class DeploymentSettings:
         full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
         service_args, runtime_args = [], []
-        port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
+        from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile
+        port = get_model_profile(model["profile"]).default_port
         description = f"预测50，执行前{self.steps}，再观测推理"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
@@ -288,7 +309,7 @@ def plan_environment(plan):
     for key in ("SHARPA_TRAIN_RTC_RECORD", "SHARPA_TRAIN_RTC_MAX_DELAY", "SHARPA_TRAIN_RTC_SEMANTICS"):
         env.pop(key, None)
     trained = plan["model"].get("train_rtc")
-    if trained:
+    if trained and profile.architecture != "pi05_mamba3_jax":
         if trained["record"]:
             env["SHARPA_TRAIN_RTC_RECORD"] = trained["record"]
         else:
