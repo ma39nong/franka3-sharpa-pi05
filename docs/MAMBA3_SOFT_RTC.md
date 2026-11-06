@@ -1,6 +1,10 @@
 # Mamba-3 部署端 Soft RTC
 
-本轮在 `mamba3-jax-deployment` 的 `35071da7c3b0c5e996c936ec4775ef31488c4200`
+2026-11-06 复查补强了所有 Mamba Policy 的 RTC 参数来源检查和 Hard Plain/Paper 类型检查。
+复查 CPU 全量 633 PASS、GPU Soft/Hard 23 PASS，详见
+[复查记录](mamba3_soft_rtc_validation/review_2026-11-06.json)。
+
+首轮 Soft 实现在 `mamba3-jax-deployment` 的 `35071da7c3b0c5e996c936ec4775ef31488c4200`
 上增量修改，保留为本地未提交内容，不提交、不推送、不修改训练仓库。
 训练分支已复核，仍固定 `0117bb5bdc26874082cb462764131cfad037df7a`。
 

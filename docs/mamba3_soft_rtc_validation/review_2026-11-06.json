@@ -1,0 +1,72 @@
+{
+  "date": "2026-11-06",
+  "branch": "mamba3-jax-deployment",
+  "base_sha": "76d773ccb739dcce90e7bdddd2895bbbb4ab0d72",
+  "head_changed": false,
+  "committed": false,
+  "pushed": false,
+  "initial_worktree": "clean",
+  "review_scope": [
+    "Sampler Soft/Hard exclusion",
+    "Policy construction and request kwargs",
+    "Service/client/GUI mode matrix",
+    "Metadata capability checks before SDK worker",
+    "Transformer compatibility and restore dtype"
+  ],
+  "findings_fixed": [
+    {
+      "issue": "Raw RTC/prefix sample_kwargs were rejected only by Soft constructors; Serial could receive implicit guidance and Hard could receive conflicting arguments before JIT.",
+      "fix": "Centralized the existing rejection in MambaPolicy.__init__, shared by Serial/Soft/Hard Plain/Paper classes.",
+      "scope": "Programmatic Policy construction; normal service flags already selected the correct classes."
+    },
+    {
+      "issue": "Hard Plain/Paper policy constructors did not check model normalization identity.",
+      "fix": "Reject a mismatched ordinary_per_dimension/paper normalization before initializing JIT or prefix transforms."
+    }
+  ],
+  "checks": {
+    "baseline_cpu": {
+      "status": "PASS",
+      "passed": 593,
+      "seconds": 159.49,
+      "evidence": "review_2026-11-06_baseline_cpu.txt"
+    },
+    "post_fix_cpu": {
+      "status": "PASS",
+      "passed": 633,
+      "seconds": 162.78,
+      "evidence": "review_2026-11-06_cpu.txt"
+    },
+    "gpu_soft_and_hard": {
+      "status": "PASS",
+      "passed": 23,
+      "seconds": 146.93,
+      "evidence": "review_2026-11-06_gpu.txt"
+    },
+    "new_isolation_tests": {
+      "status": "PASS",
+      "passed": 40,
+      "mamba_service_flag_combinations": 64,
+      "legacy_transformer_flag_comparisons": 112,
+      "original_transformer_reference": "e04dade1707af6d6f574e8b4890c54705c855980:deploy/fr3_sharpa_runtime/serve.py"
+    },
+    "restore_dtype": {
+      "status": "PASS",
+      "transformer": "bfloat16, original load defaults",
+      "mamba": "original dtype, remove_extra_params=False"
+    },
+    "ruff_new_changes": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "commands": {
+    "cpu": "PYTHONPATH=src:packages/openpi-client/src:. JAX_PLATFORMS=cpu SHARPA_SCHEMA_PATH=/home/user/pi05/Franka_Gello_Sharpa_armhand_-_-/config/litchibot/sharpa_schema.json SHARPA_MAMBA_SOURCE=/home/user/pi05/tomato-openpi /home/user/.cache/mamba3-openpi-venv/bin/python -m pytest deploy/fr3_sharpa_runtime/tests -q --disable-warnings",
+    "gpu": "PYTHONPATH=src:packages/openpi-client/src:. JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false /home/user/.cache/mamba3-openpi-venv/bin/python -m pytest deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_policy.py deploy/fr3_sharpa_runtime/tests/test_mamba_rtc.py -q --disable-warnings"
+  },
+  "limitations": "Software contracts and explicitly synthetic CPU/GPU models. No real-trained checkpoint, production latency/memory acceptance, or robot execution in this review.",
+  "real_checkpoint_acceptance": "NOT_RUN",
+  "hardware_execution": "NOT_RUN",
+  "code_changes": [
+    "deploy/fr3_sharpa_runtime/mamba_model.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_rtc_isolation_review.py"
+  ]
+}

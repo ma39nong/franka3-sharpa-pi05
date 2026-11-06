@@ -39,6 +39,14 @@ def build_config(metadata, config):
 class MambaPolicy(Policy):
     soft_rtc = False
 
+    def __init__(self, model, **kwargs):
+        raw = set(kwargs.get("sample_kwargs") or {})
+        if raw.intersection(
+            {"prefix_actions", "prefix_length", "rtc_actions", "rtc_weights", "rtc_max_guidance_weight"}
+        ):
+            raise ValueError("Mamba RTC inputs must come from the validated request context")
+        super().__init__(model, **kwargs)
+
     def infer(self, obs, *, noise=None, rtc_context=None):
         if noise is not None:
             noise = np.asarray(noise)
@@ -71,11 +79,6 @@ class MambaSoftRTCPolicy(MambaPolicy):
         expected = "paper" if self.paper_soft_rtc else "ordinary_per_dimension"
         if model.rtc_max_delay or model.config.normalization != expected:
             raise ValueError("Mamba Soft RTC requires untrained RTC weights and the matching Plain/Paper policy")
-        raw = set(kwargs.get("sample_kwargs") or {})
-        if raw.intersection(
-            {"prefix_actions", "prefix_length", "rtc_actions", "rtc_weights", "rtc_max_guidance_weight"}
-        ):
-            raise ValueError("Mamba RTC inputs must come from the validated request context")
         super().__init__(model, **kwargs)
 
     def _rtc_sample_kwargs(self, context, target):
@@ -96,8 +99,14 @@ class MambaPaperSoftRTCPolicy(MambaSoftRTCPolicy, PaperRTCPolicy):
 
 
 class MambaTrainRTCPolicy(MambaPolicy, TrainRTCPolicy):
-    pass
+    def __init__(self, model, **kwargs):
+        if model.config.normalization != "ordinary_per_dimension":
+            raise ValueError("Mamba Plain Hard RTC requires ordinary per-dimension normalization")
+        super().__init__(model, **kwargs)
 
 
 class MambaTrainPaperRTCPolicy(MambaPolicy, TrainPaperRTCPolicy):
-    pass
+    def __init__(self, model, **kwargs):
+        if model.config.normalization != "paper":
+            raise ValueError("Mamba Paper Hard RTC requires Paper normalization")
+        super().__init__(model, **kwargs)
