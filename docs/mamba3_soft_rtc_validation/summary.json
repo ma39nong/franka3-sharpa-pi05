@@ -1,0 +1,220 @@
+{
+  "date": "2026-11-05",
+  "branch": "mamba3-jax-deployment",
+  "base_sha": "35071da7c3b0c5e996c936ec4775ef31488c4200",
+  "head_sha": "35071da7c3b0c5e996c936ec4775ef31488c4200",
+  "initial_worktree": "clean",
+  "implementation_commit": null,
+  "committed": false,
+  "pushed": false,
+  "training_source_commit": "0117bb5bdc26874082cb462764131cfad037df7a",
+  "training_source_remote_rechecked": true,
+  "training_source_modified": false,
+  "scope": "Software/explicit synthetic fixtures only. Real trained-weight and production performance acceptance deferred by user.",
+  "environment": {
+    "python": "3.11.15",
+    "jax": "0.5.3",
+    "flax": "0.10.2",
+    "pytest": "8.3.5",
+    "gpu": "NVIDIA GeForce RTX 4070 Ti SUPER",
+    "gpu_memory_mib": 16376,
+    "new_dependencies": false
+  },
+  "checks": {
+    "baseline_cpu": {
+      "status": "PASS",
+      "passed": 534,
+      "duration_s": 87.47,
+      "evidence": "baseline_cpu.txt"
+    },
+    "deployment_cpu": {
+      "status": "PASS",
+      "passed": 593,
+      "duration_s": 164.87,
+      "evidence": "deployment_cpu.txt"
+    },
+    "gpu_soft": {
+      "status": "PASS",
+      "passed": 30,
+      "duration_s": 142.87,
+      "evidence": "soft_gpu.txt",
+      "note": "Pytest elapsed time is not inference latency; tests ran with explicit small synthetic networks."
+    },
+    "new_code_ruff": "PASS",
+    "shell_syntax": "PASS",
+    "ui_javascript_syntax": "PASS",
+    "git_diff_check": "PASS",
+    "unchanged_model_constructor_loss_noise_condition_velocity_AST": "PASS",
+    "no_NNX_state_changes": "PASS"
+  },
+  "coverage": {
+    "M01": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M02": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M03": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M04": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M05": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M06": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M07": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "M08": {
+      "status": "PASS",
+      "evidence": "test_mamba_soft_rtc_math.py / test_mamba_soft_rtc_policy.py"
+    },
+    "P01": {
+      "status": "BLOCKED",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py",
+      "reason": "Real training checkpoint comparisons deferred by user; synthetic same-weight serial outputs match exactly."
+    },
+    "P02": {
+      "status": "BLOCKED",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py",
+      "reason": "Real training checkpoint comparisons deferred by user; synthetic same-weight serial outputs match exactly."
+    },
+    "P03": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "P04": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "P05": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "P06": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "P07": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "P08": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_policy.py / test_mamba_soft_rtc_service.py"
+    },
+    "S01": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S02": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S03": {
+      "status": "BLOCKED",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression",
+      "reason": "Real trained checkpoint/GPU production smoke or E2E deferred by user."
+    },
+    "S04": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S05": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S06": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S07": {
+      "status": "PASS",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression"
+    },
+    "S08": {
+      "status": "BLOCKED",
+      "synthetic_software_status": "PASS",
+      "evidence": "test_mamba_soft_rtc_service.py / test_mamba_soft_rtc_timeline.py / complete regression",
+      "reason": "Real trained checkpoint/GPU production smoke or E2E deferred by user."
+    }
+  },
+  "production_latency_p50_p95_and_gpu_peak_memory": {
+    "status": "BLOCKED",
+    "reason": "Real checkpoint unavailable; deferred by user."
+  },
+  "hardware_execution": "NOT_RUN",
+  "nnx_new_parameter_or_variable_leaves": 0,
+  "commands": {
+    "baseline_cpu": "PYTHONPATH=src:packages/openpi-client/src:. JAX_PLATFORMS=cpu SHARPA_SCHEMA_PATH=/home/user/pi05/Franka_Gello_Sharpa_armhand_-_-/config/litchibot/sharpa_schema.json SHARPA_MAMBA_SOURCE=/home/user/pi05/tomato-openpi /home/user/.cache/mamba3-openpi-venv/bin/python -m pytest deploy/fr3_sharpa_runtime/tests -q --disable-warnings",
+    "deployment_cpu": "PYTHONPATH=src:packages/openpi-client/src:. JAX_PLATFORMS=cpu SHARPA_SCHEMA_PATH=/home/user/pi05/Franka_Gello_Sharpa_armhand_-_-/config/litchibot/sharpa_schema.json SHARPA_MAMBA_SOURCE=/home/user/pi05/tomato-openpi MAMBA_SMOKE_EVIDENCE=/tmp/mamba-soft-evidence/cpu-final /home/user/.cache/mamba3-openpi-venv/bin/python -m pytest deploy/fr3_sharpa_runtime/tests -q --disable-warnings",
+    "gpu_soft": "PYTHONPATH=src:packages/openpi-client/src:. JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false MAMBA_SMOKE_EVIDENCE=/tmp/mamba-soft-evidence/gpu-final /home/user/.cache/mamba3-openpi-venv/bin/python -m pytest deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_math.py deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_policy.py -q --disable-warnings"
+  },
+  "numerical_fixture_notes": [
+    "Analytic linear-field reference now explicitly requests HIGHEST dot precision; initial GPU default matmul precision produced inaccurate analytic-reference comparisons. No production helper was changed.",
+    "GPU batch-size-dependent reduction ordering observed max absolute 5.46e-5 and relative L2 3.16e-6 in complete guided sampling; bounded by max abs<1e-4 and relative L2<1e-5. Identical compiled repeats remain exactly equal.",
+    "Synthetic FP32 finite-difference JVP relative L2 ~0.002075 at epsilon=0.001; independent JVP/VJP adjoint test also passes."
+  ],
+  "unmodified_shared_modules": [
+    "src/openpi/models/pi0.py",
+    "src/openpi/policies/policy.py",
+    "deploy/fr3_sharpa_runtime/paper_rtc.py",
+    "deploy/fr3_sharpa_runtime/runtime.py",
+    "deploy/fr3_sharpa_runtime/rtc_stream.py",
+    "deploy/fr3_sharpa_runtime/rtc_runtime.py",
+    "packages/openpi-client/src/openpi_client/rtc.py",
+    "uv.lock"
+  ],
+  "changed_files": [
+    "deploy/fr3_sharpa_control/plan.py",
+    "deploy/fr3_sharpa_control/ui.py",
+    "deploy/fr3_sharpa_runtime/mamba_contract.py",
+    "deploy/fr3_sharpa_runtime/mamba_model.py",
+    "deploy/fr3_sharpa_runtime/mamba_soft_rtc.py",
+    "deploy/fr3_sharpa_runtime/run.py",
+    "deploy/fr3_sharpa_runtime/runtime.sh",
+    "deploy/fr3_sharpa_runtime/serve.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_deployment.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_math.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_policy.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_service.py",
+    "deploy/fr3_sharpa_runtime/tests/test_mamba_soft_rtc_timeline.py",
+    "docs/MAMBA3_DEPLOYMENT.md",
+    "docs/MAMBA3_SOFT_RTC.md",
+    "docs/mamba3_soft_rtc_validation/baseline_cpu.txt",
+    "docs/mamba3_soft_rtc_validation/cpu_numerics.json",
+    "docs/mamba3_soft_rtc_validation/deployment_cpu.txt",
+    "docs/mamba3_soft_rtc_validation/gpu_numerics.json",
+    "docs/mamba3_soft_rtc_validation/soft_gpu.txt",
+    "docs/mamba3_soft_rtc_validation/summary.json",
+    "src/openpi/models/mamba3/soft_rtc.py",
+    "src/openpi/models/pi0_mamba.py",
+    "third_party/mamba3/NOTICE"
+  ]
+}

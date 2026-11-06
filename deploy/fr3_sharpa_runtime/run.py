@@ -483,9 +483,14 @@ def main() -> None:
             parser.error("RTC needs --num-chunks 0 or >=2 and --execute-steps in [1, 24] (replan interval)")
     if config.MODEL_PROFILE.architecture == "pi05_mamba3_jax":
         from .model_loader import checkpoint_contract
-        checkpoint_contract()  # Also for --check and direct Python execution, before hardware.
-        if args.broker_mode == "rtc" and not args.train_rtc:
-            parser.error("Mamba RTC requires trained hard-prefix mode (--train-rtc/--train-paper-rtc)")
+        from .mamba_contract import validate_mamba_mode
+        contract = checkpoint_contract()  # Also for --check/direct Python, before hardware.
+        mode = ("train-paper-rtc" if args.train_paper_rtc else "train-rtc" if args.train_rtc else
+                "paper-rtc" if args.paper_rtc else "rtc" if args.broker_mode == "rtc" else "serial")
+        try:
+            validate_mamba_mode(contract, mode)
+        except ValueError as error:
+            parser.error(str(error))
     from .profiles import resolve_speed
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name

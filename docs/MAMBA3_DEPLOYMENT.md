@@ -9,7 +9,7 @@
 - 本地分支：`mamba3-jax-deployment`。
 - 部署基线：`train-rtc` / `e04dade1707af6d6f574e8b4890c54705c855980`。
 - 训练源码：`LTT-BIT/tomato-openpi` / `0117bb5bdc26874082cb462764131cfad037df7a`。
-- 当前实现保留为工作区修改，未创建实施 commit、未推送；HEAD 仍为部署基线。
+- 首轮适配现已归档为 `35071da7c3b0c5e996c936ec4775ef31488c4200`；本轮 Soft RTC 增量保留为未提交工作区修改。历史报告仍记录首轮交付时的 HEAD。
 - 源文件 SHA256、依赖版本及许可证见 `third_party/mamba3/deployment_source.json`、
   `third_party/mamba3/NOTICE` 和两份 Apache-2.0 许可证。
 - `gemma.py`、`siglip.py`、`pi0.py`、原有模型配置及训练器未被覆盖。
@@ -97,12 +97,15 @@ Paper 恢复的噪声 factor 必须逐值匹配已校验 bundle。推理只恢�
 
 ## RTC 模式矩阵
 
+Soft RTC 增量实现与新验收记录见 [MAMBA3_SOFT_RTC.md](MAMBA3_SOFT_RTC.md)。
+下表已更新；首轮记录中的“所有 Mamba 软 RTC 拒绝”由新方案替代，仅训练式模型继续拒绝 Soft。
+
 | 权重 | Serial | 软 RTC / Paper RTC | 训练式硬前缀 |
 |---|---|---|---|
 | 旧 Transformer 模式 | 原功能 | 原合法组合 | 原合法组合 |
-| Mamba Plain，delay=0 | 支持 | 拒绝 | 拒绝 |
+| Mamba Plain，delay=0 | 支持 | `--enable-rtc` | 拒绝 |
 | Mamba Plain，delay>0 | 支持 | 拒绝 | `--enable-train-rtc` |
-| Mamba Paper，delay=0 | 支持 | 拒绝 | 拒绝 |
+| Mamba Paper，delay=0 | 支持 | `--enable-paper-rtc` | 拒绝 |
 | Mamba Paper，delay>0 | 支持 | 拒绝 | `--enable-train-paper-rtc` |
 
 Mamba 的 delay 只读取已校验架构 manifest 中 `rtc_max_delay`，范围 0..49。
@@ -168,13 +171,15 @@ JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false \
 Plain 物理动作（FP32，NFE=2，合成小 VLM，容差 rtol/atol=1e-4；hidden/compressor 为 1e-5）。
 同样覆盖静态前缀 0/1/3。它不替代完整已训练 checkpoint 的数值对照。
 
-最终完整测试 **534 项通过**（基线 472 项）；独立 GPU 核心测试 **10 项通过**。
+首轮完整测试 **534 项通过**（基线 472 项）；独立 GPU 核心测试 **10 项通过**。
 验证汇总和 CPU/GPU 数值误差保存在 `docs/mamba3_validation/`。
 硬件：RTX 4070 Ti SUPER 16GB。合成 16D Mixer 在 GPU 上对独立 Torch 参考的 FP32 relative L2
 约 1.84e-7；具体 dtype/梯度误差见 JSON。没有测量完整模型端到端 p50/p95、冷启动或峰值显存，
 不作速度优于 Transformer 的结论。
 
-## 验收状态
+## 首轮验收状态（历史）
+
+Soft RTC 增量的当前测试结果以 [MAMBA3_SOFT_RTC.md](MAMBA3_SOFT_RTC.md) 为准。
 
 | ID | 状态 | 证据 / 限制 |
 |---|---|---|
@@ -190,7 +195,7 @@ Plain 物理动作（FP32，NFE=2，合成小 VLM，容差 rtol/atol=1e-4；hidd
 | C10 | PASS | manifest/统计/Paper/树篡改及缓存失效测试 |
 | C11 | PASS | 未改基线472项通过；修改后完整回归通过，registry 测试仅扩展新增 profile |
 | C12 | BLOCKED | 合成 Mamba 实际 TCP/WebSocket/Msgpack→既有 ActionAdapter 通过；实权重待验 |
-| C13 | PASS | 检查模式、客户端和 UI 均拒绝 Mamba 软 RTC |
+| C13 | PASS | 首轮拒绝策略已由 Soft 增量矩阵替代；检查模式、客户端和 UI 仍拒绝错误 Soft/Hard 组合 |
 | C14 | BLOCKED | 合成 d=0..3、逐步硬固定/收据通过；实际训练最大 delay 编译待验 |
 | C15 | BLOCKED | 合成 Paper K50/35/1、新 state/索引、物理前缀通过；实权重待验 |
 | C16 | PASS | 未修改协议/队列；旧 RTC stale/receipt/延迟拒绝回归 |

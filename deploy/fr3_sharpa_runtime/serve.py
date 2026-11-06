@@ -25,8 +25,6 @@ def main() -> None:
     parser.add_argument("--enable-train-paper-rtc", action="store_true", help="Paper noise/normalization with trained hard-prefix conditioning")
     args = parser.parse_args()
     is_mamba = config.MODEL_PROFILE.architecture == "pi05_mamba3_jax"
-    if is_mamba and (args.enable_rtc or args.enable_paper_rtc):
-        parser.error("Mamba rejects soft RTC; use --enable-train-rtc or --enable-train-paper-rtc with trained weights")
     if args.enable_train_paper_rtc:
         if args.enable_rtc or args.enable_train_rtc or args.enable_paper_rtc:
             parser.error("Use --enable-train-paper-rtc alone")
@@ -42,6 +40,14 @@ def main() -> None:
     from .model_loader import checkpoint_contract, build_config
 
     metadata = checkpoint_contract()
+    if is_mamba:
+        from .mamba_contract import validate_mamba_mode
+        mode = ("train-paper-rtc" if args.enable_train_paper_rtc else "train-rtc" if args.enable_train_rtc else
+                "paper-rtc" if args.enable_paper_rtc else "rtc" if args.enable_rtc else "serial")
+        try:
+            validate_mamba_mode(metadata, mode)
+        except ValueError as error:
+            parser.error(str(error))
     if args.enable_train_rtc and not metadata.get("train_rtc"):
         parser.error("Train RTC requires a matching training JSON with rtc_max_delay > 0")
     if args.enable_rtc and metadata.get("train_rtc") and not args.enable_train_rtc:
@@ -88,9 +94,11 @@ def main() -> None:
         from .paper_rtc import PaperRTCPolicy
         policy_options["policy_class"] = PaperRTCPolicy
     if is_mamba:
-        from .mamba_model import MambaPolicy, MambaTrainRTCPolicy, MambaTrainPaperRTCPolicy
+        from .mamba_model import MambaPolicy, MambaTrainRTCPolicy, MambaTrainPaperRTCPolicy, MambaSoftRTCPolicy, MambaPaperSoftRTCPolicy
         policy_options["policy_class"] = (MambaTrainPaperRTCPolicy if args.enable_train_paper_rtc else
-                                          MambaTrainRTCPolicy if args.enable_train_rtc else MambaPolicy)
+                                          MambaTrainRTCPolicy if args.enable_train_rtc else
+                                          MambaPaperSoftRTCPolicy if args.enable_paper_rtc else
+                                          MambaSoftRTCPolicy if args.enable_rtc else MambaPolicy)
     policy = policy_config.create_trained_policy(
         training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT,
         rtc_action_repack=canonical_prefix if args.enable_rtc else None, **policy_options)
@@ -100,7 +108,11 @@ def main() -> None:
     result = policy.infer(observation)
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])
-    if args.enable_rtc:
+    if is_mamba and args.enable_rtc and not args.enable_train_rtc:
+        from .mamba_soft_rtc import warmup_soft_rtc
+        metadata.update(warmup_soft_rtc(policy, observation, actions, paper=args.enable_paper_rtc))
+        print("Mamba Soft RTC Warmup OK: synchronized VJP queries and receipt validation", flush=True)
+    if args.enable_rtc and not (is_mamba and not args.enable_train_rtc):
         import hashlib
         context = rtc.validate_context({
             "protocol_version": rtc.PROTOCOL_VERSION, "token": "sharpa-rtc-warmup",

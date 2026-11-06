@@ -8,21 +8,27 @@ if [[ "$SHARPA_MODEL_PROFILE" == mamba || "$SHARPA_MODEL_PROFILE" == mamba-delta
   mamba_help=false
   mamba_rtc_flags=()
   mamba_broker=""
+  mamba_paper=false
   previous=""
   for argument in "$@"; do
     case "$argument" in
       --help|-h) mamba_help=true ;;
       --train-rtc) mamba_rtc_flags+=(--enable-train-rtc) ;;
       --train-paper-rtc) mamba_rtc_flags+=(--enable-train-paper-rtc) ;;
-      --paper-rtc) echo 'Mamba rejects soft Paper RTC; use --train-paper-rtc' >&2; exit 2 ;;
+      --paper-rtc) mamba_paper=true ;;
       --broker-mode=*) mamba_broker="${argument#--broker-mode=}" ;;
     esac
     if [[ "$previous" == --broker-mode ]]; then mamba_broker="$argument"; fi
     previous="$argument"
   done
   if ! $mamba_help; then
+    case "$mamba_broker" in ""|serial|rtc) ;; *) echo 'Invalid Mamba broker mode' >&2; exit 2 ;; esac
+    if $mamba_paper; then mamba_rtc_flags+=(--enable-paper-rtc); fi
     if [[ "$mamba_broker" == rtc && ${#mamba_rtc_flags[@]} -eq 0 ]]; then
-      echo 'Mamba RTC requires --train-rtc or --train-paper-rtc' >&2; exit 2
+      mamba_rtc_flags+=(--enable-rtc)
+    fi
+    if [[ "$mamba_broker" != rtc && ${#mamba_rtc_flags[@]} -gt 0 ]]; then
+      echo 'Mamba RTC flags require --broker-mode rtc' >&2; exit 2
     fi
     interpreter="${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}"
     "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only "${mamba_rtc_flags[@]}" > /dev/null

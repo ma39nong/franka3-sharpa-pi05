@@ -13,7 +13,7 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES = {"serial": "普通串行", "rtc": "部署端梯度引导 Soft RTC", "paper-rtc": "Paper Soft RTC · 新时间轴归一化", "train-rtc": "Train RTC · 训练式硬前缀", "train-paper-rtc": "Train Paper RTC · 训练式硬前缀＋Paper", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
 
 
 def repository_info(path):
@@ -79,7 +79,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if architecture_files(root):
         if training_record or train_rtc_max_delay:
             raise ValueError("Mamba RTC evidence comes only from its bound architecture manifest")
-        from deploy.fr3_sharpa_runtime.mamba_contract import inspect_mamba
+        from deploy.fr3_sharpa_runtime.mamba_contract import inspect_mamba, supported_mamba_modes, is_full_t3
         verified = inspect_mamba(root, stats)
         detected = "delta" if verified["paper_algorithm"] else "absolute"
         if semantics not in ("auto", detected):
@@ -91,7 +91,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             "manifest_sha256": verified["checkpoint_manifest_sha256"], "stats_sha256": verified["normalization_sha256"],
             "profile": verified["model_profile"], "finetune_mode": "full", "semantics": detected,
             "normalization": verified["mamba_normalization"], "evidence": "已校验Mamba架构、统计和训练RTC字段",
-            "supported_modes": ["serial"] + (["train-paper-rtc" if verified["paper_algorithm"] else "train-rtc"] if trained else []),
+            "supported_modes": supported_mamba_modes(verified), "mamba_full_t3": is_full_t3(verified),
             "action_dim": 58, "action_horizon": 50, "action_hz": 30}
     values = json.loads(stats.read_text())["norm_stats"]
     entries = json.loads(metadata.read_text())["tree_metadata"]

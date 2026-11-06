@@ -11,7 +11,9 @@ from openpi.models import rtc
 from openpi.models import siglip
 from openpi.models.mamba3.action_expert import MambaActionExpert
 from openpi.models.mamba3.context_compressor import ContextCompressor
+from openpi.models.mamba3.soft_rtc import validate_soft_inputs
 from openpi.models.pi0 import Pi0
+from openpi.models.pi0 import _rtc_guided_velocity
 from openpi.models.pi0 import make_attn_mask
 
 
@@ -93,8 +95,27 @@ class MambaPi0(model_lib.BaseModel):
         loss = jnp.mean((v_t.astype(jnp.float32) - (epsilon - actions).astype(jnp.float32)) ** 2, axis=-1)
         return rtc.suffix_loss(loss, prefix_mask) if self.rtc_max_delay else loss
 
-    def sample_actions(self, rng, observation, *, num_steps=10, noise=None, prefix_actions=None, prefix_length=0):
-        """Sample with a static committed prefix in the CURRENT model action space."""
+    def sample_actions(
+        self,
+        rng,
+        observation,
+        *,
+        num_steps=10,
+        noise=None,
+        prefix_actions=None,
+        prefix_length=0,
+        rtc_actions=None,
+        rtc_weights=None,
+        rtc_max_guidance_weight=5.0,
+    ):
+        """Sample serial, deployment Soft RTC, or a trained static hard prefix."""
+        shape = (observation.state.shape[0], self.action_horizon, self.action_dim)
+        if rtc_actions is not None:
+            if self.rtc_max_delay or prefix_actions is not None or prefix_length:
+                raise ValueError("Mamba Soft RTC excludes trained RTC and hard-prefix inputs")
+            validate_soft_inputs(rtc_actions, rtc_weights, rtc_max_guidance_weight, shape)
+        elif rtc_weights is not None:
+            raise ValueError("rtc_weights requires rtc_actions")
         rtc.validate_prefix(
             prefix_actions,
             prefix_length,
@@ -118,7 +139,22 @@ class MambaPi0(model_lib.BaseModel):
             time = jnp.full((actions.shape[0],), 1.0 + i * dt)
             if prefix_length:
                 time = jnp.where(prefix_mask, 0.0, time[:, None])
-            updated = actions + dt * self.velocity(actions, time, condition)
+            if rtc_actions is None:
+                # Preserve the original graph and arithmetic when guidance is off.
+                velocity = self.velocity(actions, time, condition)
+            else:
+                # The shared reverse-flow helper needs scalar time; the expert
+                # independently receives (B,). Never broadcast (B,) over (B,H,D).
+                scalar_time = 1.0 + i * dt
+                velocity = _rtc_guided_velocity(
+                    lambda x: self.velocity(x, time, condition),
+                    actions,
+                    scalar_time,
+                    rtc_actions,
+                    rtc_weights,
+                    rtc_max_guidance_weight,
+                )
+            updated = actions + dt * velocity
             # Every velocity call starts a fresh SSM scan; no carry is reused
             # across ODE steps, whose noisy action inputs are different.
             return jnp.where(prefix_mask[..., None], prefix_actions, updated) if prefix_length else updated

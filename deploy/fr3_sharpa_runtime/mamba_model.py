@@ -11,6 +11,7 @@ from openpi.training.config import LeRobotFr3SharpaDataConfig
 from openpi.training.config import TrainConfig
 
 from .paper_model import PaperSharpaData
+from .paper_rtc import PaperRTCPolicy
 from .train_paper_rtc import TrainPaperRTCPolicy
 from .train_rtc import TrainRTCPolicy
 
@@ -36,15 +37,17 @@ def build_config(metadata, config):
 
 
 class MambaPolicy(Policy):
+    soft_rtc = False
+
     def infer(self, obs, *, noise=None, rtc_context=None):
         if noise is not None:
             noise = np.asarray(noise)
             if noise.shape not in ((50, 58), (1, 50, 58)) or not np.isfinite(noise).all():
                 raise ValueError("Mamba noise must be finite (50,58) or (1,50,58)")
-        if rtc_context is not None and not isinstance(self, TrainRTCPolicy):
-            raise ValueError("Mamba serial policy rejects RTC; use the trained hard-prefix policy")
+        if rtc_context is not None and not (self.soft_rtc or isinstance(self, TrainRTCPolicy)):
+            raise ValueError("Mamba serial policy rejects RTC; select an explicit Soft/Hard RTC policy")
         result = super().infer(obs, noise=noise, rtc_context=rtc_context)
-        if rtc_context is not None:
+        if rtc_context is not None and isinstance(self, TrainRTCPolicy):
             from openpi_client import rtc
 
             context = rtc.validate_context(rtc_context)
@@ -54,7 +57,42 @@ class MambaPolicy(Policy):
             result["actions"] = np.array(result["actions"], copy=True)
             delay = context.inference_delay_steps
             result["actions"][:delay] = context.previous_actions[:delay]
+        from .protocol import as_finite_action_chunk
+
+        result["actions"] = as_finite_action_chunk(result["actions"])
         return result
+
+
+class MambaSoftRTCPolicy(MambaPolicy):
+    soft_rtc = True
+    paper_soft_rtc = False
+
+    def __init__(self, model, **kwargs):
+        expected = "paper" if self.paper_soft_rtc else "ordinary_per_dimension"
+        if model.rtc_max_delay or model.config.normalization != expected:
+            raise ValueError("Mamba Soft RTC requires untrained RTC weights and the matching Plain/Paper policy")
+        raw = set(kwargs.get("sample_kwargs") or {})
+        if raw.intersection(
+            {"prefix_actions", "prefix_length", "rtc_actions", "rtc_weights", "rtc_max_guidance_weight"}
+        ):
+            raise ValueError("Mamba RTC inputs must come from the validated request context")
+        super().__init__(model, **kwargs)
+
+    def _rtc_sample_kwargs(self, context, target):
+        from openpi.models.mamba3.soft_rtc import validate_soft_inputs
+
+        values = super()._rtc_sample_kwargs(context, target)
+        validate_soft_inputs(
+            values["rtc_actions"],
+            values["rtc_weights"],
+            values["rtc_max_guidance_weight"],
+            (1, self._model.action_horizon, self._model.action_dim),
+        )
+        return values
+
+
+class MambaPaperSoftRTCPolicy(MambaSoftRTCPolicy, PaperRTCPolicy):
+    paper_soft_rtc = True
 
 
 class MambaTrainRTCPolicy(MambaPolicy, TrainRTCPolicy):

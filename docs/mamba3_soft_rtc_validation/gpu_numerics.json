@@ -1,0 +1,23 @@
+{
+  "soft_rtc_mamba_input_gradient": {
+    "finite_difference_relative_l2": 0.0020749825052917004,
+    "batch": 2,
+    "shape": [
+      2,
+      50,
+      58
+    ]
+  },
+  "soft_rtc_batch_1_0": {
+    "relative_l2": 0.0,
+    "max_abs": 0.0
+  },
+  "soft_rtc_batch_2_0": {
+    "relative_l2": 3.156555067107547e-06,
+    "max_abs": 5.459785461425781e-05
+  },
+  "soft_rtc_batch_2_1": {
+    "relative_l2": 4.998812528356211e-07,
+    "max_abs": 5.304813385009766e-06
+  }
+}

@@ -42,7 +42,7 @@ def test_mode_matrix_check_and_ui_plan(tmp_path, monkeypatch, capsys, paper, del
     assert data.use_quantile_norm == paper
     metadata = inspect_checkpoint(root)
     assert metadata["profile"] == name
-    assert metadata["supported_modes"] == ["serial"] + (["train-paper-rtc" if paper else "train-rtc"] if delay else [])
+    assert metadata["supported_modes"] == ["serial", ("train-paper-rtc" if paper else "train-rtc") if delay else ("paper-rtc" if paper else "rtc")]
     repository = Path(__file__).resolve().parents[3]
     plan = DeploymentSettings(str(repository), str(root)).plan()
     env = plan_environment(plan)
@@ -53,7 +53,7 @@ def test_mode_matrix_check_and_ui_plan(tmp_path, monkeypatch, capsys, paper, del
     flags = ["--enable-rtc", "--enable-paper-rtc", "--enable-train-rtc", "--enable-train-paper-rtc"]
     for flag in [None, *flags]:
         monkeypatch.setattr(sys, "argv", ["serve", "--check-only", *([flag] if flag else [])])
-        legal = flag is None or (delay and flag == ("--enable-train-paper-rtc" if paper else "--enable-train-rtc"))
+        legal = flag is None or flag == (("--enable-train-paper-rtc" if paper else "--enable-train-rtc") if delay else ("--enable-paper-rtc" if paper else "--enable-rtc"))
         if legal:
             serve.main()
             assert json.loads(capsys.readouterr().out)["model_profile"] == name
@@ -62,8 +62,12 @@ def test_mode_matrix_check_and_ui_plan(tmp_path, monkeypatch, capsys, paper, del
                 serve.main()
             capsys.readouterr()
     for mode in ("rtc", "paper-rtc", "soft-serial", "soft-async"):
-        with pytest.raises(ValueError):
-            DeploymentSettings(str(repository), str(root), mode=mode, speed="fast", steps=20).plan()
+        settings = DeploymentSettings(str(repository), str(root), mode=mode, speed="fast", steps=20)
+        if mode in metadata["supported_modes"]:
+            assert ("--enable-paper-rtc" if paper else "--enable-rtc") in settings.plan()["service"]
+        else:
+            with pytest.raises(ValueError):
+                settings.plan()
 
 
 @pytest.mark.parametrize("paper", [False, True])

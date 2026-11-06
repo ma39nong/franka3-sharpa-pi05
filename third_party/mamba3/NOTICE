@@ -62,3 +62,12 @@ Deployment port in franka3-sharpa-pi05 (2026-11-05):
  only its evidence output helper/imports are adapted for deployment.
  config_schema.json records the source dataclass field sets/defaults for the
  disk-only validator; it does not define a checkpoint's actual hyperparameters.
+
+Deployment-only Soft RTC increment (2026-11-05, after 35071da):
+ pi0_mamba.py adds optional rtc_* sampler arguments without altering model
+ initialization, loss, prior, parameter paths, shapes or dtypes. It directly
+ reuses deployment Pi0._rtc_guided_velocity with scalar reverse-flow time;
+ the Mamba expert independently receives per-batch model times. No new
+ carry, VJP approximation or parameter conversion is introduced.
+ mamba3/soft_rtc.py contains host/tracing input validation only.
+ Source training checkout and the original Transformer helper are unchanged.

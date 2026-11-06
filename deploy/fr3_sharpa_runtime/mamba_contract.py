@@ -308,3 +308,29 @@ def reconstruct_model(metadata, stats_path):
         cls = PaperMambaPi0Config
         values["paper_asset_dir"] = str(Path(stats_path).parent)
     return cls(**values)
+
+
+def supported_mamba_modes(metadata):
+    paper = bool(metadata["paper_algorithm"])
+    if metadata["train_rtc"]:
+        return ["serial", "train-paper-rtc" if paper else "train-rtc"]
+    return ["serial", "paper-rtc" if paper else "rtc"]
+
+
+def validate_mamba_mode(metadata, mode):
+    if mode not in supported_mamba_modes(metadata):
+        raise ValueError(
+            f"Mamba mode {mode!r} conflicts with verified RTC training/Paper semantics; "
+            f"select {', '.join(supported_mamba_modes(metadata))}"
+        )
+
+
+def is_full_t3(metadata):
+    algorithm, trained = metadata["paper_algorithm"], metadata["train_rtc"]
+    return bool(
+        algorithm
+        and trained
+        and trained["max_delay"] > 0
+        and algorithm["mode"] == "timestamp_zscore_arms"
+        and algorithm["beta"] > 0
+    )
