@@ -25,9 +25,9 @@ button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#173
 .muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
 .logs .card{padding:14px;display:flex;flex-direction:column}.logs h2{font-size:15px;margin-bottom:10px}.logs pre{height:clamp(180px,21vh,270px);max-height:none;background:#132b38;color:#d5e5ed;padding:12px;border-radius:6px;margin:0;overflow:auto}.logs .is-active{border-color:#7bb5b0;box-shadow:0 0 0 1px #7bb5b0}
-.camera-card{padding:14px}.camera-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.camera-heading h2{font-size:15px;margin:0}.camera-heading span{font-size:12px;color:#7c8e9c}.camera-placeholder{height:clamp(180px,21vh,270px);border:1px dashed #c4d0d9;border-radius:6px;background:#f7f9fb;display:flex;align-items:center;justify-content:center;color:#93a2af;font-size:13px}.page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
+.page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
 dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:350px;overflow:auto}#entries button{display:block;background:white;text-align:left;width:100%;border-bottom:1px solid #e5edf1}details{margin:11px 0}summary{cursor:pointer;font-weight:600}.preview{min-height:60px}
-@media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}.camera-placeholder{height:240px}header{padding:6px 18px}main{padding:14px}}
+@media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}header{padding:6px 18px}main{padding:14px}}
 @media(max-width:520px){.brand-logo{height:60px;width:220px}.card{padding:14px}.row{flex-wrap:wrap}.row>*{flex-basis:42%}}
 .task-stages{display:flex;gap:8px;flex-wrap:wrap}.task-stages .active{background:#087b75;color:white}.task-stages .pending{outline:2px solid #d69e36}.task-stages .passed{border-bottom:3px solid #7bb5b0}.task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}#taskPanel{margin-bottom:16px}#taskError{color:#b7352f}</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
 <main><section class="dashboard-row configuration" aria-label="部署配置与控制"><article class="card" id="weights-card"><h2>1 · 权重与代码</h2>
@@ -70,12 +70,7 @@ adjust: Right fingers reposition the truss on the right plate</pre></details><p 
 <article class="card" id="terminal-inference"><h2>终端二 · 推理日志</h2><pre id="log-inference" role="log" aria-label="推理日志">尚无推理日志</pre></article>
 <article class="card" id="terminal-execution"><h2>终端三 · 执行日志</h2><pre id="log-execution" role="log" aria-label="执行日志">尚无执行日志</pre></article>
 </section>
-<section class="dashboard-row cameras" aria-label="三路相机预留区域">
-<article class="card camera-card"><div class="camera-heading"><h2>头部相机 · cam0</h2><span>预留</span></div><div class="camera-placeholder">头部视频流预留位置</div></article>
-<article class="card camera-card"><div class="camera-heading"><h2>左腕相机 · cam2</h2><span>预留</span></div><div class="camera-placeholder">左腕视频流预留位置</div></article>
-<article class="card camera-card"><div class="camera-heading"><h2>右腕相机 · cam1</h2><span>预留</span></div><div class="camera-placeholder">右腕视频流预留位置</div></article>
-</section>
-<p class="page-note">三路相机区域暂未接入实时画面。打开页面不会连接设备；普通部署关闭页面不等于停止执行；番茄任务丢失页面心跳超过5秒会触发停止。请优先使用停止按钮。完整日志保存在归档目录。</p>
+<p class="page-note">打开页面不会连接设备；普通部署关闭页面不等于停止执行；番茄任务丢失页面心跳超过5秒会触发停止。请优先使用停止按钮。完整日志保存在归档目录。</p>
 </main>
 <dialog id="picker"><h2>选择工作机上的路径</h2><div class="path"><input id="browsePath"><button onclick="loadDirectory()">打开</button><button onclick="upDirectory()">上一级</button></div><div id="entries"></div><div class="actions"><button class="primary" id="chooseDirectory" onclick="choosePath(document.getElementById('browsePath').value)">选择此目录</button><button onclick="document.getElementById('picker').close()">取消</button></div></dialog>
 <script>
