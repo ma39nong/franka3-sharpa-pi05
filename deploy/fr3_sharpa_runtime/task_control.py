@@ -39,6 +39,7 @@ class TaskControl:
     def __init__(self, run_id=None, initial_stage="pickup_1", *, version=0, emit=None):
         stage(initial_stage)
         self.lock = threading.RLock()
+        self.wakeup = threading.Event()
         self.run_id = run_id or uuid.uuid4().hex
         self.emit = emit or (lambda **event: None)
         self.last_contact = time.monotonic()
@@ -111,7 +112,8 @@ class TaskControl:
     def ready(self):
         self.transition("READY", "startup checks passed; awaiting explicit start")
 
-    def command(self, command, request_id, *, expected_version, target=None, confirmed=False):
+    def command(self, command, request_id, *, expected_version, target=None, confirmed=False, client_clicked_unix_ms=None, http_received_monotonic_ns=None):
+        received_ns = time.monotonic_ns()
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise ValueError("有效 request_id 必填")
         fingerprint = hashlib.sha256(json.dumps([command, expected_version, target, confirmed]).encode()).hexdigest()
@@ -159,6 +161,10 @@ class TaskControl:
                     previous_stage=previous,
                     target_stage=target,
                     old_stage_version=old_version,
+                    ipc_received_monotonic_ns=received_ns,
+                    http_received_monotonic_ns=http_received_monotonic_ns,
+                    client_clicked_unix_ms=client_clicked_unix_ms,
+                    lock_wait_ms=(time.monotonic_ns() - received_ns) / 1e6,
                 )
                 if state in ("READY", "PAUSED"):
                     # No motion exists to hand over; changing the selected stage
@@ -193,6 +199,7 @@ class TaskControl:
                 self.transition("STOPPING", "operator " + command)
             else:
                 raise ValueError("未知任务命令")
+            self.wakeup.set()
             self.seen[request_id] = fingerprint
             if len(self.seen) > 4096:
                 self.seen.popitem(last=False)

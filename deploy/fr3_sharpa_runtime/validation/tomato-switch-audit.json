@@ -1,0 +1,401 @@
+{
+  "kind": "synthetic-coordinator-benchmark-NOT-hardware",
+  "baseline": "edeb45f",
+  "baseline_scope": "git TaskRTC + StageTimeline; common simulated backend/control",
+  "repeats": 3,
+  "source_sample_median_us": {
+    "before": 9.299376019043848,
+    "after": 1.7760930059012026
+  },
+  "rows": [
+    {
+      "case": "phase_10",
+      "parameters": {
+        "phase": 10
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.18056925782,
+        "median_policy_start_ms": 20.366760989418253,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.1959572387859,
+        "median_policy_start_ms": 20.93878498999402,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "phase_15",
+      "parameters": {
+        "phase": 15
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.2071992335841,
+        "median_policy_start_ms": 20.328481012256816,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.2203532627318,
+        "median_policy_start_ms": 21.015969978179783,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "phase_25",
+      "parameters": {
+        "phase": 25
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.2050942699425,
+        "median_policy_start_ms": 20.35033202264458,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.21764823631383,
+        "median_policy_start_ms": 21.07800598605536,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "phase_35",
+      "parameters": {
+        "phase": 35
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.22192626656033,
+        "median_policy_start_ms": 20.30483999988064,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 333.2123782602139,
+        "median_policy_start_ms": 21.15010202396661,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "phase_40",
+      "parameters": {
+        "phase": 40
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Task inference/observation deadline exceeded",
+          "Task inference/observation deadline exceeded",
+          "Task inference/observation deadline exceeded"
+        ]
+      },
+      "after": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "simulated policy timeout",
+          "simulated policy timeout",
+          "simulated policy timeout"
+        ]
+      }
+    },
+    {
+      "case": "phase_45",
+      "parameters": {
+        "phase": 45
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 0,
+        "reasons": [
+          "Insufficient old trajectory budget for an online switch",
+          "Insufficient old trajectory budget for an online switch",
+          "Insufficient old trajectory budget for an online switch"
+        ]
+      },
+      "after": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 0,
+        "reasons": [
+          "Insufficient old trajectory budget for an online switch",
+          "Insufficient old trajectory budget for an online switch",
+          "Insufficient old trajectory budget for an online switch"
+        ]
+      }
+    },
+    {
+      "case": "overlap",
+      "parameters": {
+        "phase": 25,
+        "old_ms": 120,
+        "observation_ms": 80
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 533.0270832055248,
+        "median_policy_start_ms": 212.44625799590722,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 432.90570823592134,
+        "median_policy_start_ms": 120.36060998798348,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "late_overlap",
+      "parameters": {
+        "phase": 35,
+        "old_ms": 100,
+        "observation_ms": 80
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Task inference/observation deadline exceeded",
+          "Task inference/observation deadline exceeded",
+          "Task inference/observation deadline exceeded"
+        ]
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 399.6212758938782,
+        "median_policy_start_ms": 100.32978298841044,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "stale_prefetch",
+      "parameters": {
+        "phase": 25,
+        "old_ms": 220,
+        "observation_ms": 20
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 566.3122875266708,
+        "median_policy_start_ms": 253.27875700895675,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 566.2778225378133,
+        "median_policy_start_ms": 241.07724498026073,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "slow_images",
+      "parameters": {
+        "phase": 15,
+        "observation_ms": 150
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 466.5257845481392,
+        "median_policy_start_ms": 150.92672500759363,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 466.53363955556415,
+        "median_policy_start_ms": 150.7760729873553,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "slow_policy",
+      "parameters": {
+        "phase": 15,
+        "infer_ms": 250
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Fresh first chunk expired during inference; execution blocked",
+          "Fresh first chunk expired during inference; execution blocked",
+          "Fresh first chunk expired during inference; execution blocked"
+        ]
+      },
+      "after": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "simulated policy timeout",
+          "simulated policy timeout",
+          "simulated policy timeout"
+        ]
+      }
+    },
+    {
+      "case": "old_policy_timeout",
+      "parameters": {
+        "phase": 15,
+        "old_ms": 900
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Online switch inference budget exhausted; safe stop required",
+          "Online switch inference budget exhausted; safe stop required",
+          "Online switch inference budget exhausted; safe stop required"
+        ]
+      },
+      "after": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Online switch inference budget exhausted; safe stop required",
+          "Online switch inference budget exhausted; safe stop required",
+          "Online switch inference budget exhausted; safe stop required"
+        ]
+      }
+    },
+    {
+      "case": "rapid",
+      "parameters": {
+        "phase": 15,
+        "old_ms": 100,
+        "observation_ms": 40,
+        "rapid": true
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 466.2532065412961,
+        "median_policy_start_ms": 152.20203102217056,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 399.62812792509794,
+        "median_policy_start_ms": 100.31713198986836,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    },
+    {
+      "case": "large_difference",
+      "parameters": {
+        "phase": 15,
+        "offset": 0.5
+      },
+      "before": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Online handover exceeds live FR3 gateway per-tick speed",
+          "Online handover exceeds live FR3 gateway per-tick speed",
+          "Online handover exceeds live FR3 gateway per-tick speed"
+        ]
+      },
+      "after": {
+        "passed": 0,
+        "total": 3,
+        "median_applied_ms": null,
+        "median_policy_start_ms": null,
+        "max_concurrent_policy": 1,
+        "reasons": [
+          "Online handover exceeds live FR3 gateway per-tick speed",
+          "Online handover exceeds live FR3 gateway per-tick speed",
+          "Online handover exceeds live FR3 gateway per-tick speed"
+        ]
+      }
+    },
+    {
+      "case": "late_fast",
+      "parameters": {
+        "phase": 40,
+        "observation_ms": 1,
+        "infer_ms": 5
+      },
+      "before": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 266.5591365948785,
+        "median_policy_start_ms": 1.2811130145564675,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      },
+      "after": {
+        "passed": 3,
+        "total": 3,
+        "median_applied_ms": 266.57980459276587,
+        "median_policy_start_ms": 1.575211004819721,
+        "max_concurrent_policy": 1,
+        "reasons": []
+      }
+    }
+  ]
+}

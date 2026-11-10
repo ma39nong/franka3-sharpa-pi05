@@ -2,6 +2,8 @@
 
 本分支是 `tomato-subtasks-manual-deploy`，从 `train-rtc/e060393` 开发。训练仓库只读。
 
+本次性能审计、精确调用时间线、相位预算、前后对比和实机待测指标见 [在线切换审计](ONLINE_SWITCH_AUDIT.md)。跨阶段现在保留分数phase进行精确时间补偿；普通RTC整数跳步保持原实现。
+
 ## 交付范围与安全限制
 
 任务状态机、当前部署 UI、控制器、Unix Socket、推理和 RTC 执行端已经接线；离线模拟覆盖七阶段完整任务。真实 checkpoint 的四种 Prompt 和普通 RTC 已用 GPU 假观测运行，未启动机器人、SDK 或 ROS 硬件。

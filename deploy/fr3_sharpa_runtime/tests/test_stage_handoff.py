@@ -50,7 +50,7 @@ def test_bridge_both_boundaries_and_clock_do_not_restart():
     assert t.status(1.56 + BRIDGE_STEPS * DT)["applied_token"] == b["token"]
     assert t.switch is None and t.bridge is None
     assert t.phase(1.56 + BRIDGE_STEPS * DT) == pytest.approx(result["skipped"] + BRIDGE_STEPS)
-    np.testing.assert_allclose(commands[-1], actions(0.002)[result["skipped"] + BRIDGE_STEPS], atol=1e-8)
+    np.testing.assert_allclose(commands[-1], t.sample_phase(result["skipped"] + BRIDGE_STEPS), atol=1e-8)
     for a, c in zip(commands, commands[1:]):
         validate_command_step(a, c, 0.7)
     assert not np.allclose(commands[1], actions(0.002)[0])

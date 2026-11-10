@@ -285,6 +285,7 @@ def engine(tmp_path):
     c.ready()
     yield e, c, runtime, backend, observations, events
     e.pool.shutdown(wait=True, cancel_futures=True)
+    e.observation_pool.shutdown(wait=True, cancel_futures=True)
 
 
 def until(e, predicate):
@@ -342,6 +343,7 @@ def test_late_future_never_installs_after_invalidating_command(engine, op):
     e, c, r, b, obs, events = engine
     start_engine(engine)
     pending = Future()
+    pending.set_running_or_notify_cancel()  # Simulate an already running GPU call.
     ticket = c.ticket()
     e.future = pending
     e.ticket = ticket
@@ -352,7 +354,7 @@ def test_late_future_never_installs_after_invalidating_command(engine, op):
     pending.set_exception(RuntimeError("old GPU error should be discarded"))
     e.tick()
     assert not any(isinstance(x, tuple) and x[0] == "install" for x in b.calls)
-    assert events[-1]["event"] == "inference_discarded"
+    assert any(x["event"] == "inference_discarded" for x in events)
     if op == "pause":
         command(c, "resume", confirmed=True)
     until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")

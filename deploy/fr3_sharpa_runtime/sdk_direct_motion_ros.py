@@ -195,6 +195,7 @@ def main() -> None:
                     publish_frame(command)
                     stream_last_command = command.copy()
                     if args.online_task_handoff and stream.applied_token != previous_handoff_token:
+                        stream.applied_monotonic_s = time.monotonic()
                         stream_event("handoff_applied", token=stream.applied_token,
                                      generation=stream.generation, phase=stream.phase(now))
                     stream_event("frame", generation=stream.generation, phase=stream.phase(now),
@@ -282,14 +283,15 @@ def main() -> None:
                 current = fresh_feedback()
                 now = time.monotonic()
                 from .preflight import execute_preflight
-                from .stage_handoff import DT
-                # Validate the time-aligned new first target against live joints.
-                index = min(49, int(np.ceil((max(now, stream_tick) - request["ticket"]["captured_monotonic_s"]) / DT)))
-                execute_preflight(target_chunk(actions[index]), current,
+                from .stage_handoff import aligned_candidate
+                # The same fractional phase is used for preflight and execution.
+                candidate = aligned_candidate(actions, request["ticket"]["captured_monotonic_s"],
+                                              max(now, stream_tick), stream.task_epoch)
+                preflight = execute_preflight(target_chunk(candidate.sample(max(now, stream_tick))), current,
                     now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns())
                 result = stream.prepare_handoff(actions, request["ticket"], now, stream_tick,
                                                  stream_last_command, gateway_speed, validate_action_ranges)
-                stream_event("handoff_armed", **result, clipping=clipping_report)
+                stream_event("handoff_armed", **result, clipping=clipping_report, preflight=preflight)
                 print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_install":
                 if stream is None:

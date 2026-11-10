@@ -80,9 +80,24 @@ class SharpaRuntime:
             self._require_rtc(metadata)
         return metadata
 
-    def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120):
+    def infer_task_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120):
+        """Task-only total budget; mature ordinary RTC transport is unchanged."""
+        return self.infer_chunk(observation, rtc_context=rtc_context, response_timeout=response_timeout,
+                                total_timeout_s=response_timeout)
+
+    def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120, total_timeout_s=None):
         config.require_checkpoint()
         entered_ns = time.monotonic_ns()
+        deadline_ns = entered_ns + int(total_timeout_s * 1e9) if total_timeout_s is not None else None
+
+        def remaining(cap):
+            if deadline_ns is None:
+                return cap
+            left = (deadline_ns - time.monotonic_ns()) / 1e9
+            if left <= 0:
+                raise TimeoutError("Task policy total transport deadline exceeded")
+            return min(cap, left)
+
         # Import here so the pure adapter remains importable in Pixi ROS2.
         from openpi_client import msgpack_numpy
         from websockets.sync.client import connect
@@ -94,8 +109,9 @@ class SharpaRuntime:
         clean = validate_observation(observation)
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
-        with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=5) as ws:
-            metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
+        with connect(self.policy_url, compression=None, max_size=None, open_timeout=remaining(10),
+                     close_timeout=min(0.05, remaining(5)) if deadline_ns is not None else 5) as ws:
+            metadata = msgpack_numpy.unpackb(ws.recv(timeout=remaining(10)))
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
             validation_start = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
@@ -115,8 +131,9 @@ class SharpaRuntime:
             timing["policy_request_send_monotonic_ns"] = time.monotonic_ns()
             ws.send(payload)
             timing["policy_request_sent_monotonic_ns"] = time.monotonic_ns()
-            response = ws.recv(timeout=response_timeout)
+            response = ws.recv(timeout=remaining(response_timeout))
             timing["response_receive_monotonic_ns"] = time.monotonic_ns()
+        remaining(response_timeout)  # Closing/decoding cannot make a late task result valid.
         if isinstance(response, str):
             raise RuntimeError(f"Policy server error: {response}")
         start = time.monotonic_ns()
@@ -140,5 +157,6 @@ class SharpaRuntime:
         )
         timing["action_adapter_ms"] = (time.monotonic_ns()-start)/1e6
         timing["action_adapter_end_monotonic_ns"] = time.monotonic_ns()
+        remaining(response_timeout)
         self.last_timing = timing
         return metadata, actions, chunk

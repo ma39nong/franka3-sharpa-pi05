@@ -18,6 +18,27 @@ BRIDGE_STEPS = 6
 DT = 1 / 30
 
 
+def aligned_candidate(actions, captured, start, epoch):
+    """Fractional phase preserves sensor-time alignment without rounding ahead."""
+    candidate = RTCTimeline(as_finite_action_chunk(actions), start, 1.0, task_epoch=epoch)
+    candidate.skipped = max(0.0, start - captured) * candidate.node_hz
+    return candidate
+
+
+def trajectory_metrics(commands):
+    """Command-space diagnostics only: no invented acceleration/jerk limits."""
+    commands = np.asarray(commands)
+    groups = {"left_arm": slice(0, 7), "left_hand": slice(7, 29),
+              "right_arm": slice(29, 36), "right_hand": slice(36, 58)}
+    result = {}
+    for name, part in groups.items():
+        result[name] = {}
+        for order, label in ((1, "velocity_rad_s"), (2, "acceleration_rad_s2"), (3, "jerk_rad_s3")):
+            delta = np.diff(commands[:, part], n=order, axis=0) / DT**order
+            result[name][label] = float(np.max(np.abs(delta))) if delta.size else 0.0
+    return result
+
+
 class BlendCurve:
     """Pure time sampling, also used to supersede an already armed bridge."""
 
@@ -79,6 +100,7 @@ class StageTimeline(RTCTimeline):
         )
         if deadline - now <= (BRIDGE_STEPS + 2) * DT:
             raise TimeoutError("Insufficient old trajectory budget for an online switch")
+        self.source = self.source_curve()  # Freeze/copy/hash once, not on each 30Hz tick.
         self.pending = None
         self.generation += 1
         self.task_epoch = epoch
@@ -125,6 +147,7 @@ class StageTimeline(RTCTimeline):
             "task_epoch": self.task_epoch,
             "handoff": ({**self.switch, "state": "bridging" if self.bridge else "waiting"} if self.switch else None),
             "applied_token": self.applied_token,
+            "applied_monotonic_s": getattr(self, "applied_monotonic_s", None),
         }
 
     def prepare_handoff(self, actions, ticket, now, next_tick, last_command, arm_speed, validate):
@@ -143,8 +166,7 @@ class StageTimeline(RTCTimeline):
         end = start + BRIDGE_STEPS * DT
         if end + DT >= expected["deadline"]:
             raise TimeoutError("New stage arrived too late for the bounded bridge")
-        candidate = RTCTimeline(as_finite_action_chunk(actions), start, 1.0, task_epoch=self.task_epoch)
-        candidate.skipped = math.ceil(max(0.0, start - captured) * self.node_hz - 1e-9)
+        candidate = aligned_candidate(actions, captured, start, self.task_epoch)
         commands = [np.asarray(last_command)]
         for i in range(BRIDGE_STEPS + 1):
             t = start + i * DT
@@ -152,7 +174,7 @@ class StageTimeline(RTCTimeline):
             weight = alpha**3 * (10 - 15 * alpha + 6 * alpha**2)
             commands.append((1 - weight) * self.source_curve().sample(t) + weight * candidate.sample(t))
         # Also validate candidate continuation and the bridge's exit boundary.
-        for i in range(BRIDGE_STEPS + 1, 50 - candidate.skipped):
+        for i in range(BRIDGE_STEPS + 1, math.ceil(50 - candidate.skipped)):
             commands.append(candidate.sample(start + i * DT))
         for previous, command in zip(commands, commands[1:]):
             validate_command_step(previous, command, arm_speed)
@@ -170,7 +192,11 @@ class StageTimeline(RTCTimeline):
             token=expected["token"],
             generation=self.generation,
             skipped=candidate.skipped,
+            bridge_start=start,
             bridge_end=end,
+            observation_age_s=now - captured,
+            alignment_rounding_s=0.0,
+            trajectory_metrics=trajectory_metrics(commands),
         )
 
     def snapshot(self, *args, **kwargs):

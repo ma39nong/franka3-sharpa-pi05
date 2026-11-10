@@ -120,20 +120,7 @@ class DeploymentController:
             state["execution_running"] = bool(state.get("running") and self.operation == "execute")
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
-            endpoint, run_id = self.task_endpoint, self.task_run_id
-            task_last = self.task_last
-        if endpoint and endpoint.exists():
-            try:
-                from deploy.fr3_sharpa_runtime.task_control import task_rpc
-                # UI polling renews the execution-side five-second lease. No
-                # browser polling means no silent indefinite robot execution.
-                task_last = task_rpc(endpoint, run_id)
-                self.task_last = task_last
-            except (OSError, RuntimeError, ValueError) as error:
-                task_last = {**(task_last or {}), "communication_error": str(error), "safe_to_resume": False}
-        elif task_last and state["execution_running"]:
-            task_last = {**task_last, "communication_error": "执行端任务通信未连接", "safe_to_resume": False}
-        state["task"] = task_last
+        state["task"] = self.task_status()
         # Keep detailed files on disk; UI always has the same three terminal panes.
         groups = {
             "hardware": [(execution_directory, "hardware.log"), (execution_directory, "hardware_cleanup.log")],
@@ -162,13 +149,32 @@ class DeploymentController:
                     state[name] = json.loads((directory / name).read_text())
         return state
 
+    def task_status(self):
+        """Small UI/lease poll without reading logs, exports or process state."""
+        with self.lock:
+            endpoint, run_id, task_last = self.task_endpoint, self.task_run_id, self.task_last
+            executing = self.state.get("running") and self.operation == "execute"
+        if endpoint and endpoint.exists():
+            try:
+                from deploy.fr3_sharpa_runtime.task_control import task_rpc
+                # UI polling renews the execution-side five-second lease. No
+                # browser polling means no silent indefinite robot execution.
+                task_last = task_rpc(endpoint, run_id)
+                self.task_last = task_last
+            except (OSError, RuntimeError, ValueError) as error:
+                task_last = {**(task_last or {}), "communication_error": str(error), "safe_to_resume": False}
+        elif task_last and executing:
+            task_last = {**task_last, "communication_error": "执行端任务通信未连接", "safe_to_resume": False}
+        return task_last
+
     def task_command(self, values):
         from deploy.fr3_sharpa_runtime.task_control import task_rpc
         if not self.task_endpoint or not self.state.get("running") or self.operation != "execute":
             raise ValueError("没有运行中的番茄任务；请先核对并启动任务执行端")
         # A separate socket per request; task stop never queues behind another
         # controller command. The execution owner serializes actual authority.
-        result = task_rpc(self.task_endpoint, self.task_run_id, **values)
+        result = task_rpc(self.task_endpoint, self.task_run_id,
+                          **{**values, "http_received_monotonic_ns": time.monotonic_ns()})
         self.task_last = result
         return result
 

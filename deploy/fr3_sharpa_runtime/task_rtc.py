@@ -41,6 +41,9 @@ class TaskRTC:
         )
         self.delays = self.settings.history()
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="task-policy")
+        self.observation_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="task-observation")
+        self.acquisition = self.acquisition_ticket = None
+        self.policy_duration = 0.08
         self.future = self.ticket = None
         self.streaming = False
         self.context = None
@@ -50,21 +53,43 @@ class TaskRTC:
         self.switch_version = None
         self.bridge_ticket = None
         self.bridge_installation = None
+        self.awaiting_rtc_resume = False
 
     def record(self, event, **fields):
         self.control.event(event, **fields)
 
-    def predict(self, ticket, context, timeout, observation=None):
-        started = self.clock()
+    def capture(self, ticket, timeout):
+        self.record("observation_start", inference_request_id=ticket["request_id"],
+                    request_stage_version=ticket["stage_version"])
 
         def check():
-            if not self.control.valid(ticket):
-                raise RuntimeError("superseded before observation completed")
+            # Supersession is not a sensor fault. Throwing from on_poll kills
+            # the persistent ROS observation process; drain its bounded reply.
+            state = self.control.snapshot()["execution_state"]
+            if state in ("PAUSING", "STOPPING", "FAULT", "STOPPED", "COMPLETED"):
+                raise InterruptedError("observation interrupted by stop/pause/fault")
 
+        observation = self.observe(timeout_s=min(timeout, 2.0), on_poll=check)
+        self.record("observation_complete", inference_request_id=ticket["request_id"],
+                    request_stage_version=ticket["stage_version"],
+                    captured_monotonic_ns=observation["_captured_monotonic_ns"],
+                    observation_timing=observation.get("_timing", {}),
+                    alignment=observation.get("_alignment", {}),
+                    topic_stamp_ns=observation.get("_topic_stamp_ns", {}))
+        return observation
+
+    def begin_acquisition(self, timeout):
+        self.acquisition_ticket = self.control.ticket()
+        self.acquisition = self.observation_pool.submit(self.capture, self.acquisition_ticket, timeout)
+        self.acquisition.add_done_callback(lambda _: self.control.wakeup.set())
+
+    def predict(self, ticket, context, timeout, observation=None):
+        started = self.clock()
         if observation is None:
-            observation = self.observe(timeout_s=min(timeout, 2.0), on_poll=check)
+            observation = self.capture(ticket, timeout)
+        if not self.control.valid(ticket):
+            raise InterruptedError("superseded after observation; no policy request sent")
         observation = dict(observation, prompt=ticket["prompt"])
-        check()
         age = time.monotonic_ns() - observation["_captured_monotonic_ns"]
         if not 0 <= age <= 200_000_000:
             raise ValueError("Task observation stale before inference")
@@ -79,8 +104,15 @@ class TaskRTC:
             rtc_guidance=context is not None,
             prefix_length=len(context["previous_actions"]) if context else 0,
         )
+        remaining = timeout - (self.clock() - started)
+        if context is None:
+            remaining = min(remaining, (200_000_000 - age) / 1e9)
+        if remaining <= 0:
+            raise TimeoutError("Observation consumed inference/freshness budget")
+        policy_started = self.clock()
         try:
-            result = self.runtime.infer_chunk(observation, rtc_context=context, response_timeout=timeout)
+            infer = getattr(self.runtime, "infer_task_chunk", self.runtime.infer_chunk)
+            result = infer(observation, rtc_context=context, response_timeout=remaining)
         except Exception as error:
             self.record(
                 "inference_failed",
@@ -88,26 +120,36 @@ class TaskRTC:
                 request_stage_version=ticket["stage_version"],
                 reason=str(error),
                 duration_s=self.clock() - started,
+                policy_timing=getattr(self.runtime, "last_timing", {}),
+                observation_age_ms=(time.monotonic_ns() - observation["_captured_monotonic_ns"]) / 1e6,
             )
             raise
+        self.policy_duration = self.clock() - policy_started
         actions = as_finite_action_chunk(result[1])
         if context is None and not 0 <= time.monotonic_ns() - observation["_captured_monotonic_ns"] <= 200_000_000:
+            self.record("inference_expired", inference_request_id=ticket["request_id"],
+                        request_stage_version=ticket["stage_version"],
+                        policy_timing=getattr(self.runtime, "last_timing", {}))
             raise TimeoutError("Fresh first chunk expired during inference; execution blocked")
         self.record(
             "inference_complete",
             inference_request_id=ticket["request_id"],
             request_stage_version=ticket["stage_version"],
             duration_s=self.clock() - started,
+            policy_duration_s=self.policy_duration,
+            policy_timing=getattr(self.runtime, "last_timing", {}),
+            observation_age_ms=(time.monotonic_ns() - observation["_captured_monotonic_ns"]) / 1e6,
             actions=actions.tolist(),
         )
         return result[0], actions, self.runtime.last_receipt, observation["_captured_monotonic_ns"] / 1e9
 
-    def submit(self, context=None, timeout=5.0):
-        self.ticket = self.control.ticket()
+    def submit(self, context=None, timeout=5.0, *, ticket=None, observation=None):
+        self.ticket = ticket or self.control.ticket()
         self.context = context
         self.first_deadline = self.clock() + timeout + 2.0
         self.control.data["inference_status"] = "guided_prediction" if context else "fresh_first_prediction"
-        self.future = self.pool.submit(self.predict, self.ticket, context, timeout)
+        self.future = self.pool.submit(self.predict, self.ticket, context, timeout, observation)
+        self.future.add_done_callback(lambda _: self.control.wakeup.set())
 
     def stop_boundary(self):
         # close() interrupts motion and waits for disable/readback. Never equate
@@ -159,6 +201,10 @@ class TaskRTC:
                     )
                     self.switch_version = c.data["stage_version"]
                     self.bridge_ticket = None
+                    if self.future is not None:
+                        cancelled = self.future.cancel()  # Only queued jobs can cancel; no GPU preemption.
+                        self.record("switch_policy_wait", cancelled_before_start=cancelled,
+                                    old_inference_request_id=self.ticket["request_id"])
                     self.context = None
                     self.delays = self.settings.history()
                     c.data["request_status"] = "switching"
@@ -180,6 +226,7 @@ class TaskRTC:
                                     raise ValueError("Online handover acknowledgement epoch/generation mismatch")
                                 c.activate(self.bridge_ticket, f"{self.switch_version}:{status['generation']}")
                                 self.chunk_count += 1
+                                self.awaiting_rtc_resume = True
                                 self.record(
                                     "online_switch_applied",
                                     token=self.boundary["token"],
@@ -190,6 +237,11 @@ class TaskRTC:
                                 self.boundary = self.bridge_ticket = None
                         return True
                     return True
+        # Drain completed stale jobs and schedule the new one in this same tick.
+        if self.future is not None and self.future.done() and not c.valid(self.ticket):
+            self.record("inference_discarded", inference_request_id=self.ticket["request_id"],
+                        request_stage_version=self.ticket["stage_version"], reason="stage/state invalidated")
+            self.future = None
         # An old running GPU call may finish later. Always reap before reusing
         # the sole inference slot, discard errors as well as outputs if stale.
         if self.future is not None and self.future.done():
@@ -254,9 +306,36 @@ class TaskRTC:
                     raise TimeoutError("Online switch inference budget exhausted; safe stop required")
             else:
                 budget = 5.0
-            if self.future is None:
-                self.submit(timeout=budget)  # Fresh observation; no cross-stage RTC prefix.
-                self.first_deadline = self.clock() + budget
+            if self.future is not None and c.valid(self.ticket):
+                return True  # This is already the new-stage policy request.
+            # Camera acquisition can overlap the obsolete GPU call. There is
+            # still exactly ONE policy worker and ONE serialized sensor client.
+            if self.acquisition is not None and self.acquisition.done():
+                if not c.valid(self.acquisition_ticket):
+                    self.record("observation_discarded", reason="superseded",
+                                inference_request_id=self.acquisition_ticket["request_id"])
+                    self.acquisition = None
+                elif self.future is None:
+                    observation = self.acquisition.result()
+                    age = (time.monotonic_ns() - observation["_captured_monotonic_ns"]) / 1e9
+                    # A scheduling estimate only. Hard 200ms gates still run
+                    # before inference, after inference AND in the worker.
+                    age_budget = 0.2 - min(self.policy_duration, 0.15) - 0.02
+                    if not 0 <= age <= age_budget:
+                        self.record("observation_discarded", reason="refresh before policy slot", age_s=age)
+                        self.acquisition = None
+                    else:
+                        ticket = self.acquisition_ticket
+                        self.acquisition = None
+                        with c.installation(ticket) as valid:
+                            if valid:
+                                self.submit(timeout=budget, ticket=ticket, observation=observation)
+                                self.first_deadline = self.clock() + budget
+                        return True
+            if self.acquisition is None:
+                with c.lock:
+                    if c.data["execution_state"] == "SWITCHING":
+                        self.begin_acquisition(budget)
             return True
         if state == "RESUMING" and self.future is None:
             self.backend.reauthorize()
@@ -281,14 +360,18 @@ class TaskRTC:
                 def check_motion():
                     self.backend.status()
                     current_task = c.snapshot()
-                    if (
-                        current_task["stage_version"] != observed_version
-                        or current_task["execution_state"] != "RUNNING"
-                    ):
-                        raise InterruptedError("stage request during observation")
+                    if current_task["execution_state"] in ("PAUSING", "STOPPING", "FAULT"):
+                        raise InterruptedError("stop/pause/fault during observation")
+                    # Drain a superseded snapshot; don't terminate the sensor
+                    # process by raising from ObservationWorker.on_poll.
 
                 try:
+                    self.record("ordinary_observation_start", observed_version=observed_version)
                     observation = self.observe(timeout_s=budget, on_poll=check_motion)
+                    self.record("ordinary_observation_complete", observed_version=observed_version,
+                                captured_monotonic_ns=observation["_captured_monotonic_ns"],
+                                observation_timing=observation.get("_timing", {}),
+                                alignment=observation.get("_alignment", {}))
                     check_motion()
                 except InterruptedError:
                     return True
@@ -298,6 +381,10 @@ class TaskRTC:
                     context = self.backend.snapshot(self.settings, max(self.delays))
                     # Bind observation, prompt, epoch and RTC snapshot atomically.
                     self.submit_observed(observation, context)
+                    if self.awaiting_rtc_resume:
+                        self.record("ordinary_rtc_resumed", inference_request_id=self.ticket["request_id"],
+                                    phase=status["phase"])
+                        self.awaiting_rtc_resume = False
         return True
 
     def submit_observed(self, observation, context):
@@ -310,12 +397,16 @@ class TaskRTC:
         self.future = self.pool.submit(
             self.predict, ticket, context, max(0.01, context["prefix_attention_horizon"] / 30), observation
         )
+        self.future.add_done_callback(lambda _: self.control.wakeup.set())
 
     def run(self):
         try:
             self.control.ready()
-            while self.tick():
-                time.sleep(0.01)
+            while True:
+                self.control.wakeup.clear()
+                if not self.tick():
+                    break
+                self.control.wakeup.wait(0.01)
         except KeyboardInterrupt:
             with self.control.lock:
                 self.control.data.update(stage_version=self.control.data["stage_version"] + 1, safe_to_resume=False)
@@ -348,6 +439,7 @@ class TaskRTC:
             except Exception as error:
                 self.control.fault(error)
             self.pool.shutdown(wait=False, cancel_futures=True)
+            self.observation_pool.shutdown(wait=False, cancel_futures=True)
             report = {
                 "status": self.control.snapshot(),
                 "settings": asdict(self.settings),
