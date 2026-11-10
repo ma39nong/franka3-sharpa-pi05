@@ -19,6 +19,7 @@ from deploy.fr3_sharpa_runtime.task_stages import ACTION_PROMPTS, PHASES, STAGES
 from deploy.fr3_sharpa_runtime.task_control import TaskControl, TaskServer, task_rpc
 from deploy.fr3_sharpa_runtime.task_rtc import TaskRTC, SDKTaskBackend, safe_stop_proof
 from deploy.fr3_sharpa_runtime.rtc_stream import RTCTimeline
+from deploy.fr3_sharpa_runtime.stage_handoff import StageTimeline, DT
 
 
 def command(c, op, **fields):
@@ -79,14 +80,16 @@ def test_invalid_jump_or_rollback_rejected(target):
 def test_same_prompt_recovery_and_rapid_clicks_never_merge_progress():
     c = TaskControl()
     ticket = running(c)
+    command(c, "pause")
+    c.transition("PAUSED", "simulated verified pause")
     command(c, "recover", target="pickup_2", confirmed=True)
-    assert c.snapshot()["stage_version"] == 1 and not c.valid(ticket)
+    assert c.snapshot()["stage_version"] == 2 and not c.valid(ticket)
     assert STAGES[4].prompt == ticket["prompt"]
     command(c, "next")
     command(c, "next")
     assert c.snapshot()["requested_stage"] == "return_stem"
     assert c.snapshot()["active_stage"] == "pickup_1"
-    assert c.snapshot()["stage_version"] == 3
+    assert c.snapshot()["stage_version"] == 4
 
 
 def test_complete_requires_actual_final_stage_and_explicit_operator():
@@ -180,11 +183,35 @@ class FakeBackend:
     def start(self, actions, ticket, path):
         self.calls.append(("start", ticket.copy()))
         self.epoch = ticket["stage_version"]
-        self.plan = RTCTimeline(actions, time.monotonic(), 1, task_epoch=self.epoch)
+        self.plan = StageTimeline(actions, time.monotonic(), 1, task_epoch=self.epoch)
+        self.next_tick = time.monotonic()
+        self.last_command = actions[0].copy()
+        self.frames = []
         return self.plan.status(time.monotonic())
 
     def status(self):
-        return self.plan.status(time.monotonic())
+        now = time.monotonic()
+        while self.next_tick <= now:
+            self.last_command = self.plan.sample(self.next_tick)
+            self.frames.append((self.next_tick, self.last_command.copy()))
+            self.next_tick += DT
+        return self.plan.status(now)
+
+    def begin_switch(self, epoch, request_id):
+        self.calls.append(("switch", epoch))
+        return self.plan.begin_switch(epoch, request_id, time.monotonic())
+
+    def handoff(self, actions, boundary, captured):
+        self.calls.append(("handoff", boundary.copy()))
+        return self.plan.prepare_handoff(
+            actions,
+            {**boundary, "captured_monotonic_s": captured},
+            time.monotonic(),
+            self.next_tick,
+            self.last_command,
+            0.7,
+            lambda a: None,
+        )
 
     def snapshot(self, settings, delay):
         return self.plan.snapshot(
@@ -281,14 +308,15 @@ def test_full_seven_stage_simulation_fresh_boundaries_and_no_auto_progress(engin
         old_count = len(obs)
         command(c, "next")
         e.tick()
-        assert c.snapshot()["execution_state"] == "PAUSED"
+        assert c.snapshot()["execution_state"] == "SWITCHING"
         assert c.snapshot()["active_stage"] != expected
-        command(c, "resume", confirmed=True)
         until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
         assert c.snapshot()["active_stage"] == expected
         assert len(obs) > old_count and r.calls[-1][1] is None
         assert r.calls[-1][0]["prompt"] == STAGES[PHASES.index(expected)].prompt
     assert c.snapshot()["execution_state"] == "RUNNING"
+    assert sum(isinstance(x, tuple) and x[0] == "start" for x in b.calls) == 1
+    assert "stop" not in b.calls
     command(c, "complete")
     assert e.tick() is False
     assert c.snapshot()["execution_state"] == "COMPLETED"
@@ -309,7 +337,7 @@ def test_same_stage_rtc_real_protocol_delay_and_delta_reference(engine):
     assert c.snapshot()["chunk_progress"]["phase"] >= 15
 
 
-@pytest.mark.parametrize("op", ["pause", "next", "recover"])
+@pytest.mark.parametrize("op", ["pause", "next", "stage"])
 def test_late_future_never_installs_after_invalidating_command(engine, op):
     e, c, r, b, obs, events = engine
     start_engine(engine)
@@ -318,14 +346,15 @@ def test_late_future_never_installs_after_invalidating_command(engine, op):
     e.future = pending
     e.ticket = ticket
     e.first_deadline = time.monotonic() + 5
-    command(c, op, **({"target": "pickup_2", "confirmed": True} if op == "recover" else {}))
+    command(c, op, **({"target": "harvest_1"} if op == "stage" else {}))
     e.tick()
-    assert c.snapshot()["execution_state"] == "PAUSED"
+    assert c.snapshot()["execution_state"] == ("PAUSED" if op == "pause" else "SWITCHING")
     pending.set_exception(RuntimeError("old GPU error should be discarded"))
     e.tick()
     assert not any(isinstance(x, tuple) and x[0] == "install" for x in b.calls)
     assert events[-1]["event"] == "inference_discarded"
-    command(c, "resume", confirmed=True)
+    if op == "pause":
+        command(c, "resume", confirmed=True)
     until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
     assert r.calls[-1][1] is None
 
@@ -508,7 +537,7 @@ def test_stop_can_register_during_slow_disable_confirmation(engine):
         return original()
 
     b.stop = slow_stop
-    command(c, "next")
+    command(c, "pause")
     result = []
     thread = threading.Thread(target=lambda: result.append(e.tick()))
     thread.start()
@@ -754,3 +783,153 @@ def test_execution_wrapper_fault_closes_owner_and_socket(tmp_path, monkeypatch):
     assert not path.exists()
     final = json.loads((tmp_path / "logs/task-final.json").read_text())
     assert final["execution_state"] == "FAULT" and not final["safe_to_resume"]
+
+
+def test_rapid_online_requests_install_only_latest_in_same_session(engine):
+    e, c, r, b, obs, events = engine
+    start_engine(engine)
+    command(c, "next")
+    e.tick()
+    command(c, "next")
+    until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+    assert c.snapshot()["active_stage"] == "return_truss"
+    assert c.snapshot()["stage_version"] == 2
+    assert sum(isinstance(x, tuple) and x[0] == "start" for x in b.calls) == 1
+    assert "stop" not in b.calls
+    assert r.calls[-1][0]["prompt"] == STAGES[2].prompt and r.calls[-1][1] is None
+
+
+def test_new_request_during_bridge_retargets_without_reconnect(engine):
+    e, c, r, b, obs, events = engine
+    start_engine(engine)
+    command(c, "next")
+    until(e, lambda: e.bridge_ticket is not None)
+    previous_deadline = e.boundary["deadline"]
+    command(c, "next")
+    e.tick()
+    assert e.boundary["deadline"] == previous_deadline
+    assert c.snapshot()["active_stage"] == "pickup_1"
+    until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+    assert c.snapshot()["active_stage"] == "return_truss" and "stop" not in b.calls
+
+
+def test_recovery_requires_separate_pause_and_ready_selection_does_not_start(engine):
+    e, c, r, b, obs, events = engine
+    command(c, "next")
+    assert c.snapshot()["execution_state"] == "READY" and not b.calls
+    start_engine(engine)
+    with pytest.raises(ValueError, match="先独立暂停"):
+        command(c, "recover", target="pickup_1", confirmed=True)
+    assert c.snapshot()["execution_state"] == "RUNNING"
+
+
+@pytest.mark.parametrize("failure", ["feedback", "invalid_action", "inference", "timeout"])
+def test_online_failure_runs_fault_cleanup_not_redeployment(engine, failure):
+    e, c, r, b, obs, events = engine
+    c.data["execution_state"] = "IDLE"
+    original_status = b.status
+    original_begin = b.begin_switch
+
+    def status():
+        if failure == "feedback" and b.plan.switch is not None:
+            raise RuntimeError("feedback abnormal")
+        return original_status()
+
+    b.status = status
+
+    def begin(*args):
+        boundary = original_begin(*args)
+        if failure == "timeout":
+            boundary["deadline"] = time.monotonic() - 1
+        if failure == "inference":
+            r.failure = RuntimeError("new prompt inference failed")
+        return boundary
+
+    b.begin_switch = begin
+    if failure == "invalid_action":
+
+        def invalid(*args):
+            raise ValueError("new trajectory violates native bounds")
+
+        b.handoff = invalid
+
+    def operator():
+        deadline = time.monotonic() + 2
+        while c.snapshot()["execution_state"] != "READY":
+            assert time.monotonic() < deadline
+            time.sleep(0.001)
+        command(c, "start")
+        while c.snapshot()["execution_state"] != "RUNNING":
+            assert time.monotonic() < deadline
+            time.sleep(0.001)
+        command(c, "next")
+
+    thread = threading.Thread(target=operator)
+    thread.start()
+    with pytest.raises((RuntimeError, ValueError, TimeoutError)):
+        e.run()
+    thread.join(2)
+    assert not thread.is_alive() and c.snapshot()["execution_state"] == "FAULT"
+    assert "stop" in b.calls
+    assert sum(isinstance(x, tuple) and x[0] == "start" for x in b.calls) == 1
+
+
+def test_same_prompt_stage_versions_are_isolated_online(engine):
+    e, c, r, b, obs, events = engine
+    start_engine(engine)
+    original_prompt = r.calls[0][0]["prompt"]
+    old = c.ticket()
+    for _ in range(4):
+        command(c, "next")
+        until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+    assert c.snapshot()["active_stage"] == "pickup_2"
+    assert c.snapshot()["stage_version"] == 4
+    assert r.calls[-1][0]["prompt"] == original_prompt
+    assert not c.valid(old) and "stop" not in b.calls
+
+
+@pytest.mark.parametrize("bad", ["epoch", "generation", "token"])
+def test_bad_online_worker_ack_never_activates_stage(engine, bad):
+    e, c, r, b, obs, events = engine
+    start_engine(engine)
+    if bad == "token":
+        original = b.handoff
+
+        def handoff(*a):
+            result = original(*a)
+            result["token"] = "wrong"
+            return result
+
+        b.handoff = handoff
+    else:
+        original = b.status
+
+        def status():
+            result = original()
+            if result.get("applied_token"):
+                if bad == "epoch":
+                    result["task_epoch"] = -1
+                else:
+                    result["generation"] = 0
+            return result
+
+        b.status = status
+    command(c, "next")
+    with pytest.raises(ValueError, match="acknowledgement"):
+        until(e, lambda: c.snapshot()["active_stage"] == "harvest_1")
+    assert c.snapshot()["active_stage"] == "pickup_1"
+
+
+def test_recover_after_verified_pause_keeps_real_stop_proof_and_requires_resume(engine):
+    e, c, r, b, obs, events = engine
+    start_engine(engine)
+    command(c, "pause")
+    e.tick()
+    assert c.snapshot()["safe_to_resume"]
+    count = len(r.calls)
+    command(c, "recover", target="pickup_2", confirmed=True)
+    assert c.snapshot()["execution_state"] == "PAUSED" and c.snapshot()["safe_to_resume"]
+    assert len(r.calls) == count
+    command(c, "resume", confirmed=True)
+    until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+    assert c.snapshot()["active_stage"] == "pickup_2" and r.calls[-1][1] is None

@@ -24,7 +24,7 @@ TRANSITIONS = {
     "READY": {"RESUMING", "SWITCH_REQUESTED", "STOPPING", "FAULT"},
     "RUNNING": {"SWITCH_REQUESTED", "PAUSING", "STOPPING", "FAULT"},
     "SWITCH_REQUESTED": {"SWITCHING", "PAUSING", "STOPPING", "FAULT"},
-    "SWITCHING": {"PAUSED", "RESUMING", "PAUSING", "STOPPING", "FAULT"},
+    "SWITCHING": {"RUNNING", "PAUSING", "STOPPING", "FAULT"},
     "PAUSING": {"PAUSED", "STOPPING", "FAULT"},
     "PAUSED": {"RESUMING", "SWITCH_REQUESTED", "STOPPING", "FAULT"},
     "RESUMING": {"RUNNING", "SWITCH_REQUESTED", "PAUSING", "STOPPING", "FAULT"},
@@ -139,6 +139,8 @@ class TaskControl:
                 if command == "recover":
                     if confirmed is not True:
                         raise ValueError("人工恢复需要明确确认停止和重新观测")
+                    if state not in ("READY", "PAUSED"):
+                        raise ValueError("跳转或回退必须先独立暂停；在线切换只允许向前推进")
                 elif index == len(PHASES) - 1 or target != PHASES[index + 1]:
                     raise ValueError("普通切换仅允许下一阶段；跳转或回退请使用人工恢复")
                 previous, old_version = d["requested_stage"], d["stage_version"]
@@ -148,7 +150,7 @@ class TaskControl:
                     stage_version=old_version + 1,
                     pending_request_id=request_id,
                     request_status="received",
-                    safe_to_resume=False,
+                    safe_to_resume=d["safe_to_resume"] if state == "PAUSED" else False,
                 )
                 self.event(
                     "stage_requested",
@@ -158,7 +160,11 @@ class TaskControl:
                     target_stage=target,
                     old_stage_version=old_version,
                 )
-                if state != "SWITCHING" and state != "SWITCH_REQUESTED":
+                if state in ("READY", "PAUSED"):
+                    # No motion exists to hand over; changing the selected stage
+                    # must not open execution authority without start/resume.
+                    d["request_status"] = "selected"
+                elif state != "SWITCHING" and state != "SWITCH_REQUESTED":
                     self.transition("SWITCH_REQUESTED", "operator stage request")
             elif command == "start":
                 if state != "READY":
@@ -220,7 +226,7 @@ class TaskControl:
                 and ticket["stage_version"] == d["stage_version"]
                 and ticket["request_id"] == d["inference_request_id"]
                 and ticket["stage_id"] == d["requested_stage"]
-                and d["execution_state"] in ("RUNNING", "RESUMING")
+                and d["execution_state"] in ("RUNNING", "RESUMING", "SWITCHING")
             )
 
     @contextmanager
@@ -242,7 +248,7 @@ class TaskControl:
                 active_chunk_id=chunk_id,
                 request_status="applied",
             )
-            if self.data["execution_state"] == "RESUMING":
+            if self.data["execution_state"] in ("RESUMING", "SWITCHING"):
                 self.transition("RUNNING", "execution worker accepted fresh first chunk")
             self.event(
                 "chunk_active",

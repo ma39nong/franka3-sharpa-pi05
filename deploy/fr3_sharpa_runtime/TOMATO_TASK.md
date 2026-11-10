@@ -6,11 +6,17 @@
 
 任务状态机、当前部署 UI、控制器、Unix Socket、推理和 RTC 执行端已经接线；离线模拟覆盖七阶段完整任务。真实 checkpoint 的四种 Prompt 和普通 RTC 已用 GPU 假观测运行，未启动机器人、SDK 或 ROS 硬件。
 
-**当前实际硬件不能自动连续完成跨阶段切换。** 原 `stream_stop` 只删除时间轴，不能证明机器人保持；Sharpa 指令连续性 watchdog 为 0.25 秒，不能靠停止发送实现暂停。现有能力只有双手失能读回，没有 FR3 安全保持／停止确认接口。因此生产后端跨阶段、暂停和完成任务都先终止执行 worker，等待原有双手失能读回与完整生命周期清理，再报告 `FAULT / safe_to_resume=false`。它不会显示虚假的 `PAUSED` 或 `COMPLETED`，也不会自动重新使能。
+普通阶段切换现在使用**同一会话内的在线轨迹交接**，不调用 `stop_boundary()`、不关闭 SDK、不重新加载模型。`SWITCHING` 与 `PAUSING`、`STOPPING`、`FAULT` 是不同路径。
 
-使用者必须等待清理、检查实机，再明确授权从指定阶段重新启动新运行。软件重启成功也不证明上一次机器人已安全停止。要启用同一运行中的自动跨阶段接入，必须另行实现并实机验收双臂安全停止 ACK、失能后的合法重新授权，以及整机停止证明；禁止将 `arms_safe` 常量改为真。
+在线交接有硬性截止时间。当前已接纳轨迹仅在最多0.75秒、且不超过旧50步剩余时间（预留一个30Hz周期）的窗口内继续。执行线程清除旧 RTC pending、递增任务 epoch 和 generation，使用独立 token 绑定目标；连续点击不能延长尚未完成交接的原截止时间。新阶段用最新三路图像和58D实测关节重新推理，**不带旧 RTC 前缀**。
 
-离线后端在提供完整整机停止证明时可以走 `PAUSED → RESUMING → RUNNING`，用新三路图像、真实状态和无 RTC 前缀的首块重新开始。该模拟证明的是调度逻辑，不是实机能力。
+收到新首块后按观测时间补偿节点索引，将旧轨迹与时间对齐的新轨迹通过6个30Hz间隔（0.2秒）的五次平滑权重交接。实际30Hz tick保持同一发布者、同一SDK连接和同一watchdog。新轨迹不从0重新计时；跨阶段Delta始终先由本次观测还原为绝对目标，再进入绝对轨迹交接。
+
+执行端在SDK连接前读取真实 FR3 gateway 的 `max_joint_speed`，读不到合法数值就拒绝启动在线任务。桥接及候选后续轨迹必须通过既有关节限位、手部严格小于0.10rad的slew，以及读取到的双臂速度每tick上限；实际桥接tick再次核对实时反馈新鲜度、当前关节首目标差值和实际指令变化。缺乏预算、反馈异常、推理超时、越界或实际拼接检查失败都进入故障停止。未放宽限位、未关闭watchdog，也没有伪造 `arms_safe`。
+
+**命令连续性不等于物理停止／保持证明，也不等于任务阶段成功验收。** 暂停和完整停止继续采用已有失能读回及硬件清理。当前没有双臂安全静止ACK，故真实暂停后仍禁止静默重新使能，完整停止或完成任务也不能虚假报告整机安全已确认。需要静止保持／暂停后恢复时，必须先补齐并验收这项硬件能力。
+
+同一会话完成七阶段在线切换已在模拟中验证；未运行真实机器人。上线前须由具备资质的人员在隔离环境验收本文末尾列出的项目。
 
 ## 模型与资产
 
@@ -72,8 +78,8 @@ bash deploy/fr3_sharpa_control/ui.sh --port 8766
 4. **只有在操作员确认实机条件并授权后**，核对执行配置，再点击“启动执行”。这会走原有硬件、相机、SDK 和录制启动流程。Home 选项仍使用原有配置，启动执行时可能进行 Home 动作。
 5. 任务到 `READY` 后，点击“开始当前阶段”。首块通过观测新鲜度、真实反馈首目标差值、关节范围和 slew 检查后，才显示实际阶段生效。
 6. 阶段内部正常 RTC：消费15个模型节点触发后台推理，按实际耗时跳过已消费节点，保留 token／generation／digest／回执检查。
-7. 点击下一阶段或阶段按钮：只有相邻下一阶段允许普通推进。请求阶段立即登记，实际阶段不会立即改变。当前硬件会走上述安全阻止和完整清理。
-8. 清理结束后人工检查设备，在“任务初始阶段”选定请求阶段，勾选“人工恢复”，重新核对并明确启动新运行。必须重新观测／推理；不使用旧 chunk、prefix 或 Future。恢复确认不会因页面刷新而从保存配置自动勾选。
+7. 点击下一阶段或阶段按钮：只有相邻下一阶段允许普通推进。请求阶段立即登记，界面显示“正在切换”；完成有时限的在线轨迹交接后才更新实际阶段，不关闭推理或硬件。
+8. 普通在线切换无需重新授权或重新部署。跳转／回退必须先独立暂停；若进入故障或已经失能，则等待清理，人工检查后在“任务初始阶段”选定阶段并明确重新授权启动。恢复确认不会因页面刷新自动勾选。
 9. “停止执行”保留原有 Ctrl-C、双手失能读回、硬件清理、录制收尾与导出。它不等待普通任务切换请求，不是硬件急停。
 
 页面刷新只读取执行进程实际状态，不重新开始任务。任务的 `/api/status` 轮询通过 IPC 续租，独立租约监控也覆盖启动与阻塞 Home，失联超过5秒会中断所有者并停止；普通无状态机部署保持旧行为。浏览器被系统长时间挂起也可能触发此边界，不应依赖后台页面无限维持运动。
@@ -116,7 +122,7 @@ IPC 线程只登记意图，不调用设备 SDK。设备仍由执行主线程和
 
 执行状态：IDLE、READY、RUNNING、SWITCH_REQUESTED、SWITCHING、PAUSING、PAUSED、RESUMING、STOPPING、STOPPED、COMPLETED、FAULT；合法转换表在 `task_control.py`。版本、请求 ID、运行身份、阶段、可安装状态均必须匹配，worker 还检查任务 epoch 与原有 RTC token、source generation、digest 和延迟。安全重置清空 pending context 并使时间轴失效。
 
-跨阶段不传旧轨迹承诺：安全边界 → 明确重新授权 → 新观测 → 新 Prompt 普通首块 → worker 确认 → active_stage 更新 → 阶段内部 RTC。新边界未确认时禁止自动重使能。首块不使用隐式慢桥接，而是原首目标限值与实际拼接 slew 检查；超出即阻止。
+在线切换：登记新版本 → worker 限定过渡窗口并撤销旧回执 → 丢弃旧 Future → 新观测与新 Prompt 普通首块 → 预验证桥接 → 实际30Hz执行 → worker 的 applied_token 确认 → active_stage 更新 → 阶段内部 RTC。`stream_handoff` 的 accepted 仅代表桥接已排定，不代表已经生效；只有实际tick通过检查并完成桥接才给出 applied_token。
 
 通信、反馈、推理、RTC 超时、动作非法、旧 chunk 耗尽、日志写入失败都会撤销执行权并进入停止／故障处理。不能将日志写失败后的半个阶段请求继续用于旧时间轴。
 
@@ -147,7 +153,7 @@ IPC 线程只登记意图，不调用设备 SDK。设备仍由执行主线程和
 
 GPU 实测报告在 `validation/tomato-b-7999-gpu.json`：27服务器 GPU0（RTX PRO 5000 72GB），使用本分支的部署源码临时副本、原始7999和自身统计。四类普通首块约51–52ms、普通RTC引导约72ms；均为有限 `(50,58)`。源码副本在 `/tmp/sharpa-tomato-gpu-47Trn40h`，未修改远程训练仓库。这不是包含真实摄像头、IPC、网络和硬件的闭环延迟结论。
 
-仍待实机验收：双臂受控停止／保持与明确ACK、手部失能后的机械行为、重新授权、三路相机与关节反馈时序、30Hz调度和watchdog、实际阶段任务效果，以及完整录制停止与导出。当前软件会阻止依赖尚未确认安全能力的自动续跑。
+仍待实机验收：双臂受控停止／保持与明确ACK、手部失能后的机械行为、重新授权、三路相机与关节反馈时序、30Hz调度和watchdog、实际阶段任务效果，以及完整录制停止与导出。在线交接的软件检查不代替实机验收；暂停后的重使能和物理安全停止确认仍保留安全阻止。
 
 ## 本次变更文件清单
 
@@ -165,7 +171,9 @@ GPU 实测报告在 `validation/tomato-b-7999-gpu.json`：27服务器 GPU0（RTX
 | `deploy/fr3_sharpa_control/plan.py` | 审批方案中的任务模式、初始阶段、人工恢复 |
 | `deploy/fr3_sharpa_runtime/run.py` | 命令行与版本化任务入口 |
 | `deploy/fr3_sharpa_runtime/rtc_runtime.py` | 拒绝任务误入旧协调器 |
-| `deploy/fr3_sharpa_runtime/rtc_stream.py` | task epoch、pending 失效与时间轴撤销 |
+| `deploy/fr3_sharpa_runtime/rtc_stream.py` | task epoch、pending 失效与时间轴撤销（普通RTC保持原实现） |
+| `deploy/fr3_sharpa_runtime/stage_handoff.py` | 有时限在线交接、纯时间轨迹、五次平滑桥接 |
+| `deploy/fr3_sharpa_runtime/tests/test_stage_handoff.py` | 轨迹边界、时钟、越界、过渡超时与gateway读取测试 |
 | `deploy/fr3_sharpa_runtime/sdk_direct_motion_ros.py` | 严格首块接入、epoch 检查、最终失效事件 |
 | `deploy/fr3_sharpa_runtime/motion_worker.py` | 有界回复等待、保留真实失能读回报告 |
 | `deploy/fr3_sharpa_runtime/model_loader.py` | B 身份与 Full Delta 类型一致性 |
@@ -179,7 +187,7 @@ GPU 实测报告在 `validation/tomato-b-7999-gpu.json`：27服务器 GPU0（RTX
 | `部署UI使用手册.md` | 任务入口与安全限制 |
 | `部署启动指令.md` | 任务入口与安全限制 |
 
-## 本次实际验证结果（2026-11-10）
+## 初版停止边界的历史验证（2026-11-10）
 
 - 新增任务测试：`pytest -q deploy/fr3_sharpa_runtime/tests/test_tomato_task.py`，最终 **41 passed**。
 - 最终相关全量回归：`pytest -q deploy/fr3_sharpa_runtime/tests packages/openpi-client/src/openpi_client/rtc_test.py`，**565 passed**，1328条既有 JAX/Flax 弃用警告，没有失败。
@@ -191,4 +199,22 @@ GPU 实测报告在 `validation/tomato-b-7999-gpu.json`：27服务器 GPU0（RTX
 - 本机 RTX 5090 四种 Prompt 的有限 `(50,58)` 输出约46–48ms，普通 RTC 引导约61.5ms，报告为新增文件 `deploy/fr3_sharpa_runtime/validation/tomato-b-7999-gpu-local.json`。不包含相机、IPC和硬件的闭环耗时。
 - 本机详细原始日志：`.deployment/tomato-validation/pytest-final.log`、`task-final.log`、`checkpoint-check.json`、`runtime-check.json`、`gpu-smoke-local.log`、`gpu-smoke-local.json`、`params-checksum-diff.txt`。
 - 真实 UI 已在本机打开，验证推荐配置、模型识别、七阶段按钮、固定指令展开与未启动时的禁用状态。打开和检查 UI 未启动设备。
-- 实机运动、物理暂停／保持、重新使能与任务效果验收：**未执行**。真实后端仍明确阻止未获得整机安全确认的续跑，不能把模拟成功或 GPU smoke 当成实机通过。
+- 实机运动、物理暂停／保持、重新使能与任务效果验收：**未执行**。此处为初版停止边界的历史验收；当前在线交接仍需单独实机验收，不能把模拟成功或 GPU smoke 当成实机通过。
+
+
+## 在线连续切换验证（2026-11-10，基于 d9b8726）
+
+- 完整离线回归：`.venv/bin/python -m pytest -q deploy/fr3_sharpa_runtime/tests packages/openpi-client/src/openpi_client/rtc_test.py`，**600 passed**，1328条既有 JAX/Flax 弃用警告，43.09秒。原始结果位于忽略目录 `.deployment/tomato-validation/online-regression.log`。
+- 模拟设备使用生产 `StageTimeline`，按30Hz消费实际命令；覆盖一次启动完成七阶段、正确四Prompt、同Prompt不同阶段隔离、旧Future晚返回、块中途切换、桥接端点和时间补偿、连续点击（包括桥接中再次请求且不延长截止时间）、错误接纳回执、超时、反馈错误、越界、失败清理及暂停独立授权。既有普通RTC、serial、IPC、UI、录制、日志和模型测试同时通过。
+- 本次不改变模型、归一化和Delta还原；保留此前两份GPU验证报告，没有将模拟推理称为新增GPU或实机验证。
+- `active_stage` 只在worker实际30Hz tick成功发送命令、发布目标且报告匹配的token/epoch/generation后更新。这个ACK说明新轨迹已接入命令流，**不证明执行器已到位或物理任务已成功**。
+
+### 隔离环境实机验收（须由具备资质的人员执行）
+
+1. 先以受限工况确认FR3 gateway真实参数可读、单一控制所有者、硬件限位、接触保护、SDK slew和watchdog均有效；验证反馈丢失、超时及调度超期的真实停止行为。
+2. 测量三路新图像、真实58D反馈、推理与IPC端到端时序；验证200ms观测新鲜度及0.75秒切换总窗口在现场负载下成立，超时不能继续播放旧轨迹。
+3. 从无负载、低风险工况逐步验收桥接，再验收携带果串、接触及抓握状态；记录实际关节速度、加速度、jerk、跟踪误差及gateway裁剪。五次权重和平滑命令不构成机械臂动态安全认证。
+4. 在块中段、末端和快速连续点击时检查旧Future丢弃、阶段显示、普通RTC恢复、同一SDK/ROS会话与连续录制；实测七阶段作业效果。
+5. 补齐并验收FR3双臂受控停止／保持及明确物理ACK、手部失能后的机械行为，再验收暂停后恢复。当前接口只有命令发布与反馈，缺少可验证的物理静止／保持确认，因此保留 `arms_safe=false` 和故障/暂停恢复阻止；停止、任务完成均不能被描述为已确认整机安全。
+
+开发和上述600项测试均未启动真实机器人。

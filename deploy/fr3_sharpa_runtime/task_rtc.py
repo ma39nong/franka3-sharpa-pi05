@@ -1,7 +1,7 @@
 """Seven-stage task coordinator using the existing ordinary RTC wire protocol.
 
-No cross-stage prefix is reused. The production backend deliberately refuses
-automatic rearming: the current hardware contract has no whole-robot hold ACK.
+Cross-stage first blocks use no old prefix. Online command bridges are bounded
+and validated by the same worker; pause/stop still require physical confirmation.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +15,7 @@ import numpy as np
 
 from .protocol import as_finite_action_chunk
 from .rtc_stream import RTCSettings
+from .stage_handoff import BRIDGE_STEPS, DT
 
 
 def safe_stop_proof(proof):
@@ -45,6 +46,10 @@ class TaskRTC:
         self.context = None
         self.chunk_count = 0
         self.first_deadline = None
+        self.boundary = None
+        self.switch_version = None
+        self.bridge_ticket = None
+        self.bridge_installation = None
 
     def record(self, event, **fields):
         self.control.event(event, **fields)
@@ -95,7 +100,7 @@ class TaskRTC:
             duration_s=self.clock() - started,
             actions=actions.tolist(),
         )
-        return result[0], actions, self.runtime.last_receipt
+        return result[0], actions, self.runtime.last_receipt, observation["_captured_monotonic_ns"] / 1e9
 
     def submit(self, context=None, timeout=5.0):
         self.ticket = self.control.ticket()
@@ -131,10 +136,7 @@ class TaskRTC:
                 c.data.update(stage_version=c.data["stage_version"] + 1, safe_to_resume=False)
                 c.transition("STOPPING", "UI/controller lease expired; stopping hardware")
             state = "STOPPING"
-        if state in ("SWITCH_REQUESTED", "SWITCHING", "PAUSING", "STOPPING"):
-            with c.lock:
-                if c.data["execution_state"] == "SWITCH_REQUESTED":
-                    c.transition("SWITCHING", "invalidate stream and all outstanding contexts")
+        if state in ("PAUSING", "STOPPING"):
             self.stop_boundary()
             with c.lock:
                 # Stop has priority even if it arrived while disable/readback blocked.
@@ -145,6 +147,49 @@ class TaskRTC:
                 c.data.update(safe_to_resume=True, request_status="awaiting_reauthorization")
                 c.transition("PAUSED", "verified boundary; operator must explicitly authorize fresh execution")
             return True
+        if state in ("SWITCH_REQUESTED", "SWITCHING"):
+            with c.lock:
+                if c.data["execution_state"] == "SWITCH_REQUESTED":
+                    c.transition("SWITCHING", "online handover; retain the single execution session")
+                if self.switch_version != c.data["stage_version"]:
+                    self.boundary = (
+                        self.backend.begin_switch(c.data["stage_version"], c.data["pending_request_id"])
+                        if self.streaming
+                        else None
+                    )
+                    self.switch_version = c.data["stage_version"]
+                    self.bridge_ticket = None
+                    self.context = None
+                    self.delays = self.settings.history()
+                    c.data["request_status"] = "switching"
+                    self.record(
+                        "online_switch_boundary", boundary=self.boundary, requested_stage=c.data["requested_stage"]
+                    )
+            state = "SWITCHING"
+            if self.streaming:
+                status = self.backend.status()
+                c.data["chunk_progress"] = status
+                if self.bridge_ticket is not None:
+                    if status.get("applied_token") == self.boundary["token"]:
+                        with c.installation(self.bridge_ticket) as valid:
+                            if valid:
+                                if (
+                                    status.get("task_epoch") != self.bridge_ticket["stage_version"]
+                                    or status["generation"] <= self.boundary["source_generation"]
+                                ):
+                                    raise ValueError("Online handover acknowledgement epoch/generation mismatch")
+                                c.activate(self.bridge_ticket, f"{self.switch_version}:{status['generation']}")
+                                self.chunk_count += 1
+                                self.record(
+                                    "online_switch_applied",
+                                    token=self.boundary["token"],
+                                    installation=self.bridge_installation,
+                                    stream=status,
+                                )
+                                c.data["inference_status"] = "idle"
+                                self.boundary = self.bridge_ticket = None
+                        return True
+                    return True
         # An old running GPU call may finish later. Always reap before reusing
         # the sole inference slot, discard errors as well as outputs if stale.
         if self.future is not None and self.future.done():
@@ -160,7 +205,27 @@ class TaskRTC:
                     )
                     c.data["inference_status"] = "discarded"
                     return True
-                metadata, actions, receipt = future.result()
+                metadata, actions, receipt, captured = future.result()
+                if state == "SWITCHING" and self.streaming:
+                    if context is not None:
+                        raise ValueError("Cross-stage first chunk cannot use old RTC guidance")
+                    installed = self.backend.handoff(actions, self.boundary, captured)
+                    if (
+                        installed.get("accepted") is not True
+                        or installed.get("applied") is not False
+                        or installed.get("token") != self.boundary["token"]
+                    ):
+                        raise ValueError("Online handover arming acknowledgement mismatch")
+                    self.bridge_ticket = ticket
+                    self.bridge_installation = installed
+                    c.data["inference_status"] = "trajectory_bridge"
+                    self.record(
+                        "online_switch_armed",
+                        inference_request_id=ticket["request_id"],
+                        installation=installed,
+                        checkpoint=metadata["checkpoint"],
+                    )
+                    return True
                 if context is None:
                     installed = self.backend.start(
                         actions, ticket, self.directory / f"control-{uuid.uuid4().hex}.jsonl"
@@ -182,6 +247,17 @@ class TaskRTC:
             return True
         if self.future is not None and self.clock() > self.first_deadline:
             raise TimeoutError("Task inference/observation deadline exceeded")
+        if state == "SWITCHING":
+            if self.streaming:
+                budget = self.boundary["deadline"] - self.clock() - (BRIDGE_STEPS + 2) * DT
+                if budget <= 0:
+                    raise TimeoutError("Online switch inference budget exhausted; safe stop required")
+            else:
+                budget = 5.0
+            if self.future is None:
+                self.submit(timeout=budget)  # Fresh observation; no cross-stage RTC prefix.
+                self.first_deadline = self.clock() + budget
+            return True
         if state == "RESUMING" and self.future is None:
             self.backend.reauthorize()
             self.submit()
@@ -200,11 +276,15 @@ class TaskRTC:
                 # Observe first, then snapshot, exactly as the ordinary RTC path.
                 # Snapshot reflects the timeline at observation completion.
                 # Only the owner thread can read/modify the hardware timeline.
-                observed_version = c.snapshot()["stage_version"]
+                observed_version = snapshot["stage_version"]
 
                 def check_motion():
                     self.backend.status()
-                    if c.snapshot()["stage_version"] != observed_version:
+                    current_task = c.snapshot()
+                    if (
+                        current_task["stage_version"] != observed_version
+                        or current_task["execution_state"] != "RUNNING"
+                    ):
                         raise InterruptedError("stage request during observation")
 
                 try:
@@ -212,10 +292,12 @@ class TaskRTC:
                     check_motion()
                 except InterruptedError:
                     return True
-                context = self.backend.snapshot(self.settings, max(self.delays))
-                # Preserve NEW observation as Delta reference. Only one submit
-                # can consume it; no shared args.prompt mutation.
-                self.submit_observed(observation, context)
+                with c.lock:
+                    if c.data["stage_version"] != observed_version or c.data["execution_state"] != "RUNNING":
+                        return True
+                    context = self.backend.snapshot(self.settings, max(self.delays))
+                    # Bind observation, prompt, epoch and RTC snapshot atomically.
+                    self.submit_observed(observation, context)
         return True
 
     def submit_observed(self, observation, context):
@@ -331,6 +413,23 @@ class SDKTaskBackend:
                 task_request_id=ticket["request_id"],
             ),
             timeout=1,
+        )
+
+    def begin_switch(self, epoch, request_id):
+        return self.worker.request(
+            dict(operation="stream_switch", task_epoch=epoch, request_id=request_id), timeout=0.5
+        )["boundary"]
+
+    def handoff(self, actions, boundary, captured):
+        ticket = {**boundary, "captured_monotonic_s": captured}
+        return self.worker.request(
+            dict(
+                operation="stream_handoff",
+                actions=actions.tolist(),
+                ticket=ticket,
+                prediction_clip_rad=self.args.prediction_clip_rad,
+            ),
+            timeout=0.5,
         )
 
     def stop(self):

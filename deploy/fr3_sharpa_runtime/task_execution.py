@@ -54,7 +54,7 @@ def execute_task(args):
             f"export SHARPA_SHUTDOWN_REPORT_DIR={shlex.quote(str(directory))}; "
             f"export PYTHONPATH={shlex.quote(str(root))}:{shlex.quote(str(run.GELLO_REPO))}:"
             f'{shlex.quote(str(core))}:"${{PYTHONPATH:-}}"; '
-            "exec python -m deploy.fr3_sharpa_runtime.sdk_direct_motion_ros --enable-hardware"
+            "exec python -m deploy.fr3_sharpa_runtime.sdk_direct_motion_ros --enable-hardware --online-task-handoff"
         )
         worker = MotionWorker(
             ["pixi", "run", "-e", "ros2", "bash", "-lc", inner], cwd=run.ROS_PROJECT, protocol_fd=True

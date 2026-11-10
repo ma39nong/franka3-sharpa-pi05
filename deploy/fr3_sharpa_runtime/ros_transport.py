@@ -15,8 +15,8 @@ from .feedback import ROSFeedbackProvider
 from .preflight import execute_preflight
 from .ros_observation import MAX_AGE_NS
 from .protocol import (
-    DT_NS, LEFT_FR3_SLICE, LEFT_SHARPA_SLICE, RIGHT_FR3_SLICE,
-    RIGHT_SHARPA_SLICE, SHARPA_JOINT_NAMES, as_finite_action_chunk,
+    DT_NS, LEFT_FR3_SLICE, RIGHT_FR3_SLICE,
+    SHARPA_JOINT_NAMES, as_finite_action_chunk,
 )
 from .sdk_direct import SharpaSdkDirectExecutor, validate_direct_hand_actions
 
@@ -92,6 +92,32 @@ def validate_action_ranges(actions: np.ndarray, *, check_slew: bool = True) -> N
     if np.any(arm < LOWER_LIMITS) or np.any(arm > UPPER_LIMITS):
         raise ValueError("FR3 chunk exceeds existing gateway joint limits")
     validate_direct_hand_actions(actions, check_slew=check_slew)
+
+
+def read_gateway_joint_speed(node):
+    """Read the live arm speed bound before starting an online-task worker."""
+    import rclpy
+    import math
+    from rcl_interfaces.srv import GetParameters
+    client = node.create_client(GetParameters, "/teleop_safety_gateway/get_parameters")
+    try:
+        if not client.wait_for_service(timeout_sec=1.):
+            raise RuntimeError("Cannot read FR3 gateway speed; online handover blocked")
+        request = GetParameters.Request()
+        request.names = ["max_joint_speed"]
+        future = client.call_async(request)
+        rclpy.spin_until_future_complete(node, future, timeout_sec=1.)
+        if not future.done() or future.exception() is not None:
+            raise RuntimeError("FR3 gateway speed query timed out")
+        values = future.result().values
+        if len(values) != 1 or values[0].type != 3:
+            raise ValueError("FR3 gateway max_joint_speed must be a double")
+        speed = values[0].double_value
+        if not math.isfinite(speed) or speed <= 0:
+            raise ValueError("Invalid FR3 gateway max_joint_speed")
+        return speed
+    finally:
+        node.destroy_client(client)
 
 
 def validate_gateway_graph(node) -> None:

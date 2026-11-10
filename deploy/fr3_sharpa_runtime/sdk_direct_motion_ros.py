@@ -33,6 +33,7 @@ from .sdk_direct import (DEFAULT_PREDICTION_CLIP_RAD, SharpaSdkDirectExecutor, a
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--enable-hardware", action="store_true", required=True)
+    parser.add_argument("--online-task-handoff", action="store_true")
     parser.add_argument("--speed-rad-s", type=float, default=0.03)
     parser.add_argument("--execute-speed-scale", type=float, default=1.0)
     args = parser.parse_args()
@@ -106,6 +107,10 @@ def main() -> None:
         while time.monotonic() < deadline and "teleop_safety_gateway" not in node.get_node_names():
             rclpy.spin_once(node, timeout_sec=0.05)
         validate_gateway_admission(node)
+        gateway_speed = None
+        if args.online_task_handoff:
+            from .ros_transport import read_gateway_joint_speed
+            gateway_speed = read_gateway_joint_speed(node)
         existing = {
             topic: node.get_publishers_info_by_topic(topic)
             for topic in ("/sharpa/left/joint_states", "/sharpa/right/joint_states")
@@ -174,15 +179,30 @@ def main() -> None:
                     if now - stream_tick > DT_NS / 1e9:
                         raise RuntimeError("RTC 30Hz deadline missed; stopped")
                     current = fresh_feedback()
+                    handover_tick = args.online_task_handoff and stream.switch is not None
+                    previous_handoff_token = stream.applied_token if args.online_task_handoff else None
                     command = stream.sample(now)
                     transition = target_chunk(command)
                     transition[0] = stream_last_command
                     validate_action_ranges(transition)  # Includes the actual splice slew.
+                    if handover_tick:
+                        from .stage_handoff import validate_command_step
+                        from .preflight import execute_preflight
+                        validate_command_step(stream_last_command, command, gateway_speed)
+                        execute_preflight(target_chunk(command), current,
+                            now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns())
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     stream_last_command = command.copy()
+                    if args.online_task_handoff and stream.applied_token != previous_handoff_token:
+                        stream_event("handoff_applied", token=stream.applied_token,
+                                     generation=stream.generation, phase=stream.phase(now))
                     stream_event("frame", generation=stream.generation, phase=stream.phase(now),
-                                 command=command.tolist(), measured=current.state.tolist())
+                                 command=command.tolist(), measured=current.state.tolist(),
+                                 handoff_state=("blend" if stream.bridge else "bounded_previous")
+                                     if args.online_task_handoff and stream.switch else "stage",
+                                 handoff_token=stream.switch["token"]
+                                     if args.online_task_handoff and stream.switch else None)
                     stream_tick += DT_NS / 1e9
             timeout = 0.01 if stream is None else max(0, min(0.01, stream_tick - time.monotonic()))
             readable, _, _ = select.select([sys.stdin], [], [], timeout)
@@ -194,10 +214,15 @@ def main() -> None:
             request = json.loads(line)
             clipping_report = None
             operation = request.get("operation")
-            if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "close"}:
+            if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "stream_switch", "stream_handoff", "close"}:
                 raise ValueError("Cannot mix serial motion operations with an active RTC stream")
             if operation == "stream_start":
                 from .rtc_stream import RTCTimeline
+                if args.online_task_handoff:
+                    from .stage_handoff import StageTimeline
+                    timeline_class = StageTimeline
+                else:
+                    timeline_class = RTCTimeline
                 actions, clipping_report = stream_actions(request)
                 current = fresh_feedback()
                 # Only the initial handover uses the existing slow approach.
@@ -221,7 +246,7 @@ def main() -> None:
                     recording.start()
                     executor.resume_stream()
                 now = time.monotonic()
-                stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]),
+                stream = timeline_class(actions, now, float(request["execute_speed_scale"]),
                                      task_epoch=request.get("task_epoch"))
                 stream_tick = now
                 stream_last_command = actions[0].copy()
@@ -243,6 +268,29 @@ def main() -> None:
                 context["previous_actions"] = context["previous_actions"].tolist()
                 stream_event("snapshot", context=context)
                 print(json.dumps({"status": "PASS", "context": context}), file=protocol, flush=True)
+            elif operation == "stream_switch":
+                if not args.online_task_handoff or stream is None:
+                    raise ValueError("Online task handover is not enabled or no active stream")
+                fresh_feedback()
+                boundary = stream.begin_switch(request["task_epoch"], request["request_id"], time.monotonic())
+                stream_event("switch_requested", boundary=boundary, arm_speed=gateway_speed)
+                print(json.dumps({"status": "PASS", "boundary": boundary}), file=protocol, flush=True)
+            elif operation == "stream_handoff":
+                if not args.online_task_handoff or stream is None:
+                    raise ValueError("No online task stream")
+                actions, clipping_report = stream_actions(request)
+                current = fresh_feedback()
+                now = time.monotonic()
+                from .preflight import execute_preflight
+                from .stage_handoff import DT
+                # Validate the time-aligned new first target against live joints.
+                index = min(49, int(np.ceil((max(now, stream_tick) - request["ticket"]["captured_monotonic_s"]) / DT)))
+                execute_preflight(target_chunk(actions[index]), current,
+                    now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns())
+                result = stream.prepare_handoff(actions, request["ticket"], now, stream_tick,
+                                                 stream_last_command, gateway_speed, validate_action_ranges)
+                stream_event("handoff_armed", **result, clipping=clipping_report)
+                print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_install":
                 if stream is None:
                     raise ValueError("No active RTC stream")
