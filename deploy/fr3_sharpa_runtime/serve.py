@@ -84,15 +84,26 @@ def main() -> None:
     elif args.enable_paper_rtc:
         from .paper_rtc import PaperRTCPolicy
         policy_options["policy_class"] = PaperRTCPolicy
+    from .task_stages import ACTION_PROMPTS
+    default_prompt = ACTION_PROMPTS["pickup"] if metadata.get("tomato_model") else config.DEFAULT_PROMPT
     policy = policy_config.create_trained_policy(
-        training, config.CHECKPOINT, norm_stats=stats, default_prompt=config.DEFAULT_PROMPT,
+        training, config.CHECKPOINT, norm_stats=stats, default_prompt=default_prompt,
         rtc_action_repack=canonical_prefix if args.enable_rtc else None, **policy_options)
-    observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": config.DEFAULT_PROMPT}
+    observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": default_prompt}
     for key in ("observation/image", "observation/left_wrist_image", "observation/right_wrist_image"):
         observation[key] = np.zeros((224, 224, 3), dtype=np.uint8)
     result = policy.infer(observation)
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])
+    if metadata.get("tomato_model"):
+        prompt_checks = {}
+        for label, prompt in ACTION_PROMPTS.items():
+            sample = policy.infer({**observation, "prompt": prompt})
+            actual = as_finite_action_chunk(sample["actions"])
+            prompt_checks[label] = {"prompt": prompt, "shape": list(actual.shape),
+                                    "finite": bool(np.isfinite(actual).all()),
+                                    "infer_ms": sample["policy_timing"]["infer_ms"]}
+        metadata["tomato_prompt_smoke"] = prompt_checks
     if args.enable_rtc:
         import hashlib
         context = rtc.validate_context({

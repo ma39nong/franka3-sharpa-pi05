@@ -1,5 +1,7 @@
 # FR3 + Sharpa π0.5 番茄任务部署
 
+> 番茄 B Coarse 七阶段任务：见 [完整任务部署说明](deploy/fr3_sharpa_runtime/TOMATO_TASK.md)。当前分支提供人工状态机、普通 RTC、实时 IPC 和现有 UI 集成；真实跨阶段／暂停因缺少双臂安全停止确认而执行清理并阻止自动续跑，须人工检查与重新核对授权。打开 UI 不启动设备。
+
 现场操作请先看 [部署 UI 使用手册](部署UI使用手册.md)，涵盖首次配置、模式选择、独立启停、录制回放与故障排查。
 
 日常启动统一看 [部署启动指令](部署启动指令.md)。需要选择权重、模式、Home/Current和自动录制时，运行 `bash deploy/fr3_sharpa_control/ui.sh`，操作说明见 [部署控制台](deploy/fr3_sharpa_control/README.md)。

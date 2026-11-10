@@ -58,7 +58,17 @@ def load_training_record(path, stats_path, *, paper_algorithm=None):
             raise ValueError("effective_config旁缺少norm_stats.json；请提供运行JSON或使用手动训练确认")
         expected = json.loads(adjacent.read_text())
         actual = json.loads(Path(stats_path).read_text())
-        if expected.get("norm_stats", expected) != actual.get("norm_stats", actual):
+        expected = expected.get("norm_stats", expected)
+        # Training reproducibility serializes NormStats dataclasses with their
+        # type/fields envelope; checkpoint assets serialize their numeric fields.
+        # Unwrap only this exact type and retain exact numeric equality.
+        expected = {
+            key: value["fields"] if isinstance(value, dict)
+            and value.get("type") == "openpi.shared.normalize.NormStats"
+            and set(value) == {"type", "fields"} else value
+            for key, value in expected.items()
+        }
+        if expected != actual.get("norm_stats", actual):
             raise ValueError("effective_config归档统计与checkpoint不一致")
     return {"config": record, "inputs": {
         "norm_stats_sha256": hashlib.sha256(Path(stats_path).read_bytes()).hexdigest(),

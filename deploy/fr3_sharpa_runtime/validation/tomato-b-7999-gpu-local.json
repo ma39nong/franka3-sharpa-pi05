@@ -1,0 +1,113 @@
+{
+  "tomato_model": {
+    "name": "normal93 B Coarse FullFT Delta \u00b7 7999",
+    "training_date": "2026-11-09",
+    "subtask_variant": "b_coarse",
+    "profile": "full-delta",
+    "action_dim": 58,
+    "action_horizon": 50,
+    "action_hz": 30,
+    "stage_contract": "tomato-coarse-four-prompts-en-v4",
+    "evidence": "verified Orbax manifest, metadata and checkpoint-owned normalization fingerprints"
+  },
+  "train_rtc": null,
+  "paper_algorithm": null,
+  "config_name": "pi05_fr3_sharpa_1016_2_fullft_delta_30hz_deploy",
+  "checkpoint": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-b-coarse/7999",
+  "norm_stats": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-b-coarse/7999/assets/tomato_truss_normal93_20261109_annotation_r2_all_sources_v2_b_coarse_v1_delta_30hz/norm_stats.json",
+  "checkpoint_manifest_sha256": "55d037b0002ca3a76112ae848944663c3b602eac8c9a813847f67445050bdf60",
+  "normalization_sha256": "3f82a27ba53cb6a0553886d453c8e05ccb466354d131ee9c956cd0a12637350a",
+  "model_profile": "full-delta",
+  "model_finetune_mode": "full",
+  "training_action_supervision": "delta_arm_joint_target_absolute_hand",
+  "delta_reference": "chunk_start_measured_joint_positions",
+  "delta_dimensions": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+  ],
+  "paligemma_variant": "gemma_2b",
+  "action_expert_variant": "gemma_300m",
+  "lora_recipe": null,
+  "action_dim": 58,
+  "action_horizon": 50,
+  "action_hz": 30,
+  "action_representation": "absolute_joint_position",
+  "action_order": [
+    "left_arm_7",
+    "left_hand_22",
+    "right_arm_7",
+    "right_hand_22"
+  ],
+  "camera_mapping": {
+    "head": "cam0",
+    "left_wrist": "cam2",
+    "right_wrist": "cam1"
+  },
+  "params_leaves": 51,
+  "warmed_up": true,
+  "rtc_supported": true,
+  "rtc_warmed_up": true,
+  "rtc_action_dim": 58,
+  "rtc_protocol_version": 1,
+  "rtc_algorithm": "soft_prefix_guidance",
+  "tomato_prompt_smoke": {
+    "pickup": {
+      "prompt": "Right hand grasps and lifts the truss to the center",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 46.44429200561717
+    },
+    "harvest": {
+      "prompt": "Right hand holds truss while left hand picks tomatoes into left basket",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 47.59193302015774
+    },
+    "return": {
+      "prompt": "Right hand returns the held object to the right plate",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 47.54474098444916
+    },
+    "adjust": {
+      "prompt": "Right fingers reposition the truss on the right plate",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 46.82894700090401
+    }
+  },
+  "rtc_smoke_action_shape": [
+    50,
+    58
+  ],
+  "rtc_warm_infer_ms": 61.507810023613274,
+  "smoke_action_shape": [
+    50,
+    58
+  ],
+  "smoke_finite": true
+}

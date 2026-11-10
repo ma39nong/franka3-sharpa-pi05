@@ -14,6 +14,7 @@ class MotionWorker:
     def __init__(self, command, *, cwd, protocol_fd=False):
         self._protocol_read = None
         self._closed = False
+        self.shutdown_report = None
         self._direct = protocol_fd
         self._close_grace_s = DisableSettings.from_env().worker_grace_s if protocol_fd else 5.0
         self._previous_sigterm = None
@@ -38,7 +39,8 @@ class MotionWorker:
                     raise KeyboardInterrupt("SIGTERM: await SDK disable confirmation")
                 self._previous_sigterm = signal.signal(signal.SIGTERM, terminate)
 
-    def request(self, payload):
+    def request(self, payload, *, timeout=None):
+        deadline = time.monotonic() + timeout if timeout is not None else None
         try:
             self.process.stdin.write(json.dumps(payload, allow_nan=False)+"\n")
             self.process.stdin.flush()
@@ -48,6 +50,10 @@ class MotionWorker:
             pass
         while True:
             stream = self._protocol_read or self.process.stdout
+            if deadline is not None:
+                ready, _, _ = select.select([stream], [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    raise TimeoutError("Motion worker reply deadline exceeded; execute blocked")
             line = stream.readline()
             if not line:
                 raise RuntimeError("Guarded motion worker exited; execute stopped")
@@ -102,6 +108,7 @@ class MotionWorker:
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 if isinstance(report, dict) and report.get("operation") == "shutdown":
+                    self.shutdown_report = report
                     if report.get("status") != "PASS":
                         stderr(f"[sharpa-shutdown] ERROR SDK 退出检查未完整通过: {report}")
                     return True

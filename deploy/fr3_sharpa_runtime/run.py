@@ -152,6 +152,9 @@ def observation_after_completion(args, report):
 
 def execute_policy_prepare(args):
     """Live-state execution, with optional Home/policy prepare before prediction prefixes."""
+    if getattr(args, "task_mode", "none") == "tomato-b":
+        from .task_execution import execute_task
+        return execute_task(args)
     import shlex
     from .motion_worker import MotionWorker
     from .policy_prepare import prepare_and_run_chunks
@@ -438,6 +441,9 @@ def main() -> None:
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
+    parser.add_argument("--task-mode", choices=("none", "tomato-b"), default="none")
+    from .task_stages import PHASES
+    parser.add_argument("--initial-stage", choices=PHASES, default="pickup_1")
     parser.add_argument("--ros-overlay", type=Path, help="ROS overlay containing teleop_interfaces for Pixi ROS Python")
     parser.add_argument("--enable-hardware", action="store_true")
     parser.add_argument("--sharpa-backend", choices=("litchibot", "sdk_direct"), default="sdk_direct",
@@ -445,6 +451,10 @@ def main() -> None:
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
+    if args.task_mode == "tomato-b" and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
+            or args.train_paper_rtc or config.MODEL_PROFILE.name != "full-delta"
+            or args.sharpa_backend != "sdk_direct"):
+        parser.error("番茄 B 状态机仅支持 full-delta / sdk_direct / 普通 RTC")
     if args.train_paper_rtc:
         if args.train_rtc or args.paper_rtc:
             parser.error("Use --train-paper-rtc alone")

@@ -68,7 +68,9 @@ def main() -> None:
 
     def stream_event(name, **fields):
         if stream_log is not None:
-            stream_log.write(json.dumps({"event": name, "monotonic_s": time.monotonic(), **fields}, allow_nan=False) + "\n")
+            stream_log.write(json.dumps({"event": name, "monotonic_s": time.monotonic(),
+                                         "task_epoch": stream.task_epoch if stream is not None else None,
+                                         **fields}, allow_nan=False) + "\n")
             stream_log.flush()
 
     def stream_actions(request):
@@ -199,8 +201,17 @@ def main() -> None:
                 actions, clipping_report = stream_actions(request)
                 current = fresh_feedback()
                 # Only the initial handover uses the existing slow approach.
-                frames, _ = chunk_command_frames(actions, current.state, execute_steps=1,
-                    approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
+                if request.get("strict_start"):
+                    from .preflight import execute_preflight
+                    execute_preflight(actions, current, now_ros_ns=node.get_clock().now().nanoseconds,
+                                      now_monotonic_ns=time.monotonic_ns())
+                    transition = target_chunk(actions[0])
+                    transition[0] = current.state
+                    validate_action_ranges(transition)
+                    frames = [actions[0]]
+                else:
+                    frames, _ = chunk_command_frames(actions, current.state, execute_steps=1,
+                        approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
                 executor.resume_stream()
                 def send_initial(frame):
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
@@ -210,13 +221,15 @@ def main() -> None:
                     recording.start()
                     executor.resume_stream()
                 now = time.monotonic()
-                stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]))
+                stream = RTCTimeline(actions, now, float(request["execute_speed_scale"]),
+                                     task_epoch=request.get("task_epoch"))
                 stream_tick = now
                 stream_last_command = actions[0].copy()
                 path = Path(request["events_path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
                 stream_log = path.open("x", encoding="utf-8")
-                stream_event("start", generation=stream.generation, clipping=clipping_report)
+                stream_event("start", generation=stream.generation, clipping=clipping_report,
+                             task_epoch=stream.task_epoch, task_request_id=request.get("task_request_id"))
                 print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now)}), file=protocol, flush=True)
             elif operation == "stream_status":
                 if stream is None:
@@ -234,7 +247,8 @@ def main() -> None:
                 if stream is None:
                     raise ValueError("No active RTC stream")
                 actions, clipping_report = stream_actions(request)
-                result = stream.install(actions, request["receipt"], time.monotonic())
+                result = stream.install(actions, request["receipt"], time.monotonic(),
+                                        task_epoch=request.get("task_epoch"))
                 # Validate the actual last command -> first new command before acknowledging.
                 transition = target_chunk(stream.sample(time.monotonic()))
                 transition[0] = stream_last_command
@@ -246,6 +260,7 @@ def main() -> None:
                     raise ValueError("No active RTC stream")
                 result = stream.status(time.monotonic())
                 stream_event("stop", **result)
+                stream.invalidate()
                 stream = None
                 stream_log.close()
                 stream_log = None
@@ -389,6 +404,15 @@ def main() -> None:
     finally:
         from .shutdown import protect_disable_confirmation
         with protect_disable_confirmation():
+            if stream is not None:
+                try:
+                    stream_event("boundary_invalidated", task_epoch=stream.task_epoch,
+                                 generation=stream.generation, last_command=(
+                                     stream_last_command.tolist() if stream_last_command is not None else None))
+                except Exception as error:
+                    stderr(f"WARNING: RTC final event failed; disabling still required: {error}")
+                finally:
+                    stream.invalidate()  # Revoke pending snapshots before disable/readback.
             recording.stop(wait=False)
             feedback_stop.set()
             try:

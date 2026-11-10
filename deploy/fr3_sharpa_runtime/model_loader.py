@@ -39,11 +39,18 @@ def checkpoint_contract():
     stats = json.loads(config.NORM_STATS.read_text())["norm_stats"]
     validate_stats(stats, paper_algorithm=algorithm)
     from .train_rtc_contract import inspect_train_rtc
+    from .tomato_model import identify
+    tomato = identify(hashlib.sha256(config.NORM_STATS.read_bytes()).hexdigest(),
+                      hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                      hashlib.sha256(tree_path.read_bytes()).hexdigest())
     trained = inspect_train_rtc(config.NORM_STATS, checkpoint, paper_algorithm=algorithm)
+    if tomato and (config.MODEL_PROFILE.name != "full-delta" or trained or algorithm):
+        raise ValueError("Verified B Coarse checkpoint requires ordinary full-delta, excludes Absolute/Train/Paper")
     if trained and (config.MODEL_PROFILE.finetune_mode != "full"
                     or trained["semantics"] != ("delta" if config.MODEL_PROFILE.extra_delta_transform else "absolute")):
         raise ValueError("Train RTC record conflicts with profile/action semantics")
     return {
+        "tomato_model": tomato,
         "train_rtc": trained,
         "paper_algorithm": algorithm,
         "config_name": config.CONFIG_NAME,

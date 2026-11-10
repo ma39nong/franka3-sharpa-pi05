@@ -115,8 +115,14 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     if trained and lora:
         raise ValueError("Train RTC requires full checkpoint, excludes LoRA")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
+    from deploy.fr3_sharpa_runtime.tomato_model import identify
+    tomato = identify(stats_sha, manifest_sha, fingerprint(metadata))
+    if tomato and (trained or algorithm or (manual and model_type != "full-delta") or semantics == "absolute"):
+        raise ValueError("已识别的 B Coarse 必须使用普通 Full Delta，不能覆盖为 Absolute 或训练 RTC")
     identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm) + (trained["record_sha256"] if trained else "")).encode()).hexdigest()
     detected, source = KNOWN_STATS.get(stats_sha), "已核对的训练统计指纹"
+    if tomato:
+        detected, source = "delta", "已核对 normal93 B Coarse checkpoint 配套统计指纹"
     if algorithm:
         detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
     if trained:
@@ -164,7 +170,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         supported_modes += ["paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"]
     if trained:
         supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
-    return {"train_rtc": trained, "supported_modes": supported_modes,
+    return {"tomato_model": tomato, "train_rtc": trained, "supported_modes": supported_modes,
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
@@ -191,9 +197,18 @@ class DeploymentSettings:
     train_rtc_max_delay: int = 0
     model_type: str = "auto"
     rtc_initial_delay_steps: int = 0
+    task_mode: str = "none"
+    initial_stage: str = "pickup_1"
+    recovery_confirmed: bool = False
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
+        from deploy.fr3_sharpa_runtime.task_stages import stage
+        stage(self.initial_stage)
+        if self.task_mode not in ("none", "tomato-b") or type(self.recovery_confirmed) is not bool:
+            raise ValueError("任务模式或人工恢复确认无效")
+        if self.initial_stage != "pickup_1" and (self.task_mode != "tomato-b" or not self.recovery_confirmed):
+            raise ValueError("非首次阶段启动需要明确人工恢复确认并重新核对配置")
         if self.camera_policy not in ("exclusive", "require_free"):
             raise ValueError("相机策略仅支持独占接管或要求设备空闲")
         if self.mode not in MODES or self.initialization not in ("home", "current") or self.speed not in ("slow", "medium", "fast"):
@@ -216,6 +231,12 @@ class DeploymentSettings:
                                    cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type)
         if not model["profile"]:
             raise ValueError(model["evidence"])
+        if self.task_mode == "tomato-b":
+            if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
+                    or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
+                raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
+            if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
+                raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:
             raise ValueError("该模型不支持所选推理模式；请按识别结果选择RTC、Paper RTC、Train RTC或Train Paper RTC；LoRA仅支持普通串行")
         if self.mode.startswith("soft-") and model["finetune_mode"] != "full":
@@ -275,6 +296,8 @@ class DeploymentSettings:
             load_home(Path(home_files["--home-poses"]), "powder_weighing", hand_path=Path(home_files["--hand-home"]))
         options = [*common, *runtime_args, "--initialization", self.initialization, "--speed", self.speed,
                    "--execute-steps", str(self.steps), "--num-chunks", str(self.rounds)]
+        if self.task_mode != "none":
+            options += ["--task-mode", self.task_mode, "--initial-stage", self.initial_stage]
         for argument, path in home_files.items():
             options += [argument, path]
         branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True).strip()
@@ -326,4 +349,6 @@ def plan_environment(plan):
             env["SHARPA_TRAIN_RTC_SEMANTICS"] = trained["semantics"]
     env.pop("SHARPA_RECORD_SOCKET", None)
     env.pop("SHARPA_CAMERA_LEASE_FD", None)  # Never inherit another stale run's lease.
+    env.pop("SHARPA_TASK_SOCKET", None)
+    env.pop("SHARPA_TASK_RUN_ID", None)
     return env

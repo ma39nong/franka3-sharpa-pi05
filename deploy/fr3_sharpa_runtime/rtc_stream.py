@@ -71,12 +71,14 @@ def canonical_prefix(actions):
 
 
 class RTCTimeline:
-    def __init__(self, actions, now, speed_scale):
+    def __init__(self, actions, now, speed_scale, *, task_epoch=None):
         if not np.isfinite(speed_scale) or not 0 < speed_scale <= 1:
             raise ValueError("Invalid RTC speed scale")
         self.node_hz = 30.0 / math.ceil(1.0 / speed_scale)
         self.generation = 0
         self.pending = None
+        self.task_epoch = task_epoch
+        self.invalidated = False
         self._install(actions, now, 0)
 
     def _install(self, actions, now, skipped):
@@ -88,6 +90,8 @@ class RTCTimeline:
         self.pending = None
 
     def phase(self, now):
+        if self.invalidated:
+            raise ValueError("RTC timeline invalidated by task boundary")
         if not np.isfinite(now) or now < self.installed_at:
             raise ValueError("RTC clock moved backwards")
         return self.skipped + (now - self.installed_at) * self.node_hz
@@ -137,7 +141,14 @@ class RTCTimeline:
         self.pending = (now, context)
         return context.to_dict()
 
-    def install(self, actions, receipt, now):
+    def invalidate(self):
+        self.pending = None
+        self.invalidated = True
+        self.generation += 1
+
+    def install(self, actions, receipt, now, *, task_epoch=None):
+        if self.invalidated or task_epoch != self.task_epoch:
+            raise ValueError("RTC task epoch mismatch or invalidated stream")
         if self.pending is None:
             raise ValueError("No outstanding RTC snapshot")
         sent, context = self.pending

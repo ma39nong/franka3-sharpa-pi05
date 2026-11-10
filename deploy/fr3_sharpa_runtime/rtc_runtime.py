@@ -13,6 +13,10 @@ from .rtc_stream import RTCSettings
 
 
 def run_rtc(runtime, observe, worker, first, initial_observation, args, *, clock=time.monotonic, sleep=time.sleep):
+    # Versioned task RTC enters before first inference via task_execution; never
+    # accept an unversioned first block through the legacy coordinator.
+    if getattr(args, "task_mode", "none") != "none":
+        raise ValueError("Task RTC must use the execution-owned stage coordinator")
     settings = RTCSettings(
         args.rtc_initial_delay_steps,
         args.rtc_delay_buffer_size,

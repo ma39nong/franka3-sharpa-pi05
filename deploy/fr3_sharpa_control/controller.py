@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 from .plan import DeploymentSettings, allocate_run, plan_environment
 from .recording import mark_stop, rpc, write_json
@@ -94,6 +95,9 @@ class DeploymentController:
         self.export_mutex = threading.Lock()
         self.exports = []
         self.export_threads = []
+        self.task_endpoint = None
+        self.task_run_id = None
+        self.task_last = None
 
     def update(self, phase, message, **fields):
         with self.lock:
@@ -116,6 +120,20 @@ class DeploymentController:
             state["execution_running"] = bool(state.get("running") and self.operation == "execute")
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
+            endpoint, run_id = self.task_endpoint, self.task_run_id
+            task_last = self.task_last
+        if endpoint and endpoint.exists():
+            try:
+                from deploy.fr3_sharpa_runtime.task_control import task_rpc
+                # UI polling renews the execution-side five-second lease. No
+                # browser polling means no silent indefinite robot execution.
+                task_last = task_rpc(endpoint, run_id)
+                self.task_last = task_last
+            except (OSError, RuntimeError, ValueError) as error:
+                task_last = {**(task_last or {}), "communication_error": str(error), "safe_to_resume": False}
+        elif task_last and state["execution_running"]:
+            task_last = {**task_last, "communication_error": "执行端任务通信未连接", "safe_to_resume": False}
+        state["task"] = task_last
         # Keep detailed files on disk; UI always has the same three terminal panes.
         groups = {
             "hardware": [(execution_directory, "hardware.log"), (execution_directory, "hardware_cleanup.log")],
@@ -143,6 +161,16 @@ class DeploymentController:
                 with suppress(OSError, ValueError):
                     state[name] = json.loads((directory / name).read_text())
         return state
+
+    def task_command(self, values):
+        from deploy.fr3_sharpa_runtime.task_control import task_rpc
+        if not self.task_endpoint or not self.state.get("running") or self.operation != "execute":
+            raise ValueError("没有运行中的番茄任务；请先核对并启动任务执行端")
+        # A separate socket per request; task stop never queues behind another
+        # controller command. The execution owner serializes actual authority.
+        result = task_rpc(self.task_endpoint, self.task_run_id, **values)
+        self.task_last = result
+        return result
 
     def preview(self, values):
         return DeploymentSettings(**values).plan(cache=self.cache, machine_root=self.root)
@@ -193,6 +221,12 @@ class DeploymentController:
                     self.model_directory = self.directory
             self.socket = Path(tempfile.mkdtemp(prefix="sharpa-record-")) / "control.sock"
             self.runtime = self.recorder = None
+            self.task_endpoint = None
+            self.task_run_id = None
+            self.task_last = None
+            if operation == "execute" and plan["settings"].get("task_mode") == "tomato-b":
+                self.task_endpoint = Path(tempfile.mkdtemp(prefix="sharpa-task-")) / "task.sock"
+                self.task_run_id = uuid.uuid4().hex
             self.state = {"phase": "validating", "message": "正在检查模型契约和参数", "running": True,
                           "plan": self.plan, "stop_requested": False}
             try:
@@ -204,6 +238,9 @@ class DeploymentController:
             except Exception:
                 self.state.update(phase="failed", running=False, message="配置或归档目录无法写入；未启动设备")
                 self.socket.parent.rmdir()
+                if self.task_endpoint:
+                    with suppress(OSError):
+                        self.task_endpoint.parent.rmdir()
                 raise
             self.thread = threading.Thread(target=self._run_model if operation == "model" else self._run, daemon=True, name="sharpa-deployment")
             self.thread.start()
@@ -414,6 +451,9 @@ class DeploymentController:
         camera_lease = None
         trace = directory / "logs"
         env["SHARPA_SHUTDOWN_REPORT_DIR"] = str(trace)
+        if self.task_endpoint:
+            env["SHARPA_TASK_SOCKET"] = str(self.task_endpoint)
+            env["SHARPA_TASK_RUN_ID"] = self.task_run_id
         if self.plan["settings"]["record"]:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
         try:
@@ -504,6 +544,16 @@ class DeploymentController:
                 self.socket.parent.rmdir()
             if camera_lease is not None:
                 camera_lease.close()
+            if self.task_endpoint:
+                with suppress(OSError, ValueError):
+                    self.task_last = json.loads((trace / "task-final.json").read_text())
+                if failure:
+                    previous_error = (self.task_last or {}).get("last_error")
+                    self.task_last = {**(self.task_last or {}), "execution_state": "FAULT", "safe_to_resume": False,
+                                      "last_error": f"{previous_error}；{failure}" if previous_error else failure}
+                self.task_endpoint.unlink(missing_ok=True)
+                with suppress(OSError):
+                    self.task_endpoint.parent.rmdir()
             self.update("failed" if failure else "stopped" if self.cancel.is_set() else "finished",
                         failure or "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动", running=False)
 
