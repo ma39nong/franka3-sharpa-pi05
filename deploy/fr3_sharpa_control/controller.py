@@ -64,6 +64,9 @@ def probe(mode, port):
     if mode == "paper-rtc":
         from deploy.fr3_sharpa_runtime.rtc_stream import require_paper_capabilities
         require_paper_capabilities(metadata)
+    elif mode == "flashRTC":
+        if metadata.get("algorithm") != "flash" or metadata.get("flash_async_supported") is not True:
+            raise ValueError("当前服务不支持flashRTC")
     elif mode == "soft-async":
         from deploy.fr3_sharpa_runtime.async_soft_stream import require_capabilities
         require_capabilities(metadata)
@@ -149,8 +152,9 @@ class DeploymentController:
 
     @staticmethod
     def _model_identity(plan):
+        mode = "flash" if plan["model"]["profile"] == "flash-absolute" else plan["settings"]["mode"]
         return (plan["settings"]["repository"], plan["commit"], plan["model"]["identity"],
-                plan["model"]["profile"], plan["port"], plan["settings"]["mode"])
+                plan["model"]["profile"], plan["port"], mode)
 
     def start_model(self, values):
         # Home, playback speed/steps and recording are execution settings. Model
@@ -158,7 +162,9 @@ class DeploymentController:
         original_values = dict(values)
         mode = values.get("mode", "serial")
         values = {**values, "initialization": "current", "record": False, "rounds": 0,
-                  "speed": "fast" if mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+                  "speed": "fast" if mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc", "flashRTC") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+        if mode == "flashRTC":
+            values["mode"] = "flash"  # Same model; execution limits belong to execution preview.
         return self.start(values, operation="model", persisted_values=original_values)
 
     def _require_model(self, plan, env):

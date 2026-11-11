@@ -6,6 +6,7 @@ from .flash_contract import GROUPS
 from .flash_history import FlashHistoryBuffer
 from .ros_observation import MAX_AGE_NS
 from .ros_observation import ObservationProvider
+from .ros_observation import TOPICS
 from .ros_observation import ordered_state
 from .ros_observation import rgb_image
 from .ros_observation import stamp_ns
@@ -18,9 +19,19 @@ class FlashObservationProvider(ObservationProvider):
         super().__init__(**kwargs)
 
     def subscription_callback(self, key):
-        def callback(message, info):
-            gid = getattr(info, "publisher_gid", None)
-            if gid is None:
+        def callback(message, info=None):
+            # Older workstation rclpy executors pass only the message. Resolve
+            # a unique publisher from the DDS graph instead of discarding all
+            # history or treating a missing identity as a stable publisher.
+            if info is None:
+                publishers = self.node.get_publishers_info_by_topic(TOPICS[key])
+                if len(publishers) != 1:
+                    self.flash_history.reset(f"{key} requires exactly one publisher; found {len(publishers)}")
+                    return
+                gid = getattr(publishers[0], "endpoint_gid", None)
+            else:
+                gid = getattr(info, "publisher_gid", None)
+            if gid is None or not bytes(gid) or not any(bytes(gid)):
                 self.flash_history.reset(f"{key} publisher identity unavailable")
                 return
             gid = bytes(gid)

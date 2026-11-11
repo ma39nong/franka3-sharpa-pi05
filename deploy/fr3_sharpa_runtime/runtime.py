@@ -85,7 +85,7 @@ class SharpaRuntime:
             self._require_rtc(metadata)
         return metadata
 
-    def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120):
+    def infer_chunk(self, observation: dict, *, rtc_context=None, response_timeout=120, deadline_monotonic=None):
         config.require_checkpoint()
         entered_ns = time.monotonic_ns()
         # Import here so the pure adapter remains importable in Pixi ROS2.
@@ -105,8 +105,17 @@ class SharpaRuntime:
             clean = validate_observation(observation)
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
-        with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=5) as ws:
-            metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
+        def bounded_timeout(limit):
+            if deadline_monotonic is None:
+                return limit
+            remaining = deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Policy request total deadline exceeded")
+            return min(limit, remaining)
+
+        with connect(self.policy_url, compression=None, max_size=None,
+                     open_timeout=bounded_timeout(10), close_timeout=1 if deadline_monotonic is not None else 5) as ws:
+            metadata = msgpack_numpy.unpackb(ws.recv(timeout=bounded_timeout(10)))
             timing["websocket_metadata_ready_monotonic_ns"] = time.monotonic_ns()
             validation_start = time.monotonic_ns()
             config.validate_policy_metadata(metadata)
@@ -124,9 +133,12 @@ class SharpaRuntime:
             payload = msgpack_numpy.Packer().pack(clean)
             timing["observation_msgpack_ms"] = (time.monotonic_ns()-start)/1e6
             timing["policy_request_send_monotonic_ns"] = time.monotonic_ns()
+            if deadline_monotonic is not None:
+                # Bound a peer that sends metadata then stops reading images.
+                ws.socket.settimeout(bounded_timeout(response_timeout))
             ws.send(payload)
             timing["policy_request_sent_monotonic_ns"] = time.monotonic_ns()
-            response = ws.recv(timeout=response_timeout)
+            response = ws.recv(timeout=bounded_timeout(response_timeout))
             timing["response_receive_monotonic_ns"] = time.monotonic_ns()
         if isinstance(response, str):
             raise RuntimeError(f"Policy server error: {response}")

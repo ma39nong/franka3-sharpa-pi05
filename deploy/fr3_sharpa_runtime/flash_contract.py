@@ -45,6 +45,7 @@ CAPABILITIES = {
     "supported_modes": ["serial"],
     "action_decoding": "flash_internal_denormalize",
 }
+EXECUTION_CAPABILITIES = {"supported_modes": ["serial", "flash", "flashRTC"], "flash_async_supported": True}
 CAMERAS = {"head": "cam0", "left_wrist": "cam2", "right_wrist": "cam1"}
 GROUPS = ("left_arm", "left_hand", "right_arm", "right_hand")
 
@@ -211,7 +212,7 @@ def inspect_native_flash(checkpoint, *, norm_stats=None, backend=None):
     # Historical wire field name retained for compatibility. This is an
     # in-memory identity, not a file that the operator must create.
     identity = digest_json({"params": params_hash, "stats": stats_hash, "model": settings["model_config"]})
-    return {**CAPABILITIES, "config_name": CONFIG_NAME, "checkpoint": str(root),
+    return {**CAPABILITIES, **EXECUTION_CAPABILITIES, "config_name": CONFIG_NAME, "checkpoint": str(root),
             "norm_stats": settings["norm_stats"], "checkpoint_manifest_sha256": params_hash,
             "normalization_sha256": stats_hash, "flash_manifest_sha256": identity,
             "flash_backend_identity": backend_identity, "flash_adapter_identity": adapter,
@@ -361,7 +362,7 @@ def inspect_flash(checkpoint, *, norm_stats=None, backend=None):
     )
     adapter_identity = digest_json({name: sha(adapter_root / name) for name in adapter_files})
     return {
-        **CAPABILITIES,
+        **CAPABILITIES, **EXECUTION_CAPABILITIES,
         "flash_adapter_identity": adapter_identity,
         "config_name": CONFIG_NAME,
         "checkpoint": str(root),

@@ -176,7 +176,7 @@ def test_flash_and_ordinary_profiles_are_mutually_exclusive(package, monkeypatch
     root, repo = package
     found = inspect_checkpoint(root)
     assert found["profile"] == "flash-absolute"
-    assert found["supported_modes"] == ["serial"]
+    assert found["supported_modes"] == ["serial", "flash", "flashRTC"]
     with pytest.raises(ValueError, match="Absolute"):
         inspect_checkpoint(root, semantics="delta")
     monkeypatch.setattr(config, "CHECKPOINT", root)
@@ -496,6 +496,55 @@ def test_publisher_reconnect_invalidates_old_flash_history():
     assert provider.flash_history.session_id != previous
 
 
+def test_message_only_ros_callback_tracks_unique_graph_publisher_and_reconnect():
+    from deploy.fr3_sharpa_runtime.flash_observation import FlashObservationProvider
+    from deploy.fr3_sharpa_runtime.ros_observation import TOPICS
+
+    provider = object.__new__(FlashObservationProvider)
+    provider.flash_history = FlashHistoryBuffer()
+    provider.publisher_ids = {}
+    publishers = [SimpleNamespace(endpoint_gid=list(b"first"))]
+    topics, remembered = [], []
+
+    def lookup(topic):
+        topics.append(topic)
+        return publishers
+
+    provider.node = SimpleNamespace(get_publishers_info_by_topic=lookup)
+    provider.remember = lambda key, message: remembered.append((key, message))
+    callback = provider.subscription_callback("left_hand")
+    message = object()
+    callback(message)  # The installed ROS executor's one-argument invocation.
+    previous = provider.flash_history.session_id
+    callback(message)
+    assert provider.flash_history.session_id == previous
+    assert provider.publisher_ids["left_hand"] == b"first"
+    assert remembered == [("left_hand", message)] * 2
+    assert topics == [TOPICS["left_hand"]] * 2
+    publishers[:] = [SimpleNamespace(endpoint_gid=list(b"second"))]
+    callback(message)
+    assert provider.flash_history.session_id != previous
+    assert provider.publisher_ids["left_hand"] == b"second"
+
+
+@pytest.mark.parametrize("publishers", [[], [SimpleNamespace(endpoint_gid=[])],
+    [SimpleNamespace(endpoint_gid=[0] * 24)], [SimpleNamespace()],
+    [SimpleNamespace(endpoint_gid=[1]), SimpleNamespace(endpoint_gid=[2])]])
+def test_message_only_ros_callback_rejects_missing_or_ambiguous_identity(publishers):
+    from deploy.fr3_sharpa_runtime.flash_observation import FlashObservationProvider
+
+    provider = object.__new__(FlashObservationProvider)
+    provider.flash_history = FlashHistoryBuffer()
+    provider.publisher_ids = {}
+    provider.node = SimpleNamespace(get_publishers_info_by_topic=lambda _: publishers)
+    remembered = []
+    provider.remember = lambda *args: remembered.append(args)
+    previous = provider.flash_history.session_id
+    provider.subscription_callback("cam1")(object())
+    assert provider.flash_history.session_id != previous
+    assert not remembered
+
+
 def test_real_tokenizer_matches_native_state_bucketing():
     from deploy.fr3_sharpa_flash.policy import load_tokenizer
     from deploy.fr3_sharpa_flash.policy import preprocess
@@ -673,11 +722,64 @@ def test_gui_capability_rejects_flash_rtc_and_preserves_serial(package):
     plan = settings.plan()
     assert plan["service"][1] == "deploy/fr3_sharpa_runtime/serve_flash.sh"
     assert plan["port"] == 18768
-    assert plan["model"]["supported_modes"] == ["serial"]
+    assert plan["model"]["supported_modes"] == ["serial", "flash", "flashRTC"]
     from dataclasses import replace
 
     with pytest.raises(ValueError, match="支持"):
         replace(settings, mode="rtc").plan()
+
+
+def test_flash_named_modes_generate_shared_lifecycle_commands(package):
+    from dataclasses import replace
+    from deploy.fr3_sharpa_control.plan import DeploymentSettings, repository_info
+
+    root, _ = package
+    deployment = Path(__file__).resolve().parents[3]
+    settings = DeploymentSettings(str(deployment), str(root), model_type="flash-absolute",
+        mode="flash", speed="fast", initialization="current", rounds=1)
+    serial = settings.plan()
+    assert serial["execute"][1] == "deploy/fr3_sharpa_runtime/runtime.sh"
+    assert serial["execute"][serial["execute"].index("--broker-mode") + 1] == "flash"
+    with pytest.raises(ValueError, match="configured"):
+        replace(settings, mode="flashRTC").plan()
+    parallel = replace(settings, mode="flashRTC", flash_seam_position_rad=.02,
+        flash_seam_velocity_rad_s=.2, flash_feedback_error_rad=.05).plan()
+    assert parallel["service"] == serial["service"]
+    assert parallel["execute"][parallel["execute"].index("--broker-mode") + 1] == "flashRTC"
+    assert "--flash-seam-position-rad" in parallel["check"]
+    from deploy.fr3_sharpa_control.controller import DeploymentController
+    assert DeploymentController._model_identity(serial) == DeploymentController._model_identity(parallel)
+    assert "flashRTC" in repository_info(deployment)["modes"]
+    with pytest.raises(ValueError, match="fast"):
+        replace(settings, mode="flashRTC", speed="slow", flash_seam_position_rad=.02,
+            flash_seam_velocity_rad_s=.2, flash_feedback_error_rad=.05).plan()
+
+
+def test_flash_model_warmup_does_not_require_execution_seam_limits(tmp_path, monkeypatch):
+    from deploy.fr3_sharpa_control.controller import DeploymentController
+    controller = DeploymentController(tmp_path)
+    monkeypatch.setattr(controller, "start", lambda values, **options: (values, options))
+    values, options = controller.start_model({"mode": "flashRTC", "flash_seam_position_rad": 0})
+    assert values["mode"] == "flash"
+    assert options["persisted_values"]["mode"] == "flashRTC"
+
+
+@pytest.mark.parametrize("broker,extra,valid", [
+    ("flash", [], True),
+    ("flashRTC", ["--flash-seam-position-rad", ".02", "--flash-seam-velocity-rad-s", ".2",
+                  "--flash-feedback-error-rad", ".05", "--speed", "fast"], True),
+    ("flashRTC", [], False),
+    ("flashRTC", ["--flash-seam-position-rad", ".02", "--flash-seam-velocity-rad-s", ".2",
+                  "--flash-feedback-error-rad", ".05", "--speed", "slow"], False),
+])
+def test_flash_named_cli_modes_without_hardware(package, broker, extra, valid):
+    root, _ = package
+    env = {**os.environ, "SHARPA_MODEL_PROFILE": "flash-absolute", "SHARPA_FLASH_CHECKPOINT": str(root)}
+    result = subprocess.run([sys.executable, "-m", "deploy.fr3_sharpa_runtime.run", "--check",
+        "--broker-mode", broker, *extra], env=env, capture_output=True, text=True)
+    assert (result.returncode == 0) is valid, result.stderr
+    if valid:
+        assert json.loads(result.stdout)["broker_mode"] == broker
 
 
 def test_cli_without_report_reaches_existing_ros_preconditions_without_importing_sdk(package):
@@ -750,7 +852,7 @@ serve(Sink(), metadata, int(sys.argv[2]))
                 if child.poll() is not None or time.monotonic() > deadline:
                     raise
                 time.sleep(0.02)
-        _, actions, _ = client.infer_chunk(warmup_observation())
+        _, actions, _ = client.infer_chunk(warmup_observation(), deadline_monotonic=time.monotonic() + 5)
         np.testing.assert_array_equal(actions, np.full((50, 58), 0.125, np.float32))
     finally:
         child.terminate()
@@ -784,7 +886,7 @@ def test_native_step_and_manual_plan_need_no_generated_copies(native_step, origi
     settings = DeploymentSettings(str(Path(__file__).resolve().parents[3]), str(root),
                                   model_type="flash-absolute", mode="serial", steps=15, rounds=0)
     plan = settings.plan()
-    assert plan["model"]["supported_modes"] == ["serial"]
+    assert plan["model"]["supported_modes"] == ["serial", "flash", "flashRTC"]
     assert plan["settings"]["rounds"] == 0
     assert plan_environment(plan)["SHARPA_FLASH_MAX_PLAN_AGE_MS"] == "0"
     assert fc.flash_settings(root)["model_config"]["action_q01"] == [-4.0] * 58

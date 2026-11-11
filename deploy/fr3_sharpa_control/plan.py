@@ -15,12 +15,17 @@ KNOWN_STATS = {
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
 MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES.update(flash="flash · 串行", flashRTC="flashRTC · 后台推理连续执行")
 
 
 def repository_info(path):
     repo = Path(path).expanduser().resolve()
     branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True, stderr=subprocess.DEVNULL).strip()
     modes = ["serial", "rtc"]
+    if (repo / "deploy/fr3_sharpa_runtime/flash_contract.py").is_file():
+        modes.append("flash")
+    if (repo / "deploy/fr3_sharpa_runtime/flash_runtime.py").is_file():
+        modes.append("flashRTC")
     if (repo / "deploy/fr3_sharpa_runtime/train_rtc.py").is_file():
         modes.append("train-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/train_paper_rtc.py").is_file():
@@ -206,6 +211,9 @@ class DeploymentSettings:
     model_type: str = "auto"
     rtc_initial_delay_steps: int = 0
     flash_max_plan_age_ms: float = 0
+    flash_seam_position_rad: float = 0
+    flash_seam_velocity_rad_s: float = 0
+    flash_feedback_error_rad: float = 0
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -215,12 +223,17 @@ class DeploymentSettings:
             raise ValueError("不支持的模式、启动姿态或速度")
         if type(self.rounds) is not int or self.rounds < 0 or type(self.steps) is not int or type(self.record) is not bool:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
-        if self.mode == "serial" and not 1 <= self.steps <= 50:
+        if self.mode in ("serial", "flash") and not 1 <= self.steps <= 50:
             raise ValueError("串行每轮执行动作数必须在1..50")
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
         if self.mode.startswith("soft-") and self.steps != 26:
             raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
+        if self.mode == "flashRTC":
+            from deploy.fr3_sharpa_runtime.flash_stream import FlashSettings
+            FlashSettings(self.flash_seam_position_rad, self.flash_seam_velocity_rad_s, self.flash_feedback_error_rad)
+            if self.speed != "fast" or not 1 <= self.steps <= 24:
+                raise ValueError("flashRTC需fast、1..24重规划触发节点")
         if type(self.train_rtc_max_delay) is not int or not 0 <= self.train_rtc_max_delay < 50:
             raise ValueError("训练RTC最大延迟必须为0..49整数，0表示自动识别")
         if type(self.rtc_initial_delay_steps) is not int or not 0 <= self.rtc_initial_delay_steps <= 25:
@@ -253,6 +266,12 @@ class DeploymentSettings:
         if model["profile"] == "flash-absolute":
             service = shared + "serve_flash.sh"
             description = f"FLASH K6/stride1/NFE1/history8；预测50，串行执行前{self.steps}；支持连续多轮"
+            runtime_args = ["--broker-mode", "flash"]
+            if self.mode == "flashRTC":
+                runtime_args = ["--broker-mode", "flashRTC", "--flash-seam-position-rad", str(self.flash_seam_position_rad),
+                    "--flash-seam-velocity-rad-s", str(self.flash_seam_velocity_rad_s),
+                    "--flash-feedback-error-rad", str(self.flash_feedback_error_rad)]
+                description = f"flashRTC：{self.steps}节点触发后台推理；30Hz按观测相位切换；无RTC模型前缀条件；最后一代执行到触发进度结束"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]

@@ -38,7 +38,7 @@ def main() -> None:
     args = parser.parse_args()
     if config.MODEL_PROFILE.name == "flash-absolute":
         from .flash_contract import execution_budget
-        config.prepare_policy_validation()
+        flash_identity = config.prepare_policy_validation()["flash_manifest_sha256"]
         flash_budget = execution_budget(config.require_checkpoint())
     from .shutdown import DisableSettings, save_shutdown_report, stderr
     DisableSettings.from_env()  # Reject invalid shutdown bounds before touching devices.
@@ -69,6 +69,21 @@ def main() -> None:
     stream_tick = None
     stream_log = None
     stream_last_command = None
+
+    def validate_flash_commands(commands):
+        # Existing range API consumes 50 rows. Preserve every transition while
+        # checking arbitrary committed/suffix sequences with overlapping windows.
+        for offset in range(0, len(commands), 49):
+            part = commands[offset:offset + 50]
+            padded = np.repeat(part[-1:], 50, axis=0)
+            padded[:len(part)] = part
+            validate_action_ranges(padded)
+
+    def verify_flash_plan(plan):
+        if config.MODEL_PROFILE.name != "flash-absolute":
+            raise ValueError("FLASH stream requires FLASH model profile")
+        from .flash_stream import validate_execution_plan
+        validate_execution_plan(plan, flash_identity, time.monotonic(), flash_budget)
 
     def stream_event(name, **fields):
         if stream_log is not None:
@@ -177,6 +192,14 @@ def main() -> None:
                         raise RuntimeError("RTC 30Hz deadline missed; stopped")
                     current = fresh_feedback()
                     command = stream.sample(now)
+                    if hasattr(stream, "settings"):
+                        if np.max(np.abs(current.state - stream_last_command)) > stream.settings.feedback_error_rad:
+                            raise RuntimeError("FLASH feedback tracking error; stopped")
+                        if np.max(np.abs(command - stream_last_command)) > stream.settings.seam_position_rad:
+                            raise RuntimeError("FLASH actual command step exceeds configured position limit")
+                        # Stop early enough to use the existing shutdown path.
+                        if stream.status(now)["remaining_s"] <= stream.settings.reserve_s:
+                            raise TimeoutError("FLASH trajectory reached stop reserve")
                     transition = target_chunk(command)
                     transition[0] = stream_last_command
                     validate_action_ranges(transition)  # Includes the actual splice slew.
@@ -196,9 +219,83 @@ def main() -> None:
             request = json.loads(line)
             clipping_report = None
             operation = request.get("operation")
-            if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "close"}:
+            if stream is not None and operation not in {"stream_status", "stream_snapshot", "stream_install", "stream_stop", "close", "flash_snapshot", "flash_install"}:
                 raise ValueError("Cannot mix serial motion operations with an active RTC stream")
-            if operation == "stream_start":
+            if operation == "flash_prepare":
+                if config.MODEL_PROFILE.name != "flash-absolute":
+                    raise ValueError("FLASH prepare requires FLASH profile")
+                verify_flash_plan(request["plan"])
+                if time.monotonic() - request["plan"]["anchor_s"] > 1:
+                    raise TimeoutError("FLASH approach prediction expired")
+                actions, clipping_report = stream_actions(request)
+                current = fresh_feedback()
+                frames, _ = chunk_command_frames(actions, current.state, execute_steps=1,
+                    approach_speed_rad_s=float(request["approach_speed_rad_s"]))
+                executor.resume_stream()
+                def send_flash_initial(frame):
+                    executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
+                    publish_frame(frame)
+                play_command_frames(frames, send_flash_initial, fresh_feedback)
+                if recording.enabled:
+                    recording.start()
+                print(json.dumps({"status": "PASS", "completed_monotonic_ns": time.monotonic_ns()}), file=protocol, flush=True)
+            elif operation == "flash_start":
+                from .flash_stream import FlashAsyncTimeline, FlashSettings
+                verify_flash_plan(request["plan"])
+                actions, clipping_report = stream_actions(request)
+                current = fresh_feedback()
+                now = time.monotonic()
+                plan = request["plan"]
+                settings = FlashSettings(**request["settings"])
+                candidate = FlashAsyncTimeline(actions, plan["anchor_s"], now,
+                    request["run_session_id"], plan["model_identity"], plan["history_session"], settings)
+                command = candidate.sample(now)
+                if np.max(np.abs(command - current.state)) > settings.seam_position_rad:
+                    raise ValueError("FLASH first target unsafe after approach; motion not started")
+                validate_flash_commands(np.vstack([current.state, actions[candidate.phase(now):]]))
+                path = Path(request["events_path"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                stream_log = path.open("x", encoding="utf-8")
+                stream = candidate
+                stream_tick = now
+                stream_last_command = current.state.copy()
+                executor.resume_stream()
+                stream_event("flash_start", plan=plan, clipping=clipping_report, actions=actions.tolist())
+                print(json.dumps({"status": "PASS", **stream.status(now)}), file=protocol, flush=True)
+            elif operation in {"flash_snapshot", "flash_install"}:
+                from .flash_stream import FlashAsyncTimeline
+                if not isinstance(stream, FlashAsyncTimeline):
+                    raise ValueError("No active FLASH stream")
+                if operation == "flash_snapshot":
+                    stream.snapshot(request["request"], time.monotonic())
+                    print(json.dumps({"status": "PASS"}), file=protocol, flush=True)
+                else:
+                    # Rejection is atomic and leaves old accepted commands intact.
+                    try:
+                        verify_flash_plan(request["plan"])
+                        if any(request["plan"][key] != request["request"][key] for key in
+                               ("anchor_s", "request_id", "model_identity", "history_session")):
+                            raise ValueError("FLASH candidate/request mismatch")
+                        actions, clipping_report = stream_actions(request)
+                        current = fresh_feedback()
+                        now = time.monotonic()
+                        switch = stream_tick + 2 * DT_NS / 1e9
+                        result = stream.install(actions, request["request"], now, switch,
+                            stream_last_command, current.state, validate_flash_commands, next_tick=stream_tick)
+                        if time.monotonic() >= switch - DT_NS / 1e9:
+                            stream.pending = None
+                            raise TimeoutError("FLASH validation exceeded commitment budget")
+                        stream_event("flash_scheduled", **result, plan=request["plan"],
+                                     clipping=clipping_report, actions=actions.tolist())
+                        response = {"status": "PASS", "accepted": True, "installation": result}
+                    except (ValueError, TimeoutError) as error:
+                        stream.cancel_request()
+                        stream_event("flash_rejected", reason=str(error))
+                        response = {"status": "PASS", "accepted": False, "reason": str(error)}
+                    print(json.dumps(response), file=protocol, flush=True)
+            elif operation == "stream_start":
+                if config.MODEL_PROFILE.name == "flash-absolute":
+                    raise ValueError("FLASH must use flash_start, never RTC timeline")
                 from .rtc_stream import RTCTimeline
                 actions, clipping_report = stream_actions(request)
                 current = fresh_feedback()
@@ -227,7 +324,7 @@ def main() -> None:
                     raise ValueError("No active RTC stream")
                 print(json.dumps({"status": "PASS", **stream.status(time.monotonic())}), file=protocol, flush=True)
             elif operation == "stream_snapshot":
-                if stream is None:
+                if stream is None or hasattr(stream, "settings"):
                     raise ValueError("No active RTC stream")
                 context = stream.snapshot(time.monotonic(), delay_steps=request["delay_steps"],
                     schedule=request["schedule"], weight=request["weight"], hard_prefix=request.get("hard_prefix", False))
@@ -235,7 +332,7 @@ def main() -> None:
                 stream_event("snapshot", context=context)
                 print(json.dumps({"status": "PASS", "context": context}), file=protocol, flush=True)
             elif operation == "stream_install":
-                if stream is None:
+                if stream is None or hasattr(stream, "settings"):
                     raise ValueError("No active RTC stream")
                 actions, clipping_report = stream_actions(request)
                 result = stream.install(actions, request["receipt"], time.monotonic())
@@ -250,6 +347,8 @@ def main() -> None:
                     raise ValueError("No active RTC stream")
                 result = stream.status(time.monotonic())
                 stream_event("stop", **result)
+                if hasattr(stream, "stop"):
+                    stream.stop()
                 stream = None
                 stream_log.close()
                 stream_log = None

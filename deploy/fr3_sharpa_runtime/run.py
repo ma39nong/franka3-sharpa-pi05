@@ -244,13 +244,22 @@ def execute_policy_prepare(args):
         if home_arms is not None:
             from .home_pose import home_target
             initial_target = home_target(home_arms, initial["observation/state"])
-        if getattr(args, "broker_mode", "serial") == "rtc":
+        if getattr(args, "broker_mode", "serial") in ("rtc", "flashRTC"):
             if initial_target is not None:
                 prepared = worker.request({"operation": "prepare", "target": initial_target.tolist(),
                     "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": 0.02, "home_recovery": True})
                 if prepared.get("status") != "PASS":
                     raise RuntimeError("Home failed before RTC")
                 initial = observation_after_completion(args, prepared)
+            if args.broker_mode == "flashRTC":
+                from .flash_runtime import run_flash_async
+                from .flash_stream import observation_anchor
+                anchor = observation_anchor(initial, time.monotonic())
+                first_flash = runtime.infer_chunk(initial, response_timeout=1,
+                                                 deadline_monotonic=anchor + 1)
+                return run_flash_async(runtime,
+                    lambda **options: live_observation(args.ros_overlay, args.prompt, **options),
+                    worker, first_flash, initial, args)
             from .rtc_runtime import run_rtc
             return run_rtc(runtime, lambda **options: live_observation(args.ros_overlay, args.prompt, **options),
                            worker, infer(initial), initial, args)
@@ -416,8 +425,11 @@ def main() -> None:
                         help="Execute first N of 50 predicted actions, then reobserve/reinfer (default 15)")
     parser.add_argument("--prediction-clip-rad", type=float, default=0.05,
                         help="Maximum per-value correction to hand limits for predicted actions only; 0 is strict")
-    parser.add_argument("--broker-mode", choices=("serial", "rtc"), default="serial",
+    parser.add_argument("--broker-mode", choices=("serial", "rtc", "flash", "flashRTC"), default="serial",
                         help="serial keeps existing behavior; rtc overlaps inference and accepted motion")
+    parser.add_argument("--flash-seam-position-rad", type=float, default=0)
+    parser.add_argument("--flash-seam-velocity-rad-s", type=float, default=0)
+    parser.add_argument("--flash-feedback-error-rad", type=float, default=0)
     parser.add_argument("--train-paper-rtc", action="store_true", help="Require trained Paper hard-prefix service")
     parser.add_argument("--train-rtc", action="store_true", help="Require trained hard-prefix RTC service")
     parser.add_argument("--paper-rtc", action="store_true", help="Require a warmed Paper RTC short-reference adapter")
@@ -462,12 +474,18 @@ def main() -> None:
     if args.sharpa_backend == "litchibot" and args.initialization == "home":
         parser.error("--home/--initialization home requires sdk_direct")
     if config.MODEL_PROFILE.name == "flash-absolute":
-        if args.broker_mode != "serial" or args.paper_rtc or args.train_rtc or args.train_paper_rtc:
-            parser.error("FLASH v1 supports serial Absolute only; no RTC/Paper/TrainRTC")
+        if args.broker_mode not in ("serial", "flash", "flashRTC") or args.paper_rtc or args.train_rtc or args.train_paper_rtc:
+            parser.error("FLASH v1 supports flash/flashRTC Absolute only; no RTC/Paper/TrainRTC")
         if args.mode == "execute" or args.execute:
             from .flash_contract import execution_budget
             config.prepare_policy_validation()
             execution_budget(config.require_checkpoint())
+    elif args.broker_mode in ("flash", "flashRTC"):
+        parser.error("flash/flashRTC require --model flash-absolute")
+    # Retain the original serial implementation and trace for the public flash name.
+    flash_serial = args.broker_mode == "flash"
+    if flash_serial:
+        args.broker_mode = "serial"
     if args.execute_steps is None:
         args.execute_steps = 15 if args.sharpa_backend == "sdk_direct" else 50
     if not 1 <= args.execute_steps <= config.ACTION_HORIZON:
@@ -495,6 +513,15 @@ def main() -> None:
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name
     args.execute_speed_scale = profile.execute_speed_scale
+    if args.broker_mode == "flashRTC":
+        from .flash_runtime import settings_from_args
+        try:
+            settings_from_args(args)
+        except ValueError as error:
+            parser.error(str(error))
+        if (args.execute_speed_scale != 1 or args.sharpa_backend != "sdk_direct"
+                or args.initialization == "policy" or not 1 <= args.execute_steps <= 24 or args.num_chunks < 0):
+            parser.error("flashRTC requires fast, sdk_direct, current/home, trigger 1..24, chunks >=0")
     if args.train_rtc:
         from .model_loader import checkpoint_contract
         trained_metadata = checkpoint_contract()
@@ -518,10 +545,13 @@ def main() -> None:
                 or not np.isfinite(args.prepare_speed_rad_s) or args.prepare_speed_rad_s <= 0
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
-        print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
+        print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": "flash" if flash_serial else args.broker_mode,
                           "paper_rtc": args.paper_rtc, "train_rtc": args.train_rtc,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
+                          "flash_settings": ({"seam_position_rad": args.flash_seam_position_rad,
+                              "seam_velocity_rad_s": args.flash_seam_velocity_rad_s,
+                              "feedback_error_rad": args.flash_feedback_error_rad} if args.broker_mode == "flashRTC" else None),
                           "prepare_speed_rad_s": args.prepare_speed_rad_s,
                           "home_tolerance_rad": HOME_TOLERANCE_RAD,
                           "num_chunks": args.num_chunks, "action_hz": config.ACTION_HZ,
@@ -554,6 +584,8 @@ def main() -> None:
             parser.error("Paper checkpoints require --paper-rtc; ordinary checkpoints use RTC without it")
     if args.broker_mode == "rtc" and args.mode != "execute":
         parser.error("--broker-mode rtc is for execute or offline --check only")
+    if args.broker_mode == "flashRTC" and args.mode != "execute":
+        parser.error("--broker-mode flashRTC is for execute or offline --check only")
     if args.mode == "execute":
         if not args.enable_hardware or args.episode_parquet:
             parser.error("execute requires --enable-hardware and live ROS observations; recorded samples are forbidden")
