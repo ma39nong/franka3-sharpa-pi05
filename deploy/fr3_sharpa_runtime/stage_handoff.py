@@ -173,11 +173,20 @@ class StageTimeline(RTCTimeline):
             alpha = i / BRIDGE_STEPS
             weight = alpha**3 * (10 - 15 * alpha + 6 * alpha**2)
             commands.append((1 - weight) * self.source_curve().sample(t) + weight * candidate.sample(t))
+        bridge_command_count = len(commands)
+        # Admit the actual bridge against the gateway speed. Ordinary RTC may
+        # replace the predicted suffix before it is played; its future speed
+        # is diagnostic, rather than an extra cross-stage installation gate.
+        for previous, command in zip(commands, commands[1:]):
+            validate_command_step(previous, command, arm_speed)
         # Also validate candidate continuation and the bridge's exit boundary.
         for i in range(BRIDGE_STEPS + 1, math.ceil(50 - candidate.skipped)):
             commands.append(candidate.sample(start + i * DT))
-        for previous, command in zip(commands, commands[1:]):
-            validate_command_step(previous, command, arm_speed)
+        from .sdk_direct import SDK_SLEW_LIMIT_RAD
+        continuation = np.asarray(commands[bridge_command_count - 1 :])
+        hand_delta = np.diff(continuation[:, np.r_[7:29, 36:58]], axis=0)
+        if np.any(np.abs(hand_delta) >= SDK_SLEW_LIMIT_RAD):
+            raise ValueError("Online handover exceeds existing Sharpa slew limit")
         # Reuse native full-chunk range/hand slew validator, padded by holding
         # the last command only for validation; no held tail is executed.
         for offset in range(0, len(commands) - 1, 49):
@@ -186,6 +195,8 @@ class StageTimeline(RTCTimeline):
             padded[: len(window)] = window
             validate(padded)
         self.bridge = dict(start=start, candidate=candidate)
+        arm_delta = np.diff(continuation[:, np.r_[0:7, 29:36]], axis=0)
+        continuation_arm_speed = float(np.max(np.abs(arm_delta)) / DT) if arm_delta.size else 0.0
         return dict(
             accepted=True,
             applied=False,
@@ -197,6 +208,9 @@ class StageTimeline(RTCTimeline):
             observation_age_s=now - captured,
             alignment_rounding_s=0.0,
             trajectory_metrics=trajectory_metrics(commands),
+            speed_validation_scope="bridge_and_entry",
+            continuation_arm_speed_rad_s=continuation_arm_speed,
+            continuation_exceeds_gateway_speed=continuation_arm_speed > arm_speed,
         )
 
     def snapshot(self, *args, **kwargs):

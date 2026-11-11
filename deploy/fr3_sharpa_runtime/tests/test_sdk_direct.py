@@ -1,4 +1,4 @@
-from deploy.fr3_sharpa_runtime.protocol import DT_NS, FPS
+from deploy.fr3_sharpa_runtime.protocol import DT_NS
 import numpy as np
 import pytest
 
@@ -13,10 +13,15 @@ def chunk(value=0.0):
     return np.full((50, 58), value, dtype=np.float32)
 
 
-def test_direct_validator_rejects_slew():
+@pytest.mark.parametrize("part", [LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE])
+@pytest.mark.parametrize("delta,rejected", [(0.13615483, False), (0.199, False), (0.20, True), (0.21, True)])
+def test_direct_validator_rejects_slew(part, delta, rejected):
     actions = chunk()
-    actions[1, LEFT_SHARPA_SLICE.start] = 0.11
-    with pytest.raises(ValueError, match="slew"):
+    actions[1, part.start] = delta
+    if rejected:
+        with pytest.raises(ValueError, match="slew"):
+            validate_direct_hand_actions(actions)
+    else:
         validate_direct_hand_actions(actions)
 
 
@@ -96,7 +101,7 @@ def test_stop_attempts_both_hands_when_one_stop_fails():
 def test_chunk_bridge_covers_large_first_target_and_retains_full_horizon():
     from deploy.fr3_sharpa_runtime.sdk_direct import chunk_command_frames
     actions = chunk(0.12)
-    actions[1:, 7] += 0.15  # Raw jump is too large; slow emitted frames are valid.
+    actions[1:, 7] += 0.25  # Raw jump is too large; slow emitted frames are valid.
     frames, bridge = chunk_command_frames(actions, np.zeros(58), speed_scale=0.1)
     assert bridge == 120
     assert np.max(np.abs(frames[0])) <= 0.03 * (DT_NS/1e9) + 1e-7
@@ -139,7 +144,7 @@ def test_clock_scheduler_does_not_accumulate_send_cost_or_burst_after_stall():
 
 def test_sdk_direct_can_validate_raw_ranges_before_time_stretching():
     actions = chunk()
-    actions[1:, 7] = 0.15
+    actions[1:, 7] = 0.25
     validate_direct_hand_actions(actions, check_slew=False)
     with pytest.raises(ValueError, match="slew"):
         validate_direct_hand_actions(actions)

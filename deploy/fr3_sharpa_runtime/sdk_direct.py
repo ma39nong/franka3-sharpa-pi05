@@ -18,7 +18,8 @@ import numpy as np
 
 from .protocol import DT_NS, LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE, SHARPA_JOINT_NAMES, as_finite_action_chunk
 
-SDK_SLEW_LIMIT_RAD = 0.10
+SDK_SLEW_LIMIT_RAD = 0.20
+PREPARE_SLEW_LIMIT_RAD = 0.10
 WATCHDOG_TIMEOUT_S = 0.25
 DEFAULT_PREDICTION_CLIP_RAD = 0.05
 
@@ -149,7 +150,7 @@ def prepare_command_with_limits(command, previous, *, speed_rad_s):
         raise ValueError("Prepare requires finite 58D commands/feedback and positive speed")
     limits = hand_joint_limits()
     lower, upper = _hand_bounds_float32(limits)
-    step_budget = min(float(speed_rad_s) * DT_NS / 1e9, SDK_SLEW_LIMIT_RAD)
+    step_budget = min(float(speed_rad_s) * DT_NS / 1e9, PREPARE_SLEW_LIMIT_RAD)
     corrections = []
     for side, part in (("left", LEFT_SHARPA_SLICE), ("right", RIGHT_SHARPA_SLICE)):
         raw = candidate[part].copy()
@@ -157,7 +158,7 @@ def prepare_command_with_limits(command, previous, *, speed_rad_s):
         for joint in np.flatnonzero(adjusted != raw):
             dimension = part.start + int(joint)
             movement = abs(float(adjusted[joint]) - previous[dimension])
-            if movement > step_budget or movement >= SDK_SLEW_LIMIT_RAD:
+            if movement > step_budget or movement >= PREPARE_SLEW_LIMIT_RAD:
                 raise ValueError(
                     f"Prepare {side} Sharpa {SHARPA_JOINT_NAMES[joint]}: "
                     f"previous_or_initial_feedback={previous[dimension]:.10f} rad, "

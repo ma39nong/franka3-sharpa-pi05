@@ -210,6 +210,51 @@ def test_repeated_interrupt_is_deferred_and_original_handler_restored():
     assert len(messages) == 2
 
 
+def test_interrupt_during_handler_installation_cannot_skip_cleanup(monkeypatch):
+    original_signal = signal.signal
+    original_handler = signal.getsignal(signal.SIGINT)
+    original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    injected = False
+    messages = []
+
+    def install(number, handler):
+        nonlocal injected
+        if number == signal.SIGINT and not injected:
+            injected = True
+            # Reproduce an interrupt arriving before the protective handler is
+            # installed. It must stay pending until that handler is ready.
+            signal.raise_signal(signal.SIGINT)
+        return original_signal(number, handler)
+
+    monkeypatch.setattr(signal, "signal", install)
+    left, right = Hand(), Hand()
+    with protect_disable_confirmation(messages.append):
+        report = disable_and_confirm({"left": left, "right": right}, settings(), emit=messages.append)
+    assert report["status"] == "PASS"
+    assert left.requests == right.requests == 1
+    assert any("收到信号" in message for message in messages)
+    assert signal.getsignal(signal.SIGINT) == original_handler
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == original_mask
+
+
+def test_motion_request_polls_cancellation_while_waiting_for_worker(tmp_path):
+    worker = MotionWorker([sys.executable, "-c", "import sys,time; sys.stdin.readline(); time.sleep(1)"], cwd=tmp_path)
+    polls = []
+
+    def cancel():
+        polls.append(time.monotonic())
+        if len(polls) >= 4:
+            raise InterruptedError("operator cancelled approach")
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(InterruptedError, match="operator cancelled"):
+            worker.request({"operation": "stream_start"}, timeout=180, on_poll=cancel)
+        assert time.monotonic() - started < 0.7
+    finally:
+        worker.close()
+
+
 @pytest.mark.parametrize("error", [BrokenPipeError(), ValueError("closed stream"), RuntimeError("logger failed")])
 def test_logging_failure_cannot_prevent_either_hand_disable(error):
     def broken_output(message):

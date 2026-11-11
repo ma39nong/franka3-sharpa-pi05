@@ -331,10 +331,15 @@ class TaskLease:
     def poll(self):
         with self.control.lock:
             state = self.control.data["execution_state"]
-            expired = self.clock() - self.control.last_contact > 5
+            contact_age = self.clock() - self.control.last_contact
+            expired = contact_age > 5
             abort = state in ("STOPPING", "FAULT") or (expired and state not in ("STOPPED", "COMPLETED"))
         if abort:
-            self.interrupt_owner()
+            try:
+                self.control.event("lease_interrupt", execution_state=state,
+                                   contact_age_s=contact_age, lease_expired=expired)
+            finally:
+                self.interrupt_owner()  # Audit failure must never suppress cancellation.
         return abort
 
     def start(self):

@@ -98,12 +98,29 @@ def protect_disable_confirmation(emit=stderr):
     def waiting(number, _frame):
         safe_emit(emit, f"[sharpa-shutdown] 收到信号 {number}; 正在确认失能, 请等待本次有时限的退出检查。")
 
-    previous = {number: signal.signal(number, waiting) for number in (signal.SIGINT, signal.SIGTERM)}
+    numbers = (signal.SIGINT, signal.SIGTERM)
+    # Block delivery while replacing handlers: a second interrupt used to be
+    # able to abort __enter__ before either hand's disable/readback was attempted.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
+    previous = {}
+    try:
+        for number in numbers:
+            previous[number] = signal.signal(number, waiting)
+    except BaseException:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+        raise
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     try:
         yield
     finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+        restore_mask = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
+        try:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, restore_mask)
 
 
 def read_enable_state(hand):

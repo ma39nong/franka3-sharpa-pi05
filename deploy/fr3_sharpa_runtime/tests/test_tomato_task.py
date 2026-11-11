@@ -180,7 +180,9 @@ class FakeBackend:
     def reauthorize(self):
         self.calls.append("reauthorize")
 
-    def start(self, actions, ticket, path):
+    def start(self, actions, ticket, path, *, on_poll=None):
+        if on_poll is not None:
+            on_poll()
         self.calls.append(("start", ticket.copy()))
         self.epoch = ticket["stage_version"]
         self.plan = StageTimeline(actions, time.monotonic(), 1, task_epoch=self.epoch)
@@ -324,6 +326,17 @@ def test_full_seven_stage_simulation_fresh_boundaries_and_no_auto_progress(engin
     assert any(x["event"] == "inference_accepted" for x in events)
 
 
+def test_stage_change_before_first_stream_uses_initial_acquisition(engine):
+    e, c, _r, backend, *_ = engine
+    command(c, "start")
+    e.tick()
+    command(c, "next")
+    until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+    assert c.snapshot()["active_stage"] == "harvest_1"
+    assert sum(isinstance(x, tuple) and x[0] == "start" for x in backend.calls) == 1
+    assert not any(isinstance(x, tuple) and x[0] == "handoff" for x in backend.calls)
+
+
 def test_same_stage_rtc_real_protocol_delay_and_delta_reference(engine):
     e, c, r, b, obs, _ = engine
     start_engine(engine)
@@ -430,6 +443,81 @@ def test_real_backend_never_claims_robot_hold_from_hand_disable():
     assert proof["hands_disabled"] and not proof["arms_safe"] and not safe_stop_proof(proof)
     with pytest.raises(RuntimeError):
         b.reauthorize()
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_task_initial_target_check_switch_uses_bounded_approach(tmp_path, monkeypatch, skip):
+    if skip:
+        monkeypatch.setenv("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK", "1")
+    else:
+        monkeypatch.delenv("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK", raising=False)
+
+    class Worker:
+        def request(self, payload, *, timeout):
+            assert payload["operation"] == "stream_start"
+            assert payload["strict_start"] is (not skip)
+            assert payload["approach_speed_rad_s"] == 0.03
+            assert timeout == (180 if skip else 2)
+            return {"status": "PASS"}
+
+    args = SimpleNamespace(prediction_clip_rad=0.05, execute_speed_scale=1.0, prepare_speed_rad_s=0.03)
+    backend = SDKTaskBackend(Worker(), args)
+    backend.start(np.zeros((50, 58)), {"stage_version": 0, "request_id": "test"}, tmp_path / "control.jsonl")
+    assert backend.started
+
+
+@pytest.mark.parametrize("intent", [None, "stop", "pause", "next"])
+def test_slow_initial_approach_keeps_ipc_lease_and_operator_intent_responsive(engine, tmp_path, intent):
+    from deploy.fr3_sharpa_runtime.task_control import TaskLease
+
+    e, c, _r, backend, _obs, events = engine
+    entered, release = threading.Event(), threading.Event()
+    original = backend.start
+    errors = []
+
+    def slow_start(actions, ticket, path, *, on_poll=None):
+        entered.set()
+        assert release.wait(2)
+        on_poll()
+        return original(actions, ticket, path, on_poll=on_poll)
+
+    backend.start = slow_start
+    command(c, "start")
+    e.tick()  # Submit the first inference.
+    assert e.future is not None
+    e.future.result(timeout=1)
+
+    def install():
+        try:
+            e.tick()
+        except BaseException as error:
+            errors.append(error)
+
+    server = TaskServer(tmp_path / "task.sock", c)
+    thread = threading.Thread(target=install)
+    thread.start()
+    try:
+        assert entered.wait(1)
+        c.last_contact = time.monotonic() - 6
+        # A real IPC heartbeat must get through while approach is still blocked.
+        status = task_rpc(server.path, c.run_id, timeout=0.3)
+        assert status["execution_state"] == "RESUMING"
+        lease = TaskLease(c, lambda: pytest.fail("Healthy IPC must keep the lease alive"))
+        assert not lease.poll()
+        if intent is not None:
+            task_rpc(server.path, c.run_id, intent, timeout=0.3,
+                     request_id=uuid.uuid4().hex, expected_version=c.snapshot()["stage_version"])
+    finally:
+        release.set()
+        thread.join(timeout=2)
+        server.close()
+    assert not thread.is_alive()
+    if intent is None:
+        assert not errors and c.snapshot()["execution_state"] == "RUNNING"
+    else:
+        assert len(errors) == 1 and isinstance(errors[0], InterruptedError)
+        assert not any(x["event"] == "inference_accepted" for x in events)
+        assert c.snapshot()["active_stage"] is None
 
 
 def test_ui_lease_expiry_stops_without_waiting_for_future(engine):
@@ -716,8 +804,17 @@ def test_execution_entry_without_private_control_never_connects_devices(tmp_path
         execute_task(SimpleNamespace(execution_trace_dir=tmp_path))
 
 
-def test_execution_wrapper_fault_closes_owner_and_socket(tmp_path, monkeypatch):
+@pytest.mark.parametrize("camera_pass", [True, False])
+def test_execution_wrapper_fault_closes_owner_and_socket(tmp_path, monkeypatch, camera_pass):
     from deploy.fr3_sharpa_runtime import task_execution, run, runtime, motion_worker
+    from deploy.fr3_sharpa_runtime.startup_gate import CAMERA_GATE_ENV
+    import os
+
+    camera_read, camera_write = os.pipe()
+    monkeypatch.setenv(CAMERA_GATE_ENV, str(camera_read))
+    if camera_pass:
+        os.write(camera_write, b"PASS\n")
+    os.close(camera_write)
 
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
@@ -771,7 +868,15 @@ def test_execution_wrapper_fault_closes_owner_and_socket(tmp_path, monkeypatch):
     monkeypatch.setattr(task_execution, "TaskRTC", Engine)
     monkeypatch.setattr(task_execution, "TaskLease", Lease)
     monkeypatch.setattr(run, "_start_observation_worker", lambda *a: None)
-    monkeypatch.setattr(run, "live_observation", lambda *a, **kw: {"observation/state": np.zeros(58)})
+    def observation(*a, **kw):
+        # Admission must be consumed before the first sensor request; do not
+        # override the worker's first-snapshot timeout with the old 2 s budget.
+        assert CAMERA_GATE_ENV not in os.environ
+        assert "timeout_s" not in kw
+        lifecycle.append("observation")
+        return {"observation/state": np.zeros(58)}
+
+    monkeypatch.setattr(run, "live_observation", observation)
     args = SimpleNamespace(
         execution_trace_dir=tmp_path / "logs",
         initial_stage="pickup_1",
@@ -779,9 +884,9 @@ def test_execution_wrapper_fault_closes_owner_and_socket(tmp_path, monkeypatch):
         ros_overlay=overlay,
         initialization="current",
     )
-    with pytest.raises(RuntimeError, match="forced"):
+    with pytest.raises(RuntimeError, match="forced" if camera_pass else "相机启动检查取消或失败"):
         task_execution.execute_task(args)
-    assert lifecycle == ["lease", "worker", "lease_closed", "closed"]
+    assert lifecycle == ["lease", "worker"] + (["observation"] if camera_pass else []) + ["lease_closed", "closed"]
     assert not path.exists()
     final = json.loads((tmp_path / "logs/task-final.json").read_text())
     assert final["execution_state"] == "FAULT" and not final["safe_to_resume"]

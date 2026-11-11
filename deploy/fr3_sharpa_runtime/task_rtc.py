@@ -7,6 +7,7 @@ and validated by the same worker; pause/stop still require physical confirmation
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import time
 import uuid
@@ -247,6 +248,22 @@ class TaskRTC:
         if self.future is not None and self.future.done():
             future, ticket, context = self.future, self.ticket, self.context
             self.future = None
+            metadata, actions, receipt, captured = future.result()
+            initial_start = context is None and not (state == "SWITCHING" and self.streaming)
+            if initial_start:
+                def check_start():
+                    if not c.valid(ticket):
+                        raise InterruptedError("Initial approach interrupted by newer task intent")
+
+                # Low-speed acquisition may outlast the five-second UI lease.
+                # Keep IPC/status/stop responsive while the sole SDK owner moves;
+                # polling revokes this operation if the operator changes intent.
+                check_start()
+                installed = self.backend.start(
+                    actions, ticket, self.directory / f"control-{uuid.uuid4().hex}.jsonl",
+                    on_poll=check_start,
+                )
+                self.streaming = True
             with c.installation(ticket) as valid:
                 if not valid:
                     self.record(
@@ -257,8 +274,7 @@ class TaskRTC:
                     )
                     c.data["inference_status"] = "discarded"
                     return True
-                metadata, actions, receipt, captured = future.result()
-                if state == "SWITCHING" and self.streaming:
+                if not initial_start and state == "SWITCHING" and self.streaming:
                     if context is not None:
                         raise ValueError("Cross-stage first chunk cannot use old RTC guidance")
                     installed = self.backend.handoff(actions, self.boundary, captured)
@@ -278,12 +294,7 @@ class TaskRTC:
                         checkpoint=metadata["checkpoint"],
                     )
                     return True
-                if context is None:
-                    installed = self.backend.start(
-                        actions, ticket, self.directory / f"control-{uuid.uuid4().hex}.jsonl"
-                    )
-                    self.streaming = True
-                else:
+                if context is not None:
                     installed = self.backend.install(actions, receipt, ticket)
                     self.delays.append(installed["skipped"])
                 self.chunk_count += 1
@@ -462,7 +473,8 @@ class SDKTaskBackend:
         if self.stopped:
             raise RuntimeError("SDK 已失能；必须结束本次运行并重新核对完整部署方案")
 
-    def start(self, actions, ticket, events_path):
+    def start(self, actions, ticket, events_path, *, on_poll=None):
+        strict_start = os.environ.get("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK") != "1"
         result = self.worker.request(
             dict(
                 operation="stream_start",
@@ -473,9 +485,11 @@ class SDKTaskBackend:
                 events_path=str(events_path),
                 task_epoch=ticket["stage_version"],
                 task_request_id=ticket["request_id"],
-                strict_start=True,
+                strict_start=strict_start,
             ),
-            timeout=2,
+            # The optional existing low-speed approach can take several seconds.
+            timeout=2 if strict_start else 180,
+            **({"on_poll": on_poll} if on_poll is not None else {}),
         )
         self.started = True
         return result

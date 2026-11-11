@@ -85,7 +85,11 @@ def execute_task(args):
             return run.live_observation(args.ros_overlay, stage(snapshot["requested_stage"]).prompt, **options)
 
         worker.request({"operation": "feedback"}, timeout=6)
-        observe(timeout_s=2)  # Validate all three live images before reporting READY.
+        # Home may finish before the camera clocks have settled. Consume the
+        # supervisor's admission first, just as the ordinary execution path does.
+        from .startup_gate import wait_for_cameras
+        wait_for_cameras()
+        observe()  # Use the observation worker's bounded first-snapshot budget.
 
         engine = TaskRTC(task, runtime, backend, observe, args, directory)
         if task.data["execution_state"] != "IDLE":

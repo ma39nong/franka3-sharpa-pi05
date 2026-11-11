@@ -39,8 +39,10 @@ class MotionWorker:
                     raise KeyboardInterrupt("SIGTERM: await SDK disable confirmation")
                 self._previous_sigterm = signal.signal(signal.SIGTERM, terminate)
 
-    def request(self, payload, *, timeout=None):
+    def request(self, payload, *, timeout=None, on_poll=None):
         deadline = time.monotonic() + timeout if timeout is not None else None
+        if on_poll is not None:
+            on_poll()
         try:
             self.process.stdin.write(json.dumps(payload, allow_nan=False)+"\n")
             self.process.stdin.flush()
@@ -49,11 +51,19 @@ class MotionWorker:
             # Drain that report before falling back to the generic EOF error.
             pass
         while True:
+            if on_poll is not None:
+                on_poll()
             stream = self._protocol_read or self.process.stdout
-            if deadline is not None:
-                ready, _, _ = select.select([stream], [], [], max(0, deadline - time.monotonic()))
+            if deadline is not None or on_poll is not None:
+                remaining = max(0, deadline - time.monotonic()) if deadline is not None else None
+                wait = min(0.05, remaining) if remaining is not None and on_poll is not None else remaining
+                if wait is None and on_poll is not None:
+                    wait = 0.05
+                ready, _, _ = select.select([stream], [], [], wait)
                 if not ready:
-                    raise TimeoutError("Motion worker reply deadline exceeded; execute blocked")
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise TimeoutError("Motion worker reply deadline exceeded; execute blocked")
+                    continue
             line = stream.readline()
             if not line:
                 raise RuntimeError("Guarded motion worker exited; execute stopped")

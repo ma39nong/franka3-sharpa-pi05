@@ -187,10 +187,7 @@ def main() -> None:
                     validate_action_ranges(transition)  # Includes the actual splice slew.
                     if handover_tick:
                         from .stage_handoff import validate_command_step
-                        from .preflight import execute_preflight
                         validate_command_step(stream_last_command, command, gateway_speed)
-                        execute_preflight(target_chunk(command), current,
-                            now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns())
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     stream_last_command = command.copy()
@@ -280,18 +277,11 @@ def main() -> None:
                 if not args.online_task_handoff or stream is None:
                     raise ValueError("No online task stream")
                 actions, clipping_report = stream_actions(request)
-                current = fresh_feedback()
+                fresh_feedback()
                 now = time.monotonic()
-                from .preflight import execute_preflight
-                from .stage_handoff import aligned_candidate
-                # The same fractional phase is used for preflight and execution.
-                candidate = aligned_candidate(actions, request["ticket"]["captured_monotonic_s"],
-                                              max(now, stream_tick), stream.task_epoch)
-                preflight = execute_preflight(target_chunk(candidate.sample(max(now, stream_tick))), current,
-                    now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns())
                 result = stream.prepare_handoff(actions, request["ticket"], now, stream_tick,
                                                  stream_last_command, gateway_speed, validate_action_ranges)
-                stream_event("handoff_armed", **result, clipping=clipping_report, preflight=preflight)
+                stream_event("handoff_armed", **result, clipping=clipping_report)
                 print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_install":
                 if stream is None:

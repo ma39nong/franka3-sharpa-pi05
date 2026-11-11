@@ -73,6 +73,27 @@ def test_quintic_blend_matches_endpoint_velocities():
     np.testing.assert_allclose(vend, vtarget, atol=3e-5)
 
 
+def test_future_arm_speed_does_not_reject_valid_bridge_but_actual_step_is_checked():
+    t = timeline()
+    t.begin_switch(1, "next", 1.5)
+    prediction = actions(0.002)
+    prediction[25, 6] += 0.08  # A later node that RTC can replace before playback.
+    last = t.sample(1.56 - DT)
+    result = t.prepare_handoff(prediction, dict(t.switch, captured_monotonic_s=1.5),
+                               1.55, 1.56, last, 0.7, lambda a: None)
+    assert result["accepted"] and result["speed_validation_scope"] == "bridge_and_entry"
+    assert result["continuation_exceeds_gateway_speed"]
+    assert result["continuation_arm_speed_rad_s"] > 0.7
+    previous = last
+    for i in range(BRIDGE_STEPS + 1):
+        command = t.sample(1.56 + i * DT)
+        validate_command_step(previous, command, 0.7)
+        previous = command
+    assert t.applied_token == result["token"]
+    with pytest.raises(ValueError, match="gateway per-tick speed"):
+        validate_command_step(prediction[24], prediction[25], 0.7)
+
+
 def test_retarget_before_and_during_bridge_never_extends_deadline_or_jumps():
     t = timeline()
     first = t.begin_switch(1, "one", 1.5)
@@ -127,7 +148,7 @@ def test_invalid_handover_never_arms(failure):
     if failure == "nan":
         a[5, 0] = np.nan
     if failure == "arm_speed":
-        a[25, 0] = 2.0
+        a[:, 0] = 0.4  # The bridge itself must still respect the live speed.
     if failure == "hand_slew":
         a[25, 7] = 2.0
     if failure == "range":
