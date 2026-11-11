@@ -15,7 +15,7 @@ from .protocol import DT_NS
 from .protocol import LEFT_SHARPA_SLICE
 from .protocol import RIGHT_SHARPA_SLICE
 from .protocol import SHARPA_JOINT_NAMES
-from .sdk_direct import SDK_SLEW_LIMIT_RAD
+from .sdk_direct import PREPARE_SLEW_LIMIT_RAD
 from .sdk_direct import _hand_bounds_float32
 from .sdk_direct import hand_joint_limits
 from .sdk_direct import validate_hand_command
@@ -43,7 +43,7 @@ def recovery_target(measured):
             # Aim just inside the interval so feedback noise need not sit on a bound.
             margin = min(RECOVERY_MARGIN_RAD, (float(upper[joint]) - float(lower[joint])) / 4)
             goal = float(lower[joint]) + margin if values[joint] < limits[joint, 0] else float(upper[joint]) - margin
-            if abs(goal - values[joint]) >= SDK_SLEW_LIMIT_RAD:
+            if abs(goal - values[joint]) >= PREPARE_SLEW_LIMIT_RAD:
                 raise ValueError(
                     f"Home recovery {side} {SHARPA_JOINT_NAMES[joint]} displacement "
                     f"{abs(goal - values[joint]):.6f} rad exceeds existing SDK slew bound"
@@ -173,7 +173,7 @@ def recover_before_home(executor, feedback, *, clock=time.monotonic, sleep=time.
                 if clock() - next_tick > DT_NS / 1e9:
                     raise RuntimeError("Home recovery feedback missed 30Hz deadline")
                 distance = np.abs(target[hand_indices] - measured[hand_indices])
-                if np.any(distance >= SDK_SLEW_LIMIT_RAD) or np.any(distance > initial_distance + RECOVERY_MARGIN_RAD):
+                if np.any(distance >= PREPARE_SLEW_LIMIT_RAD) or np.any(distance > initial_distance + RECOVERY_MARGIN_RAD):
                     raise RuntimeError("Home recovery feedback moved away from recovery target")
                 error = float(np.max(distance))
                 if error < previous_error - 0.0005:
