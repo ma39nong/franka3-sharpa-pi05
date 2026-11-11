@@ -210,54 +210,49 @@ def benchmark(baseline="edeb45f", repeats=3):
     return report
 
 
-def summarize(path):
-    """Keep monotonic timeline segments distinct; missing markers stay null."""
-    markers = {"stage_requested", "online_switch_boundary", "observation_start", "observation_complete",
-               "inference_start", "inference_complete", "online_switch_armed", "online_switch_applied",
-               "ordinary_rtc_resumed"}
-    events = []
-    # Stream the archive; don't retain full 50x58 action/observation payloads.
-    with Path(path).open() as stream:
-        for line in stream:
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if event["event"] in markers:
-                events.append({key: value for key, value in event.items()
-                               if key in ("event", "stage_version", "request_stage_version", "request_id",
-                                          "monotonic_ns", "http_received_monotonic_ns", "installation", "stream")})
-    switches = []
-    for request in (e for e in events if e["event"] == "stage_requested"):
-        version = request["stage_version"]
-        relevant = [e for e in events if e.get("request_stage_version", e.get("stage_version")) == version]
-        stamps = {name: next((e["monotonic_ns"] for e in relevant if e["event"] == name), None)
-                  for name in ("online_switch_boundary", "observation_start", "observation_complete",
-                               "inference_start", "inference_complete", "online_switch_armed",
-                               "online_switch_applied", "ordinary_rtc_resumed")}
-        base = request["monotonic_ns"]
-        armed = next((e for e in relevant if e["event"] == "online_switch_armed"), {})
-        applied = next((e for e in relevant if e["event"] == "online_switch_applied"), {})
-        sent = applied.get("stream", {}).get("applied_monotonic_s")
-        switches.append(dict(stage_version=version, request_id=request["request_id"],
-                             worker_command_applied_ms=(sent-base/1e9)*1000 if sent else None,
-                             scheduled_bridge_start_ms=(armed["installation"]["bridge_start"]-base/1e9)*1000
-                             if armed.get("installation", {}).get("bridge_start") else None,
-                             milestones_ms={key: (value-base)/1e6 if value else None for key, value in stamps.items()},
-                             http_to_registered_ms=(base-request["http_received_monotonic_ns"])/1e6
-                             if request.get("http_received_monotonic_ns") else None))
-    return dict(source=str(path), kind="recorded-events-source-not-certified", switches=switches)
+def summarize(path, manifest=None):
+    """Legacy single-file view backed by the clock-aware experiment analyzer."""
+    from .experiment_analysis import analyze
+    report = analyze([path], manifest)
+    names = {"boundary": "online_switch_boundary", "observation_start": "observation_start",
+             "observation_complete": "observation_complete", "inference_start": "inference_start",
+             "inference_complete": "inference_complete", "armed": "online_switch_armed",
+             "parent_ack": "online_switch_applied", "ordinary_rtc_resumed": "ordinary_rtc_resumed"}
+    return dict(source=str(path), kind="recorded-events-source-not-certified",
+                switches=[dict(stage_version=r["stage_version"], request_id=r["request_id"],
+                               milestones_ms={names[t["milestone"]]: t["since_registered_ms"]
+                                              for t in r["timeline"] if t["milestone"] in names},
+                               worker_command_applied_ms=r["metrics"]["registered_to_applied_ms"],
+                               http_to_registered_ms=None,  # Controller clock not present in legacy schema.
+                               scheduled_bridge_start_ms=next(t["since_registered_ms"] for t in r["timeline"]
+                                                              if t["milestone"] == "scheduled_bridge_start"))
+                          for session in report["sessions"] for r in session["switches"]],
+                quality_issue_distribution=report["quality_issue_distribution"])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", default="edeb45f")
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--events", type=Path)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--events", type=Path)
+    group.add_argument("--experiment", type=Path, help="archive/directory; --output becomes report directory")
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.experiment:
+        from .experiment_analysis import analyze, export, load_manifest
+        manifest = load_manifest(args.manifest) if args.manifest else None
+        export(analyze([args.experiment], manifest), args.output)
+        print(args.output / "report.md")
+        return
     if not 1 <= args.repeats <= 20:
         parser.error("repeats must be in [1,20]")
-    report = summarize(args.events) if args.events else benchmark(args.baseline, args.repeats)
+    if args.events:
+        from .experiment_analysis import load_manifest
+        report = summarize(args.events, load_manifest(args.manifest) if args.manifest else None)
+    else:
+        report = benchmark(args.baseline, args.repeats)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(args.output)

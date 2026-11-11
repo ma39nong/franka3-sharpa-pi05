@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source_kind": "synthetic",
+  "clock_domains": {
+    "task-events.jsonl": "synthetic-host/boot-demo",
+    "control-*.jsonl": "synthetic-host/boot-demo"
+  },
+  "embedded_clock_domains": {
+    "worker": "synthetic-host/boot-demo",
+    "observation": "synthetic-host/boot-demo"
+  },
+  "browser_wall_clock": {
+    "verified": true,
+    "offset_to_task_ms": 0,
+    "uncertainty_ms": 1
+  },
+  "max_frame_gap_s": 0.1,
+  "notes": "DETERMINISTIC SYNTHETIC EXCERPTS; no robot, camera or GPU used"
+}

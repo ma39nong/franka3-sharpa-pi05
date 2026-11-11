@@ -1,0 +1,1 @@
+{"status": {"run_id": "synthetic-seven-stage", "execution_state": "COMPLETED", "pending_request_id": "synthetic-complete", "stage_version": 7, "active_stage": "return_stem", "safe_to_resume": false, "simulation_only": true}, "accepted_chunks": 7}

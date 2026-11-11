@@ -145,3 +145,18 @@ worker在交接前和每个过渡tick对真实反馈执行原preflight：双臂�
 ```
 
 全量回归已通过 **624 passed**（1328条既有JAX/Flax弃用警告）；最终检查记录保存在忽略目录 `.deployment/tomato-validation/audit-regression.log`。嵌入UI JavaScript语法检查纳入测试；具体日志耗时见该文件末尾。前后对比原始JSON纳入版本控制，重复运行会有OS调度造成的毫秒级差异。
+
+## 实验验收与自动分析工具（2026-11-11）
+
+基于`9f3f3c2`新增的工具只做离线分析，没有修改以上RTC、状态机、桥接时间或硬件控制实现。它复用task/control/终态日志，加入时钟域检查、按版本和token关联、失败/缺失分类、七阶段统计、实际日志间隔的动态量、CSV/JSON及中文报告。
+
+- [分析使用方法及字段定义](EXPERIMENT_ANALYSIS.md)
+- [独立实机验收规程](HARDWARE_ACCEPTANCE_ZH.md)
+- [明确标记synthetic的完整样例](examples/experiment_acceptance/README.md)
+
+```bash
+.venv/bin/python -m deploy.fr3_sharpa_runtime.experiment_analysis \
+  /绝对路径/实验归档 --out /绝对路径/报告目录
+```
+
+旧`switch_audit --events`接口保留，但现在拒绝无时钟证据的跨生产者时间相减；精确的Click-to-Applied需在实验采集时保留浏览器wall偏移与主机/boot域证据。缺失值不能用模拟数值或GPU smoke替代。

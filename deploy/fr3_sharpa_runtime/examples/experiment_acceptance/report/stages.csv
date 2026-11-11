@@ -1,0 +1,8 @@
+﻿session_id,source_kind,run_id,stage_id,label,prompt_class,request_count,activation_count,software_stage_evidence,picking_success,grasp_stability,contact_force
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,pickup_1,首次拿起,pickup,0,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,harvest_1,首次采摘,harvest,1,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,return_truss,放回整串,return,1,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,adjust,调整,adjust,1,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,pickup_2,再次拿起,pickup,1,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,harvest_2,再次采摘,harvest,1,1,active,,,
+6fd4ed3dfaab,synthetic,synthetic-seven-stage,return_stem,放回裸杆,return,1,1,active,,,
