@@ -42,13 +42,16 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <details><summary>训练证据（可选，用于交叉核对）</summary><label>归档训练 JSON（可选）</label><div class="path"><input id="training_record"><button onclick="browse('training_record',true)">选择文件</button></div></details>
 <label>训练 RTC 最大延迟（0 自动识别）</label><input id="train_rtc_max_delay" type="number" min="0" max="49" value="0"><div class="muted">手动选择Train RTC时必填实际训练上限（例如10）；普通RTC无需填写。训练JSON仅用于可选核对，不会生成契约副本。</div>
 <label>Train RTC 初始延迟（0 使用训练上限，最多25）</label><input id="rtc_initial_delay_steps" type="number" min="0" max="25" value="0">
-<div class="actions" style="margin-top:14px"><button onclick="inspect()">识别权重</button><button onclick="tomatoPreset()">使用本次 B 模型推荐配置</button></div><div id="identity" class="notice">覆盖：30Hz／58D 的全量 Absolute、普通 Delta、Paper Delta、Train RTC、Train Paper RTC，以及 Absolute LoRA。Paper按资产识别；LoRA Delta与其他结构尚不支持。实际结构在GPU加载时再次核对。</div>
+<div class="actions" style="margin-top:14px"><button onclick="inspect()">识别权重</button><button onclick="tomatoPreset()">三路 B 模型配置</button><button onclick="tomatoPreset(true)">四路 r11 · 16000 配置</button></div><div id="identity" class="notice">覆盖：30Hz／58D 的全量 Absolute、普通 Delta、Paper Delta、Train RTC、Train Paper RTC，以及 Absolute LoRA。Paper按资产识别；LoRA Delta与其他结构尚不支持。实际结构在GPU加载时再次核对。</div>
 </article><article class="card" id="execution-card"><h2>2 · 本次执行配置</h2>
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option><option value="soft-serial">串行 Soft</option><option value="soft-async">异步 Soft · 50→30→26＋4→20</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
 <label>启动前相机策略</label><select id="camera_policy"><option value="exclusive">部署独占接管：停止同组已知相机服务</option><option value="require_free">要求相机空闲：发现占用即报错</option></select>
 <div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag，并在结束后生成三路及三联视频</label>
+<label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator">
+<label>定位器计算设备</label><select id="crop_device"><option value="cuda">GPU（推荐）</option><option value="cpu">CPU（先测延迟）</option></select>
+<div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">
 <label>任务控制</label><select id="task_mode"><option value="none">普通部署 · 无阶段状态机</option><option value="tomato-b">番茄 B Coarse · 七阶段手动／Agent＋普通 RTC</option></select>
 <label>任务初始阶段</label><select id="initial_stage"><option value="pickup_1">首次拿起</option><option value="harvest_1">首次采摘</option><option value="return_truss">放回整串</option><option value="adjust">调整</option><option value="pickup_2">再次拿起</option><option value="harvest_2">再次采摘</option><option value="return_stem">放回裸杆</option></select>
 <label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
@@ -87,7 +90,7 @@ adjust: Right fingers reposition the truss on the right plate</pre></details><p 
 <script>
 let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','camera_policy','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed'];
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','camera_policy','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','crop_device'];
 function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
 async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
 function failure(e){$('error').textContent=e.message}
@@ -99,7 +102,7 @@ function modelTypeChanged(reset=false){let t=$('model_type').value,train=t.start
 async function inspect(){try{const c=config();const d=await api('inspect',c);modelModes=d.supported_modes;const modes=updateModes();$('identity').textContent=`${d.tomato_model?d.tomato_model.name+' · ':''}${d.finetune_mode} · ${d.semantics||'语义未知'} · 30 Hz / 58D / horizon 50\n${d.evidence}${d.train_rtc?" · Train RTC 最大延迟="+d.train_rtc.max_delay+"步":""}\n归一化：${d.normalization}；噪声：${d.paper_algorithm?'相关噪声 β='+d.paper_algorithm.beta:'独立高斯'}\n可用模式：${modeNames(modes)}`;invalidate()}catch(e){failure(e)}}
 async function repositoryChanged(){try{let d=await api('repository?path='+encodeURIComponent($('repository').value));repoModes=d.modes;$('repoInfo').textContent='当前分支：'+d.branch+'；仅可选当前代码支持的模式';updateModes();invalidate()}catch(e){failure(e)}}
 async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,初始阶段:c.initial_stage,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,相机策略:c.camera_policy,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
-async function tomatoPreset(){if(busy)return;try{let info=await api('info');for(let [k,v]of Object.entries(info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
+async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
 async function startModel(){try{const c=config();showLog('inference');await api('start-model',{settings:c});await refresh()}catch(e){failure(e)}}
 function showLog(name){for(let key of ['hardware','inference','execution'])$('terminal-'+key).classList.toggle('is-active',key===name)}
 async function start(){try{if(approved!==JSON.stringify(config()))throw Error('配置已改变，请重新核对');await api('start',{settings:config(),approval:approvedPlan});showLog('execution');busy=true;$('start').disabled=true;await refresh()}catch(e){failure(e)}}
@@ -109,6 +112,7 @@ async function refresh(){try{let s=await api('status');busy=s.running;
 renderAgent(s.agent);renderTask(s.task);
 $('phase').textContent=({idle:'空闲',validating:'配置检查',hardware_up:'启动硬件',model_loading:'推理预热中',model_stopping:'停止推理中',model_ready:'推理就绪',model_off:'推理已停止',recording_ready:'准备录制',running:'执行中',stopping:'停止执行中',failed:'失败',stopped:'执行已停止',finished:'执行已完成'})[s.phase]||s.phase;
 $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'正在加载／停止':s.model_ready?(s.model_owned?'已就绪':'已就绪（外部终端）'):s.model_running?'未就绪':'未启动';$('executionState').textContent=s.execution_running?'执行／清理中':'未运行';
+if(s.interaction_crop){let r=s.interaction_crop;$('cropStatus').textContent=`局部图：${r.mode} · ${r.source_monotonic_ns==null?'模型预热样本':r.age_s>2?'画面已过期':'最新查询'} · 检测 ${r.detector_ms.toFixed(1)} ms / 裁剪合计 ${r.crop_total_ms.toFixed(1)} ms · 原图 ${r.source_size.join('×')} · ${JSON.stringify(r.counts)}`;$('cropPreview').style.display='block';$('cropPreview').src='/api/crop-preview?t='+r.updated_wall_time}else{$('cropPreview').style.display='none';$('cropStatus').textContent='局部图：等待四路模型启动及新观测'}
 $('stop').disabled=!s.execution_running||s.stop_requested;$('start').disabled=busy||!s.model_ready||JSON.stringify(s.model_key)!==approvedModelKey||approved!==JSON.stringify(config());$('startModel').disabled=busy||!$('checkpoint').value;$('closeModel').disabled=s.execution_running||(!s.model_owned&&!s.model_loading);$('preview').disabled=busy;
 $('directory').textContent=s.directory?'本次日志目录：'+s.directory:'';$('recordStatus').textContent=[s['recording.json']?'录制：'+s['recording.json'].status:'',s['video_export.json']?'视频：'+s['video_export.json'].status:'',s.exports.length?'后台导出：'+s.exports.length+'项':''].filter(Boolean).join(' · ');
 for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;let text=s.logs[key]||({'hardware':'尚无硬件日志','inference':'尚无推理日志','execution':'尚无执行日志'})[key];if(pre.textContent!==text){pre.textContent=text;if(end)pre.scrollTop=pre.scrollHeight}}
@@ -156,6 +160,9 @@ def server_for(root, *, port=8766):
                      "initial_stage": "pickup_1", "recovery_confirmed": False, "training_record": "",
                      "train_rtc_max_delay": 0, "rtc_initial_delay_steps": 0}
 
+    crop_preset = {**tomato_preset, "checkpoint": str(Path(root)/".deployment/checkpoints/tomato-complete100-r11/16000"),
+                   "crop_locator": str(Path(root)/".deployment/crop_locator"), "crop_device": "cuda"}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
 
@@ -187,9 +194,15 @@ def server_for(root, *, port=8766):
                 elif parsed.path == "/assets/liqing-logo.png":
                     self.send(200, (Path(__file__).parent / "assets/liqing-logo.png").read_bytes(), "image/png")
                 elif parsed.path == "/api/info":
-                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "agent_defaults": controller.agent.settings, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name}, root)) for name in ("mengxiang", "tairan")}})
+                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "crop_preset": crop_preset, "agent_defaults": controller.agent.settings, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name}, root)) for name in ("mengxiang", "tairan")}})
                 elif parsed.path == "/api/task-status":
                     self.send(200, controller.task_status())
+                elif parsed.path == "/api/crop-preview":
+                    if not controller.plan or not controller.plan["model"].get("crop_locator"):
+                        self.send(404, {"error": "No active crop model"})
+                    else:
+                        path = Path(controller.plan["settings"]["repository"])/".deployment/crop_live/preview.jpg"
+                        self.send(200, path.read_bytes(), "image/jpeg")
                 elif parsed.path == "/api/status":
                     self.send(200, controller.snapshot())
                 elif parsed.path == "/api/repository":

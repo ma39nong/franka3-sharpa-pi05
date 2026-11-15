@@ -314,3 +314,92 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 规划周期/相位沿用导出值，但使用真实结果接收时间与实际软件tick，不伪造 `observed_at + .09`。握手日志保留同事策略事件以及独立 `execution_applied` 事件；该适配会改变相对离线模拟的时钟，不宣称与原离线commit时间逐值一致。最终 return_stem 不再授权 adjust，不自动宣告物理成功。手动接管清除候选和等待证据，已登记的执行请求仍按既有交接完成；下一次自动从执行端实际阶段重新绑定。
 
 开发机自检对两套都使用已有录制NPZ重复3次，验证完整视觉编码器与模型进程；tairan 面板显示 Future+1s 及策略等待状态。它不测试真实机器人成功率，也不代表消除了模型提前判断。正式现场仍需核验相机、关节、时钟、并发负载及动作反馈；跨机器Agent通信尚未实现。
+
+## complete100 四路 r11：手动阶段＋实时局部 RGB
+
+本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。代码分支 `codex/tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发。
+
+训练权重固定为 `pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11 / tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000 / 16000`。服务按checkpoint自带统计、Orbax manifest和参数元数据的SHA256识别该权重，启用四路及1024视觉token。同次4000/8000/12000也登记四路身份，GPU推理本次只验收16000；未知r11组合会报错，避免误按三路加载。模型输入顺序与训练一致：`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, interaction_0_rgb`；文本上限256，58D实测state，50步、30Hz；双臂Delta在输出端还原绝对目标，手部保持Absolute。
+
+**ROI给谁：**第四路当前RGB送给π₀.₅动作模型；本次不改变mengxiang/tairan Agent输入和切换机制。
+
+**ROI谁生成：**独立的Faster R-CNN / MobileNetV3-large-320-FPN，沿用旧数据的原检测模型与难例修复模型。先用原模型；缺少高置信手部时再调用修复模型。在线选区以右手番茄串为锚点，邻近左手加入交互区域；跟随左手转移还需实测手指弯曲及当前RGB共同运动证据。检测与几何启发式不代表确认摘取成功。
+
+**训练和推理的区别：**r11训练坐标使用了后帧辅助修框。实时推理每次从同步快照的原分辨率cam0生成局部RGB，再缩放224；仅使用当前与过去信息，不查离线框、训练阶段真值或未来帧。局部框保留1.5倍上下文及至少0.55倍原图高度；短时光流跟踪只可延续相同关注对象，最多0.75秒。无法验证时回退同一时刻全图，单独记录 `current_full_fallback`，第四路仍available。不会重复旧图片，不能将全图回退算作精准局部图。
+
+这属于为现有四路动作模型补充在线ROI，并非FoveaVLA预测未来框的方法。现有权重没有该预测头，也未训练深度或π₀.₅ Memory。
+
+### 工作机同步与材料
+
+```bash
+git fetch origin
+git switch --track origin/codex/tomato-four-view-live-crop  # 首次；已有本地分支则直接switch
+git pull --ff-only origin codex/tomato-four-view-live-crop
+```
+
+权重和定位器不进入Git。工作机权重应放本地SSD：网络挂载盘逐次文件身份检查实测增加约50–80ms，可能耗尽200ms观测新鲜度余量；不能仅挂载服务器目录代替本地复制。权重从28复制 `16000/params`、`16000/assets`，也可保留原完整checkpoint。28源目录：
+
+```text
+/mnt/public_data/local-realrobot-train-data/checkpoints/mengxiang/tomato-openpi-sharpa/pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11/tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000/16000
+```
+
+若工作机已配置SSH别名`28`，在部署仓库目录可直接复制：
+
+```bash
+roi_ckpt_source=28:/mnt/public_data/local-realrobot-train-data/checkpoints/mengxiang/tomato-openpi-sharpa/pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11/tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000/16000
+mkdir -p .deployment/checkpoints/tomato-complete100-r11/16000
+rsync -a "$roi_ckpt_source/params" "$roi_ckpt_source/assets" .deployment/checkpoints/tomato-complete100-r11/16000/
+# 定位器材料包另行复制到工作机后：
+tar -xzf /材料位置/ROI定位器材料.tar.gz -C .deployment
+```
+
+UI“四路r11 · 16000配置”的默认本地路径为 `.deployment/checkpoints/tomato-complete100-r11/16000`，可改成工作机实际位置。
+
+定位器材料解压后结构如下，可将整目录复制到工作机 `.deployment/crop_locator`：
+
+```text
+crop_locator/
+  model.pt             # 修复模型 SHA256 8b06ab9a…
+  receipt.json
+  primary/
+    model.pt           # 原模型 SHA256 19069cbd…
+    receipt.json
+```
+
+修复模型receipt中的开发机绝对路径不用于加载，依赖固定从 `primary/` 读取。无需同步tomato-openpi训练仓库。Python环境需要现有OpenPI JAX环境，以及torch/torchvision和OpenCV；开发验证使用torch2.7.1、torchvision0.22.1。定位器默认GPU，可在UI选择CPU后重新实测耗时。
+
+### 手动测试
+
+1. 在工作机启动 `bash deploy/fr3_sharpa_control/ui.sh --port 8787`，打开控制台，点击“四路r11 · 16000配置”，填写checkpoint及定位器实际路径。
+2. 点“识别权重”“启动推理”，等待四种Prompt与普通RTC预热完成。该按钮不启动相机或机器人。未设置定位器、材料摘要不符时会明确报错。
+3. 保持“阶段切换方式＝手动”。核对Current/Home、相机、速度和录制配置后再点“启动执行”；执行端就绪后点“开始当前阶段”。需要切换时点“下一阶段”，界面保留请求阶段与实际生效阶段。无需启动Agent。最终完成仍由人确认。
+4. UI显示原图框、模型实际收到的干净第四路图、局部/跟踪/全图回退计数和裁剪耗时。预热零图明确显示“模型预热样本”；超过2秒无查询标记过期。
+
+如果已有相机与关节流，先做只读推理检查：
+
+```bash
+# 在工作机终端，按实际路径设置；与UI选择的checkpoint保持一致。
+export SHARPA_MODEL_PROFILE=full-delta
+export SHARPA_FULL_DELTA_CHECKPOINT=/实际路径/16000
+export SHARPA_CROP_LOCATOR=/实际路径/crop_locator
+export PYTHONPATH="$PWD/src:$PWD/packages/openpi-client/src:$PWD"
+.venv/bin/python -m deploy.fr3_sharpa_runtime.crop_live_check \
+  --ros-overlay .deployment/sharpa_ros_messages/install \
+  --stage pickup_1 --samples 20 --hz 2 --out .deployment/crop_live_check.json
+```
+
+此命令订阅已运行的相机/实测关节，调用本机模型并更新预览，不启动硬件、不发送动作。它报告包含采集和传输后的 `snapshot_to_action_ms` 及200ms内的样本数。若使用其他Python、Gello/ROS路径，沿用工作机原来的环境设置。
+
+离线回放（只用于旧录制接线与定位检查）：
+
+```bash
+.venv/bin/python -m deploy.fr3_sharpa_runtime.crop_replay \
+  --dataset /旧LeRobot数据集 --episode 4 --stride 15 \
+  --out .deployment/crop_validation/replay
+```
+
+生成当前框预览视频、逐次记录和热态P50/P95/P99；stride15对应30Hz录制上的2Hz查询。它不预测或执行动作，也不读取离线ROI或阶段标注。
+
+### 已验证与现场边界
+
+验证结果保存在 `deploy/fr3_sharpa_runtime/validation/tomato-complete100-r11-online.json`。GPU加载、原分辨率录制推理、固定噪声仅改变第四路的因果输入检查、普通/RTC及本机WebSocket检查均与实机验收分别报告。旧录制回放中仍有定位失败和全图回退；离线r11的完整局部覆盖不能直接套到在线。开发机与28的延迟不等于工作机延迟，明天需用真实相机/ROS链路确认200ms观测新鲜度和实际裁剪内容。

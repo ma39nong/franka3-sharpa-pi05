@@ -48,6 +48,7 @@ class SharpaRuntime:
         self.paper_rtc = paper_rtc
         self.train_rtc = train_rtc
         self.policy_url = policy_url
+        self.crop_session = uuid.uuid4().hex
         self.adapter = SharpaActionAdapter()
         if (config.CHECKPOINT is not None and config.NORM_STATS is not None
                 and (config.CHECKPOINT / "params/_METADATA").is_file()):
@@ -107,6 +108,8 @@ class SharpaRuntime:
         self.last_timing = timing
         start = time.monotonic_ns()
         clean = validate_observation(observation)
+        clean["_crop_context"] = {"source_monotonic_ns": observation.get("_captured_monotonic_ns"),
+                                  "session": self.crop_session}
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=remaining(10),

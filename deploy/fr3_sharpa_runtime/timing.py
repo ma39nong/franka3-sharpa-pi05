@@ -36,6 +36,10 @@ class TimedPolicy:
                 setattr(self.policy, attr, function)
         timing["policy_inference_end_monotonic_ns"] = time.monotonic_ns()
         timing["policy_total_ms"] = (timing["policy_inference_end_monotonic_ns"]-timing["policy_inference_start_monotonic_ns"])/1e6
+        cropper = getattr(self.policy, "interaction_cropper", None)
+        if cropper is not None:
+            result["interaction_crop"] = dict(cropper.last)
+            timing["interaction_crop"] = dict(cropper.last)
         result["diagnostic_timing"] = timing
         return result
 

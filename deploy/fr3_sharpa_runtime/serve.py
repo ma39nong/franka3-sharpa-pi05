@@ -56,6 +56,12 @@ def main() -> None:
         if args.enable_paper_rtc:
             from .rtc_stream import PAPER_RTC_ADAPTER
             metadata.update(rtc_input_adapter=PAPER_RTC_ADAPTER, rtc_short_prefix_warmed_up=False)
+    if (metadata.get("tomato_model") or {}).get("online_roi_required"):
+        import os
+        from .interaction_crop import locator_identity
+        _, locator_sha = locator_identity(os.environ.get("SHARPA_CROP_LOCATOR", ""))
+        metadata["interaction_crop"] = {"enabled": True, "locator_sha256": locator_sha,
+            "image_keys": metadata["tomato_model"]["image_keys"], "uses_future_frames": False}
     if args.check_only:
         print(json.dumps(metadata, indent=2))
         if args.report:
@@ -91,7 +97,16 @@ def main() -> None:
         rtc_action_repack=canonical_prefix if args.enable_rtc else None, **policy_options)
     observation = {"observation/state": np.zeros(58, dtype=np.float32), "prompt": default_prompt}
     for key in ("observation/image", "observation/left_wrist_image", "observation/right_wrist_image"):
-        observation[key] = np.zeros((224, 224, 3), dtype=np.uint8)
+        shape = (224, 224, 3)
+        if (metadata.get("tomato_model") or {}).get("online_roi_required"):
+            shape = (400, 640, 3) if key == "observation/image" else (480, 640, 3)
+        observation[key] = np.zeros(shape, dtype=np.uint8)
+    if (metadata.get("tomato_model") or {}).get("online_roi_required"):
+        from .interaction_crop import InteractionCropper, attach_cropper
+        cropper = InteractionCropper.from_environment(config.NORM_STATS)
+        attach_cropper(policy, cropper)
+        metadata["interaction_crop"] = {"enabled": True, "locator_sha256": cropper.locator_sha256,
+                                        "image_keys": list(training.model.image_keys), "uses_future_frames": False}
     result = policy.infer(observation)
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])

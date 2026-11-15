@@ -122,6 +122,13 @@ class DeploymentController:
             state["execution_running"] = bool(state.get("running") and self.operation == "execute")
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
+        state["interaction_crop"] = None
+        if self.plan and self.plan["model"].get("crop_locator"):
+            with suppress(OSError, ValueError):
+                status = Path(self.plan["settings"]["repository"]) / ".deployment/crop_live/status.json"
+                crop = json.loads(status.read_text())
+                crop["age_s"] = max(0, time.time()-crop["updated_wall_time"])
+                state["interaction_crop"] = crop
         state["task"] = self.task_status()
         state["agent"] = self.agent.snapshot()
         # Keep detailed files on disk; UI always has the same three terminal panes.

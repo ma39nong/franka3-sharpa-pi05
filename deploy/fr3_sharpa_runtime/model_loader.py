@@ -109,6 +109,11 @@ def build_config():
             paper_beta=algorithm["beta"], paper_std_floor=algorithm["std_floor"],
             paper_asset_sha256=algorithm["bundle_sha256"])
         data_class = PaperSharpaData
+    if metadata["tomato_model"] and metadata["tomato_model"].get("online_roi_required"):
+        from dataclasses import replace
+        from .crop_input import CropRuntimeData
+        model = replace(model, image_keys=tuple(metadata["tomato_model"]["image_keys"]))
+        data_class = CropRuntimeData
     data = data_class(
         repo_id=config.NORM_STATS.parent.name,
         assets=AssetsConfig(assets_dir=str(config.NORM_STATS.parent.parent),

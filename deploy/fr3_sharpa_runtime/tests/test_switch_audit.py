@@ -202,6 +202,7 @@ def test_task_transport_shares_one_total_budget_but_ordinary_is_unchanged(monkey
     monkeypatch.setattr(mod.config, "validate_policy_metadata", lambda metadata: None)
     r = mod.SharpaRuntime.__new__(mod.SharpaRuntime)
     r.policy_url, r.train_rtc, r.paper_rtc = "ws://127.0.0.1:8000", False, False
+    r.crop_session = "transport-budget-fixture"
     r.adapter = SimpleNamespace(adapt_chunk=lambda *args, **kwargs: None)
     obs = {"observation/state": np.zeros(58), "prompt": "test",
            **{f"observation/{name}": np.zeros((2, 2, 3), np.uint8)

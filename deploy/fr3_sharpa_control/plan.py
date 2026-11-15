@@ -122,7 +122,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm) + (trained["record_sha256"] if trained else "")).encode()).hexdigest()
     detected, source = KNOWN_STATS.get(stats_sha), "已核对的训练统计指纹"
     if tomato:
-        detected, source = "delta", "已核对 normal93 B Coarse checkpoint 配套统计指纹"
+        detected, source = "delta", "已核对 B Coarse checkpoint 配套统计与模型指纹"
     if algorithm:
         detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
     if trained:
@@ -170,6 +170,8 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         supported_modes += ["paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"]
     if trained:
         supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
+    if tomato and tomato.get("online_roi_required"):
+        supported_modes = ["serial", "rtc"]
     return {"tomato_model": tomato, "train_rtc": trained, "supported_modes": supported_modes,
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
@@ -200,6 +202,8 @@ class DeploymentSettings:
     task_mode: str = "none"
     initial_stage: str = "pickup_1"
     recovery_confirmed: bool = False
+    crop_locator: str = ""
+    crop_device: str = "cuda"
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -229,6 +233,15 @@ class DeploymentSettings:
             raise ValueError("RTC初始延迟仅适用于Train RTC执行模式")
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
                                    cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type)
+        if self.crop_device not in ("cuda", "cpu"):
+            raise ValueError("局部图设备仅支持cuda/cpu")
+        if model.get("tomato_model") and model["tomato_model"].get("online_roi_required"):
+            from deploy.fr3_sharpa_runtime.interaction_crop import locator_identity
+            locator, locator_sha = locator_identity(self.crop_locator or repo / ".deployment/crop_locator")
+            model["crop_locator"] = locator
+            model["crop_locator_sha256"] = locator_sha
+            model["identity"] = hashlib.sha256((model["identity"] + locator_sha + self.crop_device).encode()).hexdigest()
+            model["supported_modes"] = ["serial", "rtc"]
         if not model["profile"]:
             raise ValueError(model["evidence"])
         if self.task_mode == "tomato-b":
@@ -331,6 +344,12 @@ def plan_environment(plan):
                 "SHARPA_MODEL_PROFILE": profile.name,
                 "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
+    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR"):
+        env.pop(key, None)
+    if plan["model"].get("crop_locator"):
+        env.update(SHARPA_CROP_LOCATOR=plan["model"]["crop_locator"],
+                   SHARPA_CROP_DEVICE=plan["settings"]["crop_device"],
+                   SHARPA_CROP_STATUS_DIR=str(Path(root)/".deployment/crop_live"))
     env.setdefault("SHARPA_PYTHON", sys.executable)
     overlay = Path(plan["machine_root"]) / ".deployment/sharpa_ros_messages/install"
     if overlay.is_dir():

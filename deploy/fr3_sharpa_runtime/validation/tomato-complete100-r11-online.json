@@ -1,0 +1,203 @@
+{
+  "date": "2026-11-15 Asia/Shanghai",
+  "scope": "manual stage switching; online current-frame ROI for old complete100 r11 action weights",
+  "base_deployment_commit": "197ffca",
+  "branch": "codex/tomato-four-view-live-crop",
+  "action_checkpoint_step": 16000,
+  "checkpoint_training_data": "old100, all action-training data; no independent new-data evaluation",
+  "roi_model": "torchvision Faster R-CNN MobileNetV3 large320 FPN; original plus conservative hard-case repair",
+  "online_roi": "current native cam0 detection, measured-state/RGB role selection, role-bound optical flow <=0.75s, current-full letterbox fallback",
+  "uses_future_frames_online": false,
+  "training_roi_uses_future_annotation": true,
+  "agent_input_changes": false,
+  "manual_stage_switching": true,
+  "model_image_keys": [
+    "base_0_rgb",
+    "left_wrist_0_rgb",
+    "right_wrist_0_rgb",
+    "interaction_0_rgb"
+  ],
+  "default_weight_stats_sha256": "cadfda5b116b16f66a5b739825bd6a16321be2c09b714bef481bf4c19064cf83",
+  "locator_repair_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+  "locator_primary_sha256": "19069cbd6fb9f1763798585685e3606bbe57e05f2a99ffdecd015e31bc04c305",
+  "replay_device": "development RTX5090, single-query batch1, 2Hz sampled old recordings",
+  "replays": [
+    {
+      "dataset": "/home/user/datasets/tomato_subtasks_normal_20261107/A/1102_588_616_normal_lerobot",
+      "episode": 0,
+      "frames": 511,
+      "stride": 15,
+      "source_hz": 30,
+      "query_hz": 2.0,
+      "counts": {
+        "detected_local": 511
+      },
+      "warmed_total_ms": {
+        "p50": 7.289992994628847,
+        "p95": 11.053794500185177,
+        "p99": 12.143551290500907,
+        "max": 12.848892016336322
+      },
+      "cold_first_ms": 279.5944580575451,
+      "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+      "no_hardware": true,
+      "no_action_inference": true,
+      "no_future_frames": true,
+      "independent_semantic_accuracy_measured": false,
+      "selection_episode_index": 0
+    },
+    {
+      "dataset": "/home/user/datasets/tomato_subtasks_normal_20261107/A/1106_740_796_normal",
+      "episode": 4,
+      "frames": 213,
+      "stride": 15,
+      "source_hz": 30,
+      "query_hz": 2.0,
+      "counts": {
+        "detected_local": 200,
+        "current_full_fallback": 13
+      },
+      "warmed_total_ms": {
+        "p50": 9.899273456539959,
+        "p95": 11.673326703021303,
+        "p99": 12.231131166918203,
+        "max": 13.00653989892453
+      },
+      "cold_first_ms": 260.84624498616904,
+      "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+      "no_hardware": true,
+      "no_action_inference": true,
+      "no_future_frames": true,
+      "independent_semantic_accuracy_measured": false,
+      "selection_episode_index": 48
+    },
+    {
+      "dataset": "/home/user/datasets/tomato_subtasks_normal_20261107/B/1106_750_791_normal",
+      "episode": 4,
+      "frames": 200,
+      "stride": 15,
+      "source_hz": 30,
+      "query_hz": 2.0,
+      "counts": {
+        "detected_local": 184,
+        "current_full_fallback": 16
+      },
+      "warmed_total_ms": {
+        "p50": 8.42462107539177,
+        "p95": 11.424299934878944,
+        "p99": 12.476099459454419,
+        "max": 13.153584091924131
+      },
+      "cold_first_ms": 268.2145140133798,
+      "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+      "no_hardware": true,
+      "no_action_inference": true,
+      "no_future_frames": true,
+      "independent_semantic_accuracy_measured": false,
+      "selection_episode_index": 86
+    }
+  ],
+  "replay_total_queries": 924,
+  "replay_full_fallbacks": 29,
+  "native_model_probe": {
+    "checkpoint": "/tmp/sharpa-four-view-local/16000",
+    "no_hardware": true,
+    "source": "same recorded frame repeated; not real camera throughput",
+    "gpu": "28 RTX PRO 5000 72GB",
+    "samples": 60,
+    "source_image_shapes": {
+      "observation/state": [
+        58
+      ],
+      "observation/image": [
+        400,
+        640,
+        3
+      ],
+      "observation/left_wrist_image": [
+        480,
+        640,
+        3
+      ],
+      "observation/right_wrist_image": [
+        480,
+        640,
+        3
+      ]
+    },
+    "fourth_view_fixed_noise_max_abs_action_difference": 0.05765652656555176,
+    "timing": {
+      "False": {
+        "p50": 87.34255353920162,
+        "p95": 90.9155718749389,
+        "p99": 93.39602450374514,
+        "max": 94.08521302975714
+      },
+      "True": {
+        "p50": 122.81868746504188,
+        "p95": 123.76517654629424,
+        "p99": 123.9539509313181,
+        "max": 123.97981318645179
+      }
+    },
+    "loopback_timing": {
+      "False": {
+        "p50": 93.10666751116514,
+        "p95": 96.55709178186953,
+        "p99": 103.31331991590558,
+        "max": 105.00237694941461
+      },
+      "True": {
+        "p50": 127.93530290946364,
+        "p95": 130.24661235976964,
+        "p99": 131.16088251117617,
+        "max": 131.3894500490278
+      }
+    }
+  },
+  "production_entry_loopback": {
+    "gpu": "28 RTX PRO 5000 72GB",
+    "weight_storage": "local /tmp copy",
+    "source": "old episode48 source frame690 repeated, timestamps synthetic for transport; not live ROS",
+    "samples": 40,
+    "timing_ms": {
+      "False": {
+        "p50": 109.94831752032042,
+        "p95": 115.1454118313268,
+        "p99": 125.21521104965358,
+        "max": 127.73266085423529
+      },
+      "True": {
+        "p50": 137.8367479192093,
+        "p95": 142.84697039984167,
+        "p99": 145.37858135066926,
+        "max": 146.01148408837616
+      }
+    },
+    "strict_initial_total_timeout_ms": 200,
+    "rtc_total_timeout_ms": 500,
+    "passed": true,
+    "includes_preview_jpeg_and_status_writes": true
+  },
+  "network_storage_probe": {
+    "path": "/mnt/public_data original checkpoint",
+    "same_loopback_initial_p95_ms": 201.9956631702371,
+    "cached_metadata_validation_ms_mean": 80.8715273,
+    "requires_local_weights_for_latency_margin": true
+  },
+  "qa": {
+    "visual_comparison": "episode48 eight reviewed frames; offline annotation geometry is not independent semantic ground truth",
+    "tests": "679 passed; final full deployment runtime suite",
+    "hardware_connected": false,
+    "robot_commands_sent": false,
+    "independent_online_semantic_accuracy_measured": false,
+    "camera_ros_latency_measured": false
+  },
+  "limitations": [
+    "ROI detector remains an experimental model; loss/full-view fallback persists",
+    "new data has not been used",
+    "workstation RGB/ROS acquisition and manual hardware execution remain to be tested",
+    "latency values are warmed measured configurations, not all-machine guarantees"
+  ],
+  "locator_source_repo_commit": "2745e18ed8bd3f83ff07c57ff59a55565ad4673a"
+}
