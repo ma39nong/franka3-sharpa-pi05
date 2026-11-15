@@ -199,5 +199,61 @@
     "workstation RGB/ROS acquisition and manual hardware execution remain to be tested",
     "latency values are warmed measured configurations, not all-machine guarantees"
   ],
-  "locator_source_repo_commit": "2745e18ed8bd3f83ff07c57ff59a55565ad4673a"
+  "locator_source_repo_commit": "2745e18ed8bd3f83ff07c57ff59a55565ad4673a",
+  "development_local_weight_transfer": {
+    "files": 22,
+    "bytes": 12440644835,
+    "all_sha256_equal": true,
+    "checkpoint": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-complete100-r11/16000",
+    "params_and_assets_only": true
+  },
+  "development_5090_smoke": {
+    "gpu": "RTX5090",
+    "inputs": "native-size dummy RGB, four views; not live observations",
+    "four_prompts": {
+      "pickup": {
+        "prompt": "Right hand grasps and lifts the truss to the center",
+        "shape": [
+          50,
+          58
+        ],
+        "finite": true,
+        "infer_ms": 53.49707102868706
+      },
+      "harvest": {
+        "prompt": "Right hand holds truss while left hand picks tomatoes into left basket",
+        "shape": [
+          50,
+          58
+        ],
+        "finite": true,
+        "infer_ms": 53.2758500194177
+      },
+      "return": {
+        "prompt": "Right hand returns the held object to the right plate",
+        "shape": [
+          50,
+          58
+        ],
+        "finite": true,
+        "infer_ms": 53.57084097340703
+      },
+      "adjust": {
+        "prompt": "Right fingers reposition the truss on the right plate",
+        "shape": [
+          50,
+          58
+        ],
+        "finite": true,
+        "infer_ms": 53.18934400565922
+      }
+    },
+    "actions_shape": [
+      50,
+      58
+    ],
+    "finite": true,
+    "rtc_warmed_up": true,
+    "rtc_sampling_ms": 69.06415696721524
+  }
 }

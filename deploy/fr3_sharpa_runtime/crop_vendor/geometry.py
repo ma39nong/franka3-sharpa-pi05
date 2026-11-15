@@ -42,5 +42,3 @@ def native_crop(image, box):
     x1, y1, x2, y2 = max(0, left), max(0, top), min(width, right), min(height, bottom)
     result[y1 - top : y2 - top, x1 - left : x2 - left] = image[y1:y2, x1:x2]
     return result
-
-
