@@ -1,0 +1,12 @@
+{
+  "provider": "mengxiang",
+  "profile": "development",
+  "repository": "~/vjepa2_training",
+  "python": ".venv-tomato/bin/python",
+  "checkpoint": "runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt",
+  "pretrained": "pretrained/vjepa2-vitl-fpc64-256",
+  "sample_npz": "runs/tomato/optimization_20261108/validation_observation.npz",
+  "gello_repository": "~/gello_upper_body_teleop",
+  "ros_overlay": ".deployment/sharpa_ros_messages/install",
+  "handshake_config": ""
+}

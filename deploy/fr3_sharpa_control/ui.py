@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 
 from .controller import DeploymentController
 from .plan import desktop, inspect_checkpoint, repository_info
+from .agent_settings import AgentSettings
+from dataclasses import asdict
 
 HTML = """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sharpa 部署控制台</title><style>
@@ -47,7 +49,7 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div id="modeHint" class="notice"></div>
 <label>启动前相机策略</label><select id="camera_policy"><option value="exclusive">部署独占接管：停止同组已知相机服务</option><option value="require_free">要求相机空闲：发现占用即报错</option></select>
 <div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag，并在结束后生成三路及三联视频</label>
-<label>任务控制</label><select id="task_mode"><option value="none">普通部署 · 无阶段状态机</option><option value="tomato-b">番茄 B Coarse · 七阶段人工控制＋普通 RTC</option></select>
+<label>任务控制</label><select id="task_mode"><option value="none">普通部署 · 无阶段状态机</option><option value="tomato-b">番茄 B Coarse · 七阶段手动／Agent＋普通 RTC</option></select>
 <label>任务初始阶段</label><select id="initial_stage"><option value="pickup_1">首次拿起</option><option value="harvest_1">首次采摘</option><option value="return_truss">放回整串</option><option value="adjust">调整</option><option value="pickup_2">再次拿起</option><option value="harvest_2">再次采摘</option><option value="return_stem">放回裸杆</option></select>
 <label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
 <div class="muted">非首次阶段必须勾选并重新核对配置。恢复会获取新观测和首块，不复用旧动作。</div>
@@ -57,10 +59,19 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="control-line"><strong>执行端</strong><span id="executionState" class="muted">未运行</span><div class="actions"><button id="preview" onclick="preview()">核对执行配置</button><button id="start" class="primary" onclick="start()" disabled>启动执行</button><button id="stop" class="stop" onclick="stop()" disabled>停止执行</button></div></div>
 <p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div></article></section>
 <section class="card" id="taskPanel" aria-label="番茄采摘任务状态机"><h2>番茄采摘任务状态机</h2>
+<div class="row"><div><label>阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()"><option value="manual">手动切换</option><option value="auto">Agent 自动状态机</option></select></div><div class="actions"><button id="startAgent" onclick="agentCommand('start-agent')">启动 Agent（先观察）</button><button id="stopAgent" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button><button onclick="takeOver()">切回手动接管</button></div></div>
+<details open><summary>Agent 运行环境与模型设置</summary>
+<div class="row"><div><label>Agent 实现</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang · Current 确认</option><option value="tairan">tairan · Future 握手＋迟到 ACK</option></select></div><div><label>当前运行环境</label><select id="agentProfile" onchange="agentProfileChanged()"><option value="development">开发机 · 离线模型自检</option><option value="workstation">工作机 · 实时 ROS 观测</option></select></div><div><button id="checkAgent" onclick="checkAgentEnvironment()">检查 Agent 环境</button></div></div>
+<p id="agentEnvironmentHint" class="notice"></p>
+<div class="row"><div><label>Agent 仓库</label><input id="agentRepository"></div><div><label>Agent checkpoint（相对 Agent 仓库或绝对路径）</label><input id="agentCheckpoint"></div></div>
+<details><summary>Python、编码器与输入配置</summary><label>Agent Python</label><input id="agentPython"><label>编码器目录</label><input id="agentPretrained"><div id="agentHandshakeSettings"><label>tairan 握手配置（相对 Agent 仓库或绝对路径）</label><input id="agentHandshake"></div><label>开发机离线观测 NPZ</label><input id="agentSample"><div id="agentRosSettings"><label>工作机 Gello 仓库</label><input id="agentGello"><label>ROS 消息 overlay（相对部署仓库或绝对路径）</label><input id="agentOverlay"></div></details>
+<div id="agentEnvironmentReport" role="status"></div></details>
+<div id="agentStatus" class="notice" role="status">Agent 未启动 · 手动切换</div><div id="agentProbabilities" class="task-grid"></div><div id="agentError" class="error"></div>
+<p class="muted">开发机仅使用离线 NPZ 自检，不检查 DDS、不启动 ROS，禁止自动控制。工作机模式订阅已有相机和关节反馈，不启动硬件。mengxiang 用 Current≥0.8 连续两次确认，Future+1.5s 仅预警；tairan 用 Future+1s 提议及 Current ACK／迟到 ACK。两者都只推进下一合法阶段。执行端实际生效后才继续确认。切回手动不停止当前动作，已提交的切换继续完成；需停止请用暂停／停止执行。停止 Agent 时若处于自动模式，会同时停止执行。最终放杆仍需人工验收完成。</p>
 <div id="taskStages" class="task-stages"></div><details><summary>训练四种英文指令（固定原文）</summary><pre>pickup: Right hand grasps and lifts the truss to the center
 harvest: Right hand holds truss while left hand picks tomatoes into left basket
 return: Right hand returns the held object to the right plate
-adjust: Right fingers reposition the truss on the right plate</pre></details><p class="muted">阶段由人工推进。“已离开”仅表示人工切换，不代表模型验收成功。请求阶段和实际阶段可能不同。</p>
+adjust: Right fingers reposition the truss on the right plate</pre></details><p class="muted">阶段由所选控制方式推进。“已离开”仅表示阶段交接，不代表模型验收成功。请求阶段和实际阶段可能不同。</p>
 <div id="taskStatus" class="task-grid"><span>尚未启动番茄任务</span></div>
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
 <div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
@@ -95,7 +106,7 @@ async function start(){try{if(approved!==JSON.stringify(config()))throw Error('�
 async function stop(){try{await api('stop',{});await refresh()}catch(e){failure(e)}}
 async function closeModel(){try{await api('close-model',{});await refresh()}catch(e){failure(e)}}
 async function refresh(){try{let s=await api('status');busy=s.running;
-renderTask(s.task);
+renderAgent(s.agent);renderTask(s.task);
 $('phase').textContent=({idle:'空闲',validating:'配置检查',hardware_up:'启动硬件',model_loading:'推理预热中',model_stopping:'停止推理中',model_ready:'推理就绪',model_off:'推理已停止',recording_ready:'准备录制',running:'执行中',stopping:'停止执行中',failed:'失败',stopped:'执行已停止',finished:'执行已完成'})[s.phase]||s.phase;
 $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'正在加载／停止':s.model_ready?(s.model_owned?'已就绪':'已就绪（外部终端）'):s.model_running?'未就绪':'未启动';$('executionState').textContent=s.execution_running?'执行／清理中':'未运行';
 $('stop').disabled=!s.execution_running||s.stop_requested;$('start').disabled=busy||!s.model_ready||JSON.stringify(s.model_key)!==approvedModelKey||approved!==JSON.stringify(config());$('startModel').disabled=busy||!$('checkpoint').value;$('closeModel').disabled=s.execution_running||(!s.model_owned&&!s.model_loading);$('preview').disabled=busy;
@@ -103,19 +114,30 @@ $('directory').textContent=s.directory?'本次日志目录：'+s.directory:'';$(
 for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;let text=s.logs[key]||({'hardware':'尚无硬件日志','inference':'尚无推理日志','execution':'尚无执行日志'})[key];if(pre.textContent!==text){pre.textContent=text;if(end)pre.scrollTop=pre.scrollHeight}}
 for(let f of fields)$(f).disabled=busy;if(!busy){$('steps').disabled=$('mode').value.startsWith('soft-');$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value)}}catch(e){failure(e)}}
 
+let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';
+const agentFields={provider:'agentProvider',handshake_config:'agentHandshake',profile:'agentProfile',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',sample_npz:'agentSample',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
+function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;agentProfileChanged();$('agentError').textContent=''}
+function agentConfig(){return Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value]))}
+function agentProfileChanged(){$('agentHandshakeSettings').hidden=$('agentProvider').value!=='tairan';$('agentRosSettings').hidden=$('agentProfile').value!=='workstation';$('agentEnvironmentHint').textContent=$('agentProfile').value==='development'?'开发机：用已有录制 NPZ 加载所选 Agent 自检，无需 ROS、DDS 或 sudo；不会连接机器人。':'工作机：控制台、Agent 和执行端在同一台连接机器人的电脑运行，需要真实相机和关节流。跨机器通信尚未接入。';$('startAgent').textContent=$('agentProfile').value==='development'?'开发机模型自检':'启动 Agent（先观察）';$('agentEnvironmentReport').textContent=''}
+async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
+let agentState=null,agentRequestPending=false;
+function renderAgent(a){if(!a)return;agentState=a;$('agentMode').value=a.mode;$('agentMode').disabled=a.status!=='ready'&&a.mode!=='auto';$('startAgent').disabled=agentRequestPending||!['stopped','failed'].includes(a.status);$('stopAgent').disabled=['stopped','stopping'].includes(a.status);$('agentRepository').disabled=$('startAgent').disabled;$('agentCheckpoint').disabled=$('startAgent').disabled;for(let id of Object.values(agentFields))$(id).disabled=$('startAgent').disabled;$('checkAgent').disabled=$('startAgent').disabled;$('agentStatus').textContent=`${a.provider||$('agentProvider').value} · ${a.mode==='auto'?'Agent 自动':'手动切换'} · ${({stopped:'未启动',loading:'加载中',waiting:'等待观测',ready:'实时就绪',development_ready:'离线自检通过',stopping:'停止中',failed:'失败'})[a.status]||a.status} · ${a.message}${a.profile==='development'?'':a.provider==='tairan'?' · 握手证据 '+(a.confirmations||0):' · 确认 '+(a.confirmations||0)+'/2'}${a.latency_ms!=null?' · 推理 '+a.latency_ms.toFixed(1)+'ms':''}${a.source_age_s!=null?' · 源观测 '+(a.source_age_s*1000).toFixed(0)+'ms':''}`;if(a.status==='failed')$('agentError').textContent=a.message;let box=$('agentProbabilities');box.replaceChildren();for(let [label,title]of [['current','Current 当前'],['future','Future+'+(a.future_horizon_s||($('agentProvider').value==='tairan'?1:1.5))+'s']]){let span=document.createElement('span');span.textContent=title+'：'+(a[label]?Object.entries(a[label]).map(([k,v])=>k+' '+(v*100).toFixed(1)+'%').join(' · '):'等待观测');box.append(span)}if(a.policy_state){let span=document.createElement('span');span.textContent='tairan 握手：'+a.policy_state;box.append(span)}if(a.requested_stage){let span=document.createElement('span');span.textContent='请求：'+a.requested_stage+' / 实际：'+(a.active_stage||'等待接入');box.append(span)}}
+async function agentCommand(path){if(agentRequestPending)return;const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
+async function agentModeChanged(){try{$('agentError').textContent='';renderAgent(await api('agent-mode',{mode:$('agentMode').value}));renderTask(taskState)}catch(e){$('agentError').textContent=e.message;if(agentState)$('agentMode').value=agentState.mode}}
+async function takeOver(){try{$('agentError').textContent='';renderAgent(await api('agent-mode',{mode:'manual'}));renderTask(taskState)}catch(e){$('agentError').textContent=e.message}}
 let taskState=null, taskPending=false, taskPolling=false;
 async function refreshTask(){if(!taskState||taskPolling||!['RUNNING','RESUMING','SWITCH_REQUESTED','SWITCHING','PAUSING','STOPPING'].includes(taskState.execution_state))return;taskPolling=true;try{renderTask(await api('task-status'))}catch(e){$('taskError').textContent=String(e)}finally{taskPolling=false}}
 const stageList=[['pickup_1','首次拿起'],['harvest_1','首次采摘'],['return_truss','放回整串'],['adjust','调整'],['pickup_2','再次拿起'],['harvest_2','再次采摘'],['return_stem','放回裸杆']];
-function renderTask(t){if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;taskState=t;let state=t?.execution_state||'IDLE',available=!!t&&!t.communication_error,idx=stageList.findIndex(x=>x[0]===t?.requested_stage),canSwitch=available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);let box=$('taskStages');box.replaceChildren();stageList.forEach(([id,name],i)=>{let b=document.createElement('button');b.textContent=(t?.active_stage===id?'● ':t?.requested_stage===id?'◷ ':'')+name+(t?.completed_stages?.includes(id)?' · 已离开':'');b.className=t?.active_stage===id?'active':t?.requested_stage===id?'pending':t?.completed_stages?.includes(id)?'passed':'';b.disabled=!canSwitch||i!==idx+1;b.onclick=()=>taskCommand('stage',id);box.append(b)});
+function renderTask(t){if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;taskState=t;let state=t?.execution_state||'IDLE',available=!!t&&!t.communication_error,idx=stageList.findIndex(x=>x[0]===t?.requested_stage),canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);let box=$('taskStages');box.replaceChildren();stageList.forEach(([id,name],i)=>{let b=document.createElement('button');b.textContent=(t?.active_stage===id?'● ':t?.requested_stage===id?'◷ ':'')+name+(t?.completed_stages?.includes(id)?' · 已离开':'');b.className=t?.active_stage===id?'active':t?.requested_stage===id?'pending':t?.completed_stages?.includes(id)?'passed':'';b.disabled=!canSwitch||i!==idx+1;b.onclick=()=>taskCommand('stage',id);box.append(b)});
 let values={'请求阶段':t?.requested_stage||'—','当前阶段':t?.active_stage||'尚未接入','执行状态':t?.communication_error?'通信中断（上次 '+state+'）':['SWITCH_REQUESTED','SWITCHING'].includes(state)?'正在切换（'+state+'）':state,'Prompt 类别':t?.stages?.find(x=>x.id===t.active_stage)?.action||'—','Stage Version':t?.stage_version??'—','Chunk ID':t?.active_chunk_id||'—','RTC 模式':t?.rtc_mode||'—','执行进度':t?.chunk_progress?Number(t.chunk_progress.phase).toFixed(1)+'/50':'—','在途推理':t?.inference_status||'—','最新请求':t?.request_status||'—','允许恢复':t?.safe_to_resume?'是，仍需明确授权':'否'};let status=$('taskStatus');status.replaceChildren();for(let [k,v]of Object.entries(values)){let span=document.createElement('span');span.textContent=k+'：'+v;status.append(span)}$('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';$('taskError').textContent=t?.communication_error||t?.last_error||'';
-$('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=6;$('taskRecover').disabled=!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state)}
+$('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=6;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state)}
 async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent=''}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
 async function recoverTask(){let target=prompt('请输入要恢复的阶段 ID：'+stageList.map(x=>x[0]).join('、'));if(!target)return;if(!stageList.some(x=>x[0]===target)){failure(Error('未知阶段'));return}if(confirm('仅允许就绪或已安全暂停时跳转；运行中请先独立暂停。确认人工恢复到 '+target+'？'))await taskCommand('recover',target,true)}
 async function browse(target,file=false){if(busy)return;pickerTarget=target;pickerFile=file;$('chooseDirectory').hidden=file;$('browsePath').value=$(target).value||$('repository').value;$('picker').showModal();await loadDirectory()}
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对'}}
-(async()=>{let d=await api('info');token=d.token;for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';agentProfileChanged();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
 </script></html>"""
 
 
@@ -165,7 +187,7 @@ def server_for(root, *, port=8766):
                 elif parsed.path == "/assets/liqing-logo.png":
                     self.send(200, (Path(__file__).parent / "assets/liqing-logo.png").read_bytes(), "image/png")
                 elif parsed.path == "/api/info":
-                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset})
+                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "agent_defaults": controller.agent.settings, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name}, root)) for name in ("mengxiang", "tairan")}})
                 elif parsed.path == "/api/task-status":
                     self.send(200, controller.task_status())
                 elif parsed.path == "/api/status":
@@ -208,6 +230,14 @@ def server_for(root, *, port=8766):
                     if not data.get("approval"):
                         raise ValueError("请先核对最终配置")
                     result = controller.start(data["settings"], expected_approval=data["approval"])
+                elif self.path == "/api/agent-check":
+                    result = controller.agent.check_environment(data)
+                elif self.path == "/api/start-agent":
+                    result = controller.agent.start(data)
+                elif self.path == "/api/stop-agent":
+                    result = controller.agent.stop()
+                elif self.path == "/api/agent-mode":
+                    result = controller.agent.set_mode(data.get("mode"))
                 elif self.path == "/api/task-command":
                     result = controller.task_command(data)
                 elif self.path == "/api/stop":
@@ -239,6 +269,9 @@ def main():
             return
         closing.set()
         def finish():
+            server.controller.agent.stop()
+            if server.controller.agent.thread:
+                server.controller.agent.thread.join(timeout=12)
             if server.controller.snapshot()["model_loading"]:
                 server.controller.close_model()
             else:

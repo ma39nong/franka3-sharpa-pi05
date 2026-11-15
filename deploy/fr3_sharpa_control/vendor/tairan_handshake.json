@@ -1,0 +1,17 @@
+{
+  "margin": 0,
+  "theta_prepare": 0.65,
+  "theta_commit": 0.8,
+  "K": 1,
+  "ack_timeout_s": 1.5,
+  "late_ack_enabled": true,
+  "late_ack_timeout_s": 5,
+  "prediction_ttl_s": 0.75,
+  "min_confirm_span_s": 0,
+  "theta_ack": 0.7,
+  "plan_period_s": 0.5,
+  "plan_offset_s": 0,
+  "latency_s": 0.09,
+  "legal_edges": true,
+  "ack_enabled": true
+}

@@ -98,6 +98,8 @@ class DeploymentController:
         self.task_endpoint = None
         self.task_run_id = None
         self.task_last = None
+        from .agent import AgentSupervisor
+        self.agent = AgentSupervisor(self)
 
     def update(self, phase, message, **fields):
         with self.lock:
@@ -121,10 +123,12 @@ class DeploymentController:
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
         state["task"] = self.task_status()
+        state["agent"] = self.agent.snapshot()
         # Keep detailed files on disk; UI always has the same three terminal panes.
         groups = {
             "hardware": [(execution_directory, "hardware.log"), (execution_directory, "hardware_cleanup.log")],
-            "inference": [(model_directory, "model_check.log"), (model_directory, "model.log")],
+            "inference": [(model_directory, "model_check.log"), (model_directory, "model.log"),
+                          (self.agent.directory, "model.log"), (self.agent.directory, "observation.log")],
             "execution": [(execution_directory, name) for name in ("parameter_check.log", "recording_check.log", "recorder.log", "runtime.log", "video_export.log")],
         }
         logs = {}
@@ -136,7 +140,8 @@ class DeploymentController:
                     with suppress(OSError):
                         with path.open("rb") as stream:
                             stream.seek(max(0, path.stat().st_size - 18000))
-                            parts.append(f"[{name}]\n" + stream.read().decode(errors="replace"))
+                            label = "Agent · " + name if folder == self.agent.directory else name
+                            parts.append(f"[{label}]\n" + stream.read().decode(errors="replace"))
             logs[group] = "\n".join(parts)[-18000:]
         state["logs"] = logs
         state["exports"] = []
@@ -168,6 +173,19 @@ class DeploymentController:
         return task_last
 
     def task_command(self, values):
+        # Serialize authority changes with the automatic coordinator.
+        with self.agent.lock:
+            if values.get("source") not in (None, "operator"):
+                raise ValueError("UI 不允许伪造 Agent 来源")
+            if values.get("command") in ("stage", "next", "recover") and self.agent.mode == "auto":
+                raise ValueError("请先切换为手动控制")
+            if values.get("command") in ("pause", "stop", "complete", "recover", "resume"):
+                self.agent.set_mode("manual")
+            self.agent.gate.reset()
+            self.agent.epoch += 1
+            return self._operator_task_command(values)
+
+    def _operator_task_command(self, values):
         from deploy.fr3_sharpa_runtime.task_control import task_rpc
         if not self.task_endpoint or not self.state.get("running") or self.operation != "execute":
             raise ValueError("没有运行中的番茄任务；请先核对并启动任务执行端")
@@ -203,6 +221,7 @@ class DeploymentController:
             raise RuntimeError("推理端已退出或身份握手失败，请重新启动推理端")
 
     def start(self, values, *, expected_approval=None, operation="execute", persisted_values=None):
+        self.agent.set_mode("manual")
         if operation not in ("model", "execute"):
             raise ValueError("Unknown deployment operation")
         with self.lock:
@@ -378,6 +397,7 @@ class DeploymentController:
                 rpc(self.socket, "stop", timeout=3)
 
     def stop(self):
+        self.agent.set_mode("manual")
         with self.lock:
             if not self.state.get("running") or self.cancel.is_set():
                 return self.snapshot()

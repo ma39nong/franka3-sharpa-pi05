@@ -148,14 +148,14 @@ def stamp_ns(message) -> int:
 
 class ObservationProvider:
     """One ROS context/node and subscriptions for the runtime lifetime."""
-    def __init__(self, *, startup_stable_s=0.0):
+    def __init__(self, *, startup_stable_s=0.0, node_name="fr3_sharpa_observation"):
         import rclpy
         from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                                ReliabilityPolicy, qos_profile_sensor_data)
         from sensor_msgs.msg import Image, JointState
         self.rclpy = rclpy
         rclpy.init()
-        self.node = rclpy.create_node("fr3_sharpa_observation")
+        self.node = rclpy.create_node(node_name)
         self.latest = {}
         self.histories = {key: deque(maxlen=16 if key.startswith("cam") else 256) for key in TOPICS}
         self.camera_windows = {}

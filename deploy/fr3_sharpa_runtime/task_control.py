@@ -112,13 +112,16 @@ class TaskControl:
     def ready(self):
         self.transition("READY", "startup checks passed; awaiting explicit start")
 
-    def command(self, command, request_id, *, expected_version, target=None, confirmed=False, client_clicked_unix_ms=None, http_received_monotonic_ns=None):
+    def command(self, command, request_id, *, expected_version, target=None, confirmed=False, client_clicked_unix_ms=None, http_received_monotonic_ns=None, source="operator"):
         received_ns = time.monotonic_ns()
+        if source not in ("operator", "agent") or (source == "agent" and command != "stage"):
+            raise ValueError("Agent 仅可请求下一阶段")
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise ValueError("有效 request_id 必填")
-        fingerprint = hashlib.sha256(json.dumps([command, expected_version, target, confirmed]).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps([command, expected_version, target, confirmed, source]).encode()).hexdigest()
         with self.lock:
-            self.last_contact = time.monotonic()
+            if source == "operator":
+                self.last_contact = time.monotonic()
             if request_id in self.seen:
                 if self.seen[request_id] != fingerprint:
                     raise ValueError("request_id 被不同命令重复使用")
@@ -158,6 +161,7 @@ class TaskControl:
                     "stage_requested",
                     request_id=request_id,
                     operator_action=command,
+                    command_source=source,
                     previous_stage=previous,
                     target_stage=target,
                     old_stage_version=old_version,
@@ -171,7 +175,7 @@ class TaskControl:
                     # must not open execution authority without start/resume.
                     d["request_status"] = "selected"
                 elif state != "SWITCHING" and state != "SWITCH_REQUESTED":
-                    self.transition("SWITCH_REQUESTED", "operator stage request")
+                    self.transition("SWITCH_REQUESTED", source + " stage request")
             elif command == "start":
                 if state != "READY":
                     raise ValueError("任务未就绪，不能开始")
@@ -206,6 +210,7 @@ class TaskControl:
             self.event(
                 "operator_command",
                 operator_action=command,
+                command_source=source,
                 request_id=request_id,
                 target_stage=target,
                 execution_state=d["execution_state"],
@@ -247,6 +252,8 @@ class TaskControl:
             if not self.valid(ticket):
                 raise ValueError("旧阶段结果不得接入")
             previous = self.data["active_stage"]
+            if self.data.get('active_stage_version') != ticket['stage_version'] or previous != ticket['stage_id']:
+                self.data.update(active_stage_version=ticket['stage_version'],active_applied_unix_s=time.time())
             if previous and previous != ticket["stage_id"] and previous not in self.data["completed_stages"]:
                 self.data["completed_stages"].append(previous)
             self.data.update(
@@ -293,8 +300,10 @@ class TaskServer:
                     if req.pop("run_id", None) != control.run_id:
                         raise PermissionError("任务运行身份不匹配")
                     command = req.pop("command")
-                    with control.lock:
-                        control.last_contact = time.monotonic()
+                    renew_contact = req.pop("renew_contact", True)
+                    if renew_contact and command == "status":
+                        with control.lock:
+                            control.last_contact = time.monotonic()
                     result = control.snapshot() if command == "status" else control.command(command, **req)
                     reply = dict(ok=True, task=result)
                 except Exception as error:

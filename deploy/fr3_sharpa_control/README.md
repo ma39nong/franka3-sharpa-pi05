@@ -240,3 +240,77 @@ Home 目标和从反馈生成的中间指令分别检查。双手每次发送前
 选择checkpoint步骤目录后，直接选择模型类型：Full Absolute、Full Delta、LoRA Absolute、Paper Delta、Train RTC Absolute/Delta或Train Paper RTC。无需另行生成或复制部署契约；训练JSON为可选核对项，手动模式不自动采用旁边的旧训练记录。原有自动识别保留为兼容选项。
 
 Train RTC需填写实际训练的最大延迟（1..49），可设置初始延迟（1..min(25,训练上限)，0自动）；重规划触发节点仍由执行配置填写。普通RTC无需训练最大延迟。界面仅开放所选模型支持的模式，Paper继续读取原有归一化和噪声资产。权重结构、配套统计、服务预热、关节范围、反馈新鲜度及停止收尾检查保留。
+
+### Agent 实时接入与手动／自动选择（2026-11-12）
+
+番茄任务面板提供“手动切换／Agent 自动状态机”、“启动 Agent（先观察）”、“停止 Agent”和“切回手动接管”。默认始终为手动；刷新页面显示服务器当前模式，新执行会话不会继承自动授权。先按上文启动 π₀.₅ 推理与任务执行端，再启动 Agent，等待真实观测就绪后选择自动，最后开始当前阶段。也可以在已有相机和关节反馈时单独启动 Agent，只观察概率。
+
+默认选择“开发机 · 离线模型自检”，Agent 仓库按当前用户主目录生成（`~/vjepa2_training`），权重为 `runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt`；展开“Agent 运行环境与模型设置”可指定本机仓库、Python、checkpoint、编码器、离线样本、Gello和ROS overlay。相对模型路径以Agent仓库为基准；overlay以部署仓库为基准。Python保留虚拟环境调用路径，不解引用解释器软链接。模型运行于该仓库 `.venv-tomato` 独立进程，编码器只加载一次。ROS 采集运行于现有 Pixi ros2 环境，并复用现有 domain、CycloneDDS 配置和消息 overlay。Agent 不启动相机、硬件、Home 或 SDK，不创建动作发布者。
+
+只读采集保留约3秒历史；每0.5秒按源时间选三路相机各16帧、10Hz，以及58维实测关节位置。相机固定 cam0/cam1/cam2，RGB、256×256、INTER_AREA 与训练一致；关节带完整 `.position` 名称，由模型按名称重排。历史各采样点仅取目标时间之前的原始样本，最大偏差40ms；缺帧、时钟域不一致和过期数据不会伪造补齐。必须预热至少1.5秒且各流持续有效。
+
+Current 的下一合法类概率≥0.8、两次新鲜2Hz观测确认后，协调器通过现有版本化任务 socket 请求切换。Future1.5s 概率只显示，不授权动作。模型SHA、观测ID、会话ID、概率/logits、输入/结果时间都要验证；请求后清空确认，等 active_stage 与 requested_stage 一致且 RUNNING 才再次积累证据。没有另写 RTC 桥接或硬件控制算法。
+
+“切回手动接管”撤销后续自动请求并清空旧证据；已经提交执行端的切换仍按原交接流程完成，接管本身不停止当前运动。需要停止请使用暂停或停止执行。暂停、恢复、人工跳转和新执行会话均回到手动；恢复后须重新选择自动。自动模式下禁止手动推进阶段；停止 Agent、模型/观测异常或任务通信异常会调用原执行停止路径。Agent 状态轮询和自动命令不续租页面的五秒操作员心跳，关闭页面仍会触发原失联停止。最终 return_stem 绝不自动宣告成功，保留人工完成。
+
+面板显示 Current/Future 概率、确认次数、源观测年龄、模型推理耗时、请求和实际阶段。完整 Agent 日志写在 `.deployment/sharpa-agent-*/`（events.jsonl、model.log、observation.log）；短期NPZ历史只保留最近约10秒。推理耗时不等于完整 ROS→Agent→VLA→执行闭环延迟。B0 已知的 adjust→pickup 提前判断仍存在，本接入不改变分类权重和判定阈值。
+
+现有 CycloneDDS 配置要求系统 `net.core.rmem_max` 至少8388608。仅工作机实时模式检查这个条件；开发机无需修改。若工作机控制台报告不足，请在连接机器人的工作机管理员终端运行（按该机器Gello路径替换）：
+
+```bash
+sudo bash /home/user/gello_upper_body_teleop/ops/setup/install_dds_buffers.sh
+```
+
+该现有脚本只提高接收缓冲上限并写入重启后保留的配置，不启动设备。修复后重新启动 Agent。软件测试与模拟接入不等于实机采摘验收；真实三路流、模型并发负载、切换时机及采摘结果需现场核验。
+
+
+### 开发机／工作机分离与迁移
+
+开发机现在可以直接点击“检查 Agent 环境”，再点“开发机模型自检”。环境检查核对本机资产、Python依赖、CUDA/BF16和离线NPZ；不访问DDS缓冲配置、不启动ROS。自检加载真实B0编码器和分类头，对同一个已有录制NPZ发送3次测试请求，明确显示“开发机模型自检通过”。请求使用测试时钟，仅验证模型和进程通信，不能当作在线时序或泛化评估。开发机模式的后端拒绝自动控制，即使伪造就绪状态也不能授权切换。
+
+成功启动会将该机器的配置保存到 `.deployment/agent_settings.json`；刷新页面会回填。配置只保存环境与路径，不保存自动控制授权。不要把开发机的绝对路径配置直接当作工作机配置。可从本目录 `agent_settings.example.json` 开始填相对路径；该模板默认开发机，迁移到工作机后明确选择工作机实时模式。已有模型推理、RTC和硬件入口沿用原方式。
+
+迁移清单：
+
+1. 将本部署仓库的Agent接入代码和Agent仓库代码部署到工作机；在UI填写两者实际目录。Agent、控制台、机器人执行端需要在同一工作机。当前没有跨机器传图或远程自动切换协议。
+2. 在工作机Agent仓库建立独立Python环境。依赖以该仓库的 `requirements-tomato-local.lock` 为已验证版本记录（包含Torch/CUDA组件）；根据工作机驱动准备兼容的CUDA与BF16环境，再在UI选择真实解释器。不要直接复制开发机 `.venv` 的软链接。
+3. 复制所选B0 bundle、完整 `pretrained/vjepa2-vitl-fpc64-256/`（包括权重、config和来源元信息）；如要离线自检，再复制一份已授权的真实观测NPZ。模型和数据不在本代码交付包内。记录并对比文件SHA，模型启动会重新核验编码器来源和checkpoint身份。
+4. 在工作机选择“工作机 · 实时 ROS 观测”，填写Gello与ROS overlay，点击环境检查；仅在这台工作机修复其报告的DDS配置。启动原部署环境及真实三路相机、关节反馈后，先观察概率，再显式选择自动。
+
+也可在目标机器部署仓库执行只读环境检查，不启动模型或设备（退出码0表示静态资产与依赖检查通过，1表示需修复）：
+
+```bash
+.venv/bin/python -m deploy.fr3_sharpa_control.agent_settings --config deploy/fr3_sharpa_control/agent_settings.example.json
+```
+
+该命令会在所选Agent Python的独立短进程中导入模型依赖并核对CUDA/BF16；不会安装依赖或下载权重。检查通过不等于真实ROS流或实机动作已验收。
+
+### mengxiang / tairan 双 Agent（2026-11-15）
+
+工作机同步部署代码（先处理工作机自己的未提交修改，避免覆盖现场配置）：
+
+```bash
+git fetch origin
+git switch tomato-subtasks-manual-deploy
+git pull --ff-only origin tomato-subtasks-manual-deploy
+bash deploy/fr3_sharpa_control/ui.sh --port 8787
+```
+
+随后在工作机浏览器打开 `http://127.0.0.1:8787/`。代码同步不包含 `.deployment/` 下的模型、Agent源码快照或本机路径配置；按上面的迁移清单另外准备。tairan 需要交付提交的完整 `source/`、`artifacts/joint/` 六文件和 `encoder/` 三文件。复制编码器时必须复制实际文件或在目标机重建有效链接，不能保留指向开发机的失效绝对链接。填写工作机自己的解释器与路径，选择工作机模式并检查环境；真实数据就绪后先观察，再授权自动。
+
+材料已导入本机 `.deployment/agents/tairan/`：`source/` 是交付提交 `90ac57ea9eb1de93821ebddeff5a88bb7b0edfc7` 的独立源码快照；`artifacts/joint/` 保存用户提供的6个正式文件；`encoder/` 单独保存同事的来源元信息，两个哈希一致的大文件复用本机编码器。原 mengxiang 仓库、权重、编码器元信息均保留。该目录含模型和运行材料，不纳入 Git；迁移机器时按交接清单拷贝并重新验证，复用的软链接需指向目标机器真实编码器文件。
+
+UI 的“Agent 实现”可选 `mengxiang` / `tairan`，两套各自回填仓库、解释器、checkpoint、编码器和握手配置；切换实现需先停止 Agent。运行环境与手动/自动模式仍为独立选项，开发机始终禁止自动执行。
+
+| 实现 | 模型 | 切换规则 |
+|---|---|---|
+| mengxiang | 独立双头 B0，Future+1.5s | Current≥.8/K2 确认下一合法阶段；Future只展示 |
+| tairan | 正式 local93 Joint，Future+1s，模型SHA `9324cdb3287c407c259eafbc725ac3bc3d3df6d38646545e8435e0faa9ad03d9` | 保留同事 Future 提议、规划tick、Current ACK、WAIT_LATE_ACK 和总硬截止；下述执行桥接是新增部署约束 |
+
+Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练归一化、源码和完整15字段配置，再加载该源码中的 Joint 和共享编码器。使用用户给的元信息原文件，不覆盖 mengxiang 的元信息。在线不重拟合归一化，不混用两套权重、未来时距或判定阈值。`vendor/tairan_handshake_90ac57e.py` 为原策略逐字快照，用于可移植单测；生产加载已校验交付目录中的同一策略。
+
+实时桥接语义必须与离线回放区分：策略 `commit` 只成为下一合法七阶段的请求；执行端的 active_stage/active_stage_version/active_applied_unix_s 确认接入后，才以实际生效时间开始 Current 感知ACK的1.5秒软窗口和总5秒硬截止。在途执行最多等待5秒且不连续推进；安装前的Current观测不能充当安装后的ACK。正常ACK用一次新Current，迟到ACK仍需两次新Current；无新预测时也调用计时器。硬截止或执行版本冲突沿原停止路径退出，需要人工检查再授权。
+
+规划周期/相位沿用导出值，但使用真实结果接收时间与实际软件tick，不伪造 `observed_at + .09`。握手日志保留同事策略事件以及独立 `execution_applied` 事件；该适配会改变相对离线模拟的时钟，不宣称与原离线commit时间逐值一致。最终 return_stem 不再授权 adjust，不自动宣告物理成功。手动接管清除候选和等待证据，已登记的执行请求仍按既有交接完成；下一次自动从执行端实际阶段重新绑定。
+
+开发机自检对两套都使用已有录制NPZ重复3次，验证完整视觉编码器与模型进程；tairan 面板显示 Future+1s 及策略等待状态。它不测试真实机器人成功率，也不代表消除了模型提前判断。正式现场仍需核验相机、关节、时钟、并发负载及动作反馈；跨机器Agent通信尚未实现。
