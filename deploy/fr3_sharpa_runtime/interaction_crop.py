@@ -12,8 +12,8 @@ import time
 
 import cv2
 import numpy as np
-from .crop_vendor.geometry import native_crop, square_box
-from .crop_vendor.track import CausalBoxTrack
+from .crop_vendor.geometry import native_crop
+from .crop_recovery import CausalHandRecovery, CausalCropWindow
 
 LOCATOR_SHA256 = '8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb'
 PRIMARY_SHA256 = '19069cbd6fb9f1763798585685e3606bbe57e05f2a99ffdecd015e31bc04c305'
@@ -33,6 +33,8 @@ def locator_identity(root):
 
 
 class InteractionCropper:
+    revision = 'causal_hand_recovery_v2'
+
     def __init__(self, locator, state_scale, *, status_dir=None):
         from .crop_selector import CurrentInteractionSelector
         self.locator = locator
@@ -45,13 +47,12 @@ class InteractionCropper:
 
     def reset(self):
         self.selector = self.selector_type(self.state_scale)
-        self.track = None
+        self.recovery = CausalHandRecovery()
+        self.window = CausalCropWindow()
         self.previous_stamp = None
         self.previous_shape = None
         self.previous_session = None
         self.previous_arrival = None
-        self.track_seed_stamp = None
-        self.track_roles = None
         self.frame = 0
 
     @classmethod
@@ -94,29 +95,29 @@ class InteractionCropper:
         detector_start = time.perf_counter()
         detections = self.locator.predict([image])[0]  # Batch=1, current RGB only.
         detector_ms = (time.perf_counter()-detector_start)*1000
-        roi = self.selector.select(detections, state, width, height, rgb=image)
-        mode = 'detected_local'
+        hands, sources, attempts = self.recovery.recover(
+            image, gray, detections, stamp, self.frame, self.locator,
+            sorted({1, *self.selector.roles}))
+        recovery_ms = (time.perf_counter()-detector_start)*1000-detector_ms
+        roi = self.selector.select(hands, state, width, height, rgb=image)
+        mode = 'current_full_fallback'
         if roi['valid']:
-            tight = np.asarray(roi['interaction_box'])
-            # r11 windows retain at least 55% of source image height as context.
-            scale = max(1.5, .55*height/max(tight[2:]-tight[:2]))
-            box = square_box(tight, width, height, scale=scale)
-            self.track = CausalBoxTrack(gray, roi['interaction_box'], self.frame, max_age=8)
-            self.track_seed_stamp = stamp
-            self.track_roles = tuple(roi["roles"])
+            selected_sources = [sources[role] for role in roi['roles']]
+            mode = ('tracked_local' if 'tracked' in selected_sources else
+                    'reacquired_local' if 'reacquired' in selected_sources else 'detected_local')
+            evidence = [roi['interaction_box']]
+            if any(source != 'detected' for source in selected_sources):
+                # During recovery retain other visible hands as context. Offline
+                # r11 exception repair also restored omitted hand context.
+                evidence += [hand['box'] for hand in hands if sources[hand['label']] != 'tracked']
+            boxes = np.asarray(evidence)
+            window_evidence = np.r_[boxes[:,:2].min(0), boxes[:,2:].max(0)].tolist()
+            box = self.window.select(window_evidence, width, height, stamp,
+                                     uncertain=any(source != 'detected' for source in selected_sources))
         else:
-            same_role = self.track_roles == tuple(roi['roles'])
-            tracked = self.track.update(gray, self.frame) if self.track and same_role else None
-            track_fresh = (stamp is not None and self.track_seed_stamp is not None
-                           and 0 <= stamp-self.track_seed_stamp <= 750_000_000)
-            if tracked and tracked['valid'] and track_fresh:
-                tight = np.asarray(tracked['box'])
-                box = square_box(tight, width, height, scale=max(1.5,.55*height/max(tight[2:]-tight[:2])))
-                mode = 'tracked_local'
-            else:
-                box = None
-                mode = 'current_full_fallback'
-                self.track = None
+            box = None
+            window_evidence = None
+            self.window = CausalCropWindow()
         pixels = native_crop(image, box) if box is not None else image
         if box is not None:
             crop = cv2.resize(pixels, (224, 224), interpolation=cv2.INTER_AREA)
@@ -131,7 +132,12 @@ class InteractionCropper:
         self.last = dict(mode=mode, local_roi_valid=box is not None, image_available=True,
                          source_camera='cam0', source_size=[width,height], crop_box=box,
                          source_monotonic_ns=stamp, uses_future_frames=False,
-                         reason=roi['reason'], roles=roi['roles'], reset=reset, detector_ms=detector_ms,
+                         reason=roi['reason'], roles=roi['roles'],
+                         hand_sources={str(role): source for role, source in sources.items()},
+                         recovery_attempts=attempts, interaction_box=roi['interaction_box'],
+                         window_evidence_box=window_evidence, roi_revision=self.revision,
+                         reset=reset, detector_ms=detector_ms,
+                         recovery_ms=recovery_ms,
                          crop_total_ms=(time.perf_counter()-start)*1000,
                          counts=dict(self.counts), updated_wall_time=time.time(),
                          locator_sha256=getattr(self, 'locator_sha256', None),

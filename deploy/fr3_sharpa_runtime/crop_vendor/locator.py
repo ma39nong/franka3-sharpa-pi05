@@ -6,6 +6,7 @@ labels, future frames, or action commands are accepted by the selector.
 from pathlib import Path
 import json
 import numpy as np
+from threading import RLock
 from .geometry import square_box
 
 
@@ -28,8 +29,22 @@ class RgbLocator:
             raise ValueError('Unexpected locator class contract')
         self.model=make_locator_model();self.model.load_state_dict(payload['state_dict'])
         self.model=self.model.to(device).eval();self.device=device
+        self._prediction_lock=RLock()
 
-    def predict(self,images):
+    def predict(self,images,*,min_size=None):
+        # Keep native-coordinate outputs while optionally increasing detail for
+        # current-frame reacquisition. Restore transforms even on a failed call.
+        with self._prediction_lock:
+            original=(self.model.transform.min_size,self.model.transform.max_size)
+            try:
+                if min_size is not None:
+                    self.model.transform.min_size=(min_size,)
+                    self.model.transform.max_size=min_size*2
+                return self._predict(images)
+            finally:
+                self.model.transform.min_size,self.model.transform.max_size=original
+
+    def _predict(self,images):
         import torch
         inputs=[torch.from_numpy(np.array(im,copy=True)).permute(2,0,1).float().div(255).to(self.device) for im in images]
         with torch.inference_mode():outputs=self.model(inputs)

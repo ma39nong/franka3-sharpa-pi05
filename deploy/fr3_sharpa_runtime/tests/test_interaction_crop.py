@@ -54,7 +54,7 @@ def test_time_or_session_discontinuity_clears_tracking(stamp,session):
     locator.detections=[]
     cropper.apply(observation(stamp=stamp,session=session))
     assert cropper.last['reset']
-    assert cropper.track is None
+    assert not cropper.recovery.hands
     assert cropper.last['mode']=='current_full_fallback'
 
 
@@ -62,7 +62,7 @@ def test_track_cannot_refresh_its_own_deadline(monkeypatch):
     locator = Locator(); cropper=InteractionCropper(locator,np.ones(58))
     cropper.apply(observation())
     locator.detections=[]
-    cropper.track=SimpleNamespace(update=lambda *a:dict(valid=True,box=[100,100,160,170]))
+    cropper.recovery.hands[1]['track']=SimpleNamespace(update=lambda *a:dict(valid=True,box=[100,100,160,170]))
     cropper.apply(observation(stamp=1_500_000_000))
     assert cropper.last['mode']=='tracked_local'
     cropper.apply(observation(stamp=1_800_000_000,value=190))
@@ -127,8 +127,8 @@ def test_track_cannot_cross_hand_role_switch():
     locator=Locator();cropper=InteractionCropper(locator,np.ones(58))
     cropper.apply(observation())
     locator.detections=[]
-    cropper.track_roles=(2,)  # Old crop followed left transport; current target is right.
-    cropper.track=SimpleNamespace(update=lambda *a:dict(valid=True,box=[100,100,160,170]))
+    cropper.recovery.hands={2:dict(box=[100,100,160,170],stamp=1_000_000_000,
+        track=SimpleNamespace(update=lambda *a:dict(valid=True,box=[100,100,160,170])))}
     cropper.apply(observation(stamp=1_500_000_000))
     assert cropper.last['mode']=='current_full_fallback'
 

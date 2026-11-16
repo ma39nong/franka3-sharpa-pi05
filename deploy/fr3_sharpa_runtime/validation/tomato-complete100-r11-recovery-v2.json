@@ -1,0 +1,419 @@
+{
+  "date": "2026-11-16 Asia/Shanghai",
+  "branch": "codex/tomato-four-view-live-crop",
+  "parent_commit": "fbd502e27a0aacf7f0ec8912845f65adf19f203a",
+  "roi_revision": "causal_hand_recovery_v2",
+  "scope": "old100 r11 / 16000, manual stage switching, current native cam0 ROI; no robot commands",
+  "models_unchanged": true,
+  "global_detector_short_side": 320,
+  "reacquisition_detector_short_side": 480,
+  "confidence_thresholds_unchanged": true,
+  "flow_deadline_s": 0.75,
+  "historical_search_deadline_s": 1.5,
+  "online_uses_future_frames": false,
+  "offline_reference_used_only_for_evaluation": true,
+  "independent_semantic_accuracy_measured": false,
+  "hardware_performance_measured": false,
+  "changes": [
+    "separate per-hand flow and detection deadlines",
+    "enlarged local current-frame re-detection",
+    "current full-frame 480px retry after missed required hands",
+    "recover default right anchor when leaving left transport",
+    "include other current visible hands during recovery; contain evidence immediately and shrink with source time",
+    "string diagnostic map keys verified through strict MessagePack",
+    "require matching ROI revision in model/client handshake"
+  ],
+  "tests": {
+    "passed": 689,
+    "warnings": 1328,
+    "warning_scope": "existing JAX/Flax deprecations",
+    "log": "/home/user/sharpa-pi05/.deployment/crop_validation/recovery-20261116/tests.log"
+  },
+  "actual_weight_inference": {
+    "checkpoint": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-complete100-r11/16000",
+    "hardware_commands": false,
+    "frames": [
+      480,
+      483,
+      486,
+      489,
+      492,
+      495,
+      498,
+      501,
+      504,
+      507,
+      510,
+      513,
+      516,
+      519,
+      522,
+      525,
+      528,
+      531,
+      534,
+      537,
+      540,
+      543,
+      546,
+      549,
+      552,
+      555,
+      558,
+      561,
+      564,
+      567,
+      1050,
+      1053,
+      1056,
+      1059,
+      1062,
+      1065,
+      1068,
+      1071,
+      1074,
+      1077,
+      1080,
+      1083,
+      1086,
+      1089,
+      1092,
+      1095,
+      1098,
+      1101,
+      1104,
+      1107,
+      1110,
+      1113,
+      1116,
+      1119,
+      1122,
+      1125,
+      1128,
+      1131,
+      1134,
+      1137
+    ],
+    "queries": 120,
+    "no_future_frames": true,
+    "scope": "native recorded frames, direct policy inference including ROI preview/status writes; excludes ROS and network",
+    "action_shape": [
+      50,
+      58
+    ],
+    "all_actions_finite": true,
+    "device": "RTX5090",
+    "timing": {
+      "False": {
+        "p50": 93.72113447170705,
+        "p95": 99.0651807631366,
+        "max": 100.67428590264171
+      },
+      "True": {
+        "p50": 124.41321794176474,
+        "p95": 128.98513925611041,
+        "max": 131.74803799483925
+      }
+    },
+    "loopback_timing": {
+      "False": {
+        "p50": 98.09685248183087,
+        "p95": 102.86478762282059,
+        "max": 104.58842397201806
+      },
+      "True": {
+        "p50": 125.70099352160469,
+        "p95": 131.15122178569436,
+        "max": 132.1963999653235
+      }
+    },
+    "loopback_queries": 60,
+    "loopback_all_deadlines_passed": true,
+    "interaction_crop_contract": {
+      "enabled": true,
+      "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+      "image_keys": [
+        "base_0_rgb",
+        "left_wrist_0_rgb",
+        "right_wrist_0_rgb",
+        "interaction_0_rgb"
+      ],
+      "uses_future_frames": false,
+      "roi_revision": "causal_hand_recovery_v2"
+    }
+  },
+  "replays": {
+    "source_stride_15": {
+      "queries": 924,
+      "source_hz": 30,
+      "query_source_hz": 2.0,
+      "source_order_complete": false,
+      "actual_robot_query_rate_measured": false,
+      "before_full_fallbacks": 29,
+      "after_full_fallbacks": 2,
+      "reduction_fraction": 0.9310344827586207,
+      "before_fallback_fraction": 0.031385281385281384,
+      "after_fallback_fraction": 0.0021645021645021645,
+      "recovered_locals": 27,
+      "recovered_reference_area_at_least_99pct": 27,
+      "common_local_queries": 895,
+      "common_mean_annotation_coverage_before": 0.968690271328559,
+      "common_mean_annotation_coverage_after": 0.9772465266489049,
+      "common_coverage_losses_over_20percentage_points": 0,
+      "window_evidence_containment_failures": 0,
+      "worst_episode_p95_roi_ms": 25.825485552195456,
+      "warmed_max_roi_ms": 39.91037094965577,
+      "max_roi_ms_including_cold": 298.55065199080855,
+      "roi_latency_scope": "current RGB detector + recovery + selection + resize; excludes preview/status writes, action model and transport",
+      "episodes": [
+        {
+          "selection": 0,
+          "stride": 15,
+          "queries": 511,
+          "counts": {
+            "before": {
+              "detected_local": 511
+            },
+            "after": {
+              "detected_local": 505,
+              "tracked_local": 2,
+              "reacquired_local": 4
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 491,
+            "local_reference_evaluated": 511,
+            "mean_local_reference_coverage": 0.9759431877332598,
+            "p95_ms": 11.779899679822847,
+            "max_ms": 16.3735969690606
+          },
+          "after": {
+            "local_reference_containment_99pct": 499,
+            "local_reference_evaluated": 511,
+            "mean_local_reference_coverage": 0.9832632840694959,
+            "p95_ms": 12.763833306962624,
+            "max_ms": 39.91037094965577
+          }
+        },
+        {
+          "selection": 48,
+          "stride": 15,
+          "queries": 213,
+          "counts": {
+            "before": {
+              "detected_local": 200,
+              "current_full_fallback": 13
+            },
+            "after": {
+              "detected_local": 199,
+              "reacquired_local": 11,
+              "tracked_local": 1,
+              "current_full_fallback": 2
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 188,
+            "local_reference_evaluated": 200,
+            "mean_local_reference_coverage": 0.9457614865211835,
+            "p95_ms": 11.967645032564178,
+            "max_ms": 17.821131041273475
+          },
+          "after": {
+            "local_reference_containment_99pct": 200,
+            "local_reference_evaluated": 211,
+            "mean_local_reference_coverage": 0.9612589695598938,
+            "p95_ms": 25.825485552195456,
+            "max_ms": 28.402972035109997
+          }
+        },
+        {
+          "selection": 86,
+          "stride": 15,
+          "queries": 200,
+          "counts": {
+            "before": {
+              "detected_local": 184,
+              "current_full_fallback": 16
+            },
+            "after": {
+              "detected_local": 180,
+              "reacquired_local": 18,
+              "tracked_local": 2
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 178,
+            "local_reference_evaluated": 184,
+            "mean_local_reference_coverage": 0.9734702532778688,
+            "p95_ms": 11.038165097124875,
+            "max_ms": 11.747078038752079
+          },
+          "after": {
+            "local_reference_containment_99pct": 195,
+            "local_reference_evaluated": 200,
+            "mean_local_reference_coverage": 0.9818123030705996,
+            "p95_ms": 23.865396308246996,
+            "max_ms": 27.982595143839717
+          }
+        }
+      ]
+    },
+    "source_stride_1": {
+      "queries": 13837,
+      "source_hz": 30,
+      "query_source_hz": 30.0,
+      "source_order_complete": true,
+      "actual_robot_query_rate_measured": false,
+      "before_full_fallbacks": 715,
+      "after_full_fallbacks": 0,
+      "reduction_fraction": 1.0,
+      "before_fallback_fraction": 0.051673050516730504,
+      "after_fallback_fraction": 0.0,
+      "recovered_locals": 715,
+      "recovered_reference_area_at_least_99pct": 715,
+      "common_local_queries": 13122,
+      "common_mean_annotation_coverage_before": 0.980584643840211,
+      "common_mean_annotation_coverage_after": 0.99045870459958,
+      "common_coverage_losses_over_20percentage_points": 0,
+      "window_evidence_containment_failures": 0,
+      "worst_episode_p95_roi_ms": 24.26715805195272,
+      "warmed_max_roi_ms": 159.23160698730499,
+      "max_roi_ms_including_cold": 291.7762369615957,
+      "roi_latency_scope": "current RGB detector + recovery + selection + resize; excludes preview/status writes, action model and transport",
+      "episodes": [
+        {
+          "selection": 0,
+          "stride": 1,
+          "queries": 7658,
+          "counts": {
+            "before": {
+              "detected_local": 7658
+            },
+            "after": {
+              "detected_local": 7527,
+              "reacquired_local": 55,
+              "tracked_local": 76
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 7405,
+            "local_reference_evaluated": 7658,
+            "mean_local_reference_coverage": 0.9784745060866226,
+            "p95_ms": 10.243265028111637,
+            "max_ms": 158.3304920932278
+          },
+          "after": {
+            "local_reference_containment_99pct": 7540,
+            "local_reference_evaluated": 7658,
+            "mean_local_reference_coverage": 0.9863542882130836,
+            "p95_ms": 11.191471153870225,
+            "max_ms": 159.23160698730499
+          }
+        },
+        {
+          "selection": 48,
+          "stride": 1,
+          "queries": 3189,
+          "counts": {
+            "before": {
+              "detected_local": 2888,
+              "current_full_fallback": 299,
+              "tracked_local": 2
+            },
+            "after": {
+              "detected_local": 2871,
+              "reacquired_local": 267,
+              "tracked_local": 51
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 2809,
+            "local_reference_evaluated": 2890,
+            "mean_local_reference_coverage": 0.9757469102618598,
+            "p95_ms": 10.826779349008575,
+            "max_ms": 18.963797949254513
+          },
+          "after": {
+            "local_reference_containment_99pct": 3139,
+            "local_reference_evaluated": 3189,
+            "mean_local_reference_coverage": 0.9935163819751452,
+            "p95_ms": 21.769722033059224,
+            "max_ms": 31.178268836811185
+          }
+        },
+        {
+          "selection": 86,
+          "stride": 1,
+          "queries": 2990,
+          "counts": {
+            "before": {
+              "detected_local": 2574,
+              "current_full_fallback": 416
+            },
+            "after": {
+              "detected_local": 2523,
+              "reacquired_local": 441,
+              "tracked_local": 26
+            }
+          },
+          "before": {
+            "local_reference_containment_99pct": 2537,
+            "local_reference_evaluated": 2574,
+            "mean_local_reference_coverage": 0.9922942339561462,
+            "p95_ms": 10.727166826836765,
+            "max_ms": 133.72710207477212
+          },
+          "after": {
+            "local_reference_containment_99pct": 2989,
+            "local_reference_evaluated": 2990,
+            "mean_local_reference_coverage": 0.9999913847829959,
+            "p95_ms": 24.26715805195272,
+            "max_ms": 134.492002078332
+          }
+        }
+      ]
+    }
+  },
+  "visual_review": {
+    "historical_fallback_tiles_viewed": 29,
+    "independent": false,
+    "note": "coding agent viewed all29 old2Hz fallback native-frame tiles with offline-reference and new-window outlines; no claim of viewing every dense frame"
+  },
+  "limits": [
+    "same old training recordings used; no independent semantic accuracy or actual robot task success",
+    "source-order30Hz replay does not prove camera capture or30Hz action-model query throughput",
+    "2Hz sparse replay retains2 current-full fallbacks; no fabricated local box or stale pixels",
+    "direct and loopback latency excludes real ROS/camera/network between computers",
+    "full-frame fallback is still explicitly supported when evidence is insufficient"
+  ],
+  "production_entry_smoke": {
+    "checkpoint": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-complete100-r11/16000",
+    "warmed_up": true,
+    "smoke_finite": true,
+    "smoke_action_shape": [
+      50,
+      58
+    ],
+    "rtc_warmed_up": true,
+    "interaction_crop": {
+      "enabled": true,
+      "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+      "image_keys": [
+        "base_0_rgb",
+        "left_wrist_0_rgb",
+        "right_wrist_0_rgb",
+        "interaction_0_rgb"
+      ],
+      "uses_future_frames": false
+    }
+  },
+  "source_sha256": {
+    "deploy/fr3_sharpa_runtime/crop_recovery.py": "1375301b1ad05263c40e5b778671680e99f81456d83da7cb5c34bdd060b159f9",
+    "deploy/fr3_sharpa_runtime/crop_selector.py": "601ed260e0a96ab54211f319eea87173f5006613963e0878a03a7f462a75e1c3",
+    "deploy/fr3_sharpa_runtime/interaction_crop.py": "4dd4380ecf04086308e0b270c6925baf5029e29b5cf3be0d0ac1e731ecb0ae0d",
+    "deploy/fr3_sharpa_runtime/crop_vendor/locator.py": "4fb93f862765105726f72047c8f60fb3f1080504b8f31963ad758b2e1b580301",
+    "deploy/fr3_sharpa_runtime/crop_vendor/repair.py": "7d553ef8f3e08a8f4e4f6faaab6bc7b6d2dd8f50260aad2017721c533ddc7fc7",
+    "deploy/fr3_sharpa_runtime/config.py": "f5cd80e0c417bc85df68fbfbe8279d497922c41c5a23857c2aa3b36dba0a7b59",
+    "deploy/fr3_sharpa_runtime/serve.py": "3a0b96f93202d1ecba4308c1c09df4bc574e1c56c92b9b5e34e95555c2f8bc4d"
+  }
+}

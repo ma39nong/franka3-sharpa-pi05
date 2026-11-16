@@ -26,16 +26,9 @@ class CurrentInteractionSelector:
         state=np.asarray(state)
         if state.shape!=(58,) or not np.isfinite(state).all():
             raise ValueError('Finite canonical58 measured state required')
-        best={}
-        for detection in detections:
-            role=detection['label'];score=detection['score'];box=np.asarray(detection['box'],float)
-            if role not in (1,2) or not np.isfinite(score) or not .75<=score<=1:
-                continue
-            if (box.shape!=(4,) or not np.isfinite(box).all() or not (0<=box[0]<box[2]<=width and 0<=box[1]<box[3]<=height)
-                    or min(box[2:]-box[:2])<15 or np.prod(box[2:]-box[:2])>width*height*.13):
-                continue
-            if role not in best or score>best[role][0]:
-                best[role]=(score,box)
+        from .crop_recovery import confident_hands
+        best={role:(d['score'],np.asarray(d['box'],float))
+              for role,d in confident_hands(detections,width,height).items()}
         hsv=cv2.cvtColor(rgb,cv2.COLOR_RGB2HSV)
         mask=(((hsv[:,:,0]<13)|(hsv[:,:,0]>169))&(hsv[:,:,1]>100)&(hsv[:,:,2]>65)).astype(np.uint8)
         _,_,components,_=cv2.connectedComponentsWithStats(mask,8)

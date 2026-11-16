@@ -58,10 +58,11 @@ def main() -> None:
             metadata.update(rtc_input_adapter=PAPER_RTC_ADAPTER, rtc_short_prefix_warmed_up=False)
     if (metadata.get("tomato_model") or {}).get("online_roi_required"):
         import os
-        from .interaction_crop import locator_identity
+        from .interaction_crop import InteractionCropper, locator_identity
         _, locator_sha = locator_identity(os.environ.get("SHARPA_CROP_LOCATOR", ""))
         metadata["interaction_crop"] = {"enabled": True, "locator_sha256": locator_sha,
-            "image_keys": metadata["tomato_model"]["image_keys"], "uses_future_frames": False}
+            "image_keys": metadata["tomato_model"]["image_keys"], "uses_future_frames": False,
+            "roi_revision": InteractionCropper.revision}
     if args.check_only:
         print(json.dumps(metadata, indent=2))
         if args.report:

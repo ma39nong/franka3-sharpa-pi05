@@ -34,8 +34,16 @@ class RgbLocator:
         self.repair = OriginalLocator(root,device)
 
     def predict(self,images):
-        primary = self.primary.predict(images)
+        return self._predict(images)
+
+    def predict_detail(self,images):
+        """Reacquire from current RGB at 480px; preserve scores and labels."""
+        return self._predict(images,min_size=480)
+
+    def _predict(self,images,*,min_size=None):
+        options={} if min_size is None else dict(min_size=min_size)
+        primary = self.primary.predict(images,**options)
         requested = [i for i,detections in enumerate(primary)
                      if any(max((d['score'] for d in detections if d['label']==role),default=0)<.75 for role in (1,2))]
-        repairs = dict(zip(requested,self.repair.predict([images[i] for i in requested]),strict=True)) if requested else {}
+        repairs = dict(zip(requested,self.repair.predict([images[i] for i in requested],**options),strict=True)) if requested else {}
         return [merge_detections(detections,repairs.get(i,[])) for i,detections in enumerate(primary)]
