@@ -1,0 +1,11 @@
+{
+  "entrypoint": "python -m deploy.fr3_sharpa_runtime.run",
+  "arguments": ["--fovea", "--execute", "--enable-hardware", "--initialization", "current", "--execute-steps", "8", "--speed", "fast", "--num-chunks", "0", "--policy-url", "ws://127.0.0.1:8010"],
+  "requires_operator_settings": ["--ros-overlay", "--prompt"],
+  "action_hz": 30,
+  "action_horizon": 50,
+  "memory_enabled": false,
+  "stage_switching": "Stop the run, select the next five-phase v3 English prompt, restart with the fixed initial box.",
+  "startup": "Start fovea_serve with a newly trained checkpoint containing assets/fovea_contract.json; old action-only checkpoints are rejected.",
+  "hardware_executed": false
+}

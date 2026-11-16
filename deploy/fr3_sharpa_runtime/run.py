@@ -194,7 +194,11 @@ def execute_policy_prepare(args):
             if ready.get("operation") != "ready":
                 raise RuntimeError(f"sdk_direct worker did not become ready: {ready}")
         _start_observation_worker(args.ros_overlay)
-        runtime = SharpaRuntime(args.policy_url, **({key: True for key in ("paper_rtc", "train_rtc") if getattr(args, key, False)}))
+        if getattr(args, "fovea", False):
+            from .fovea_runtime import FoveaRuntime
+            runtime = FoveaRuntime(args.policy_url, execute_steps=args.execute_steps)
+        else:
+            runtime = SharpaRuntime(args.policy_url, **({key: True for key in ("paper_rtc", "train_rtc") if getattr(args, key, False)}))
         def infer(observation):
             # Policy cold start can make the first read-only inference stale.  Drop
             # that result, reacquire all sensors, and retry once.  The 200 ms gate
@@ -254,8 +258,16 @@ def execute_policy_prepare(args):
             from .rtc_runtime import run_rtc
             return run_rtc(runtime, lambda **options: live_observation(args.ros_overlay, args.prompt, **options),
                            worker, infer(initial), initial, args)
+        def acquire_after(completed):
+            observation = observation_after_completion(args, completed)
+            if getattr(args, "fovea", False) and runtime.pending is not None:
+                if (completed.get('status') != 'PASS' or completed.get('execute_steps') != 8
+                        or completed.get('policy_frames') != 8):
+                    raise RuntimeError('Fovea requires a confirmed eight-step execution before the next crop')
+                runtime.acknowledge_execution(8)
+            return observation
         result = prepare_and_run_chunks(cached_first_infer,
-            lambda completed: observation_after_completion(args, completed), worker, initial,
+            acquire_after, worker, initial,
             num_chunks=args.num_chunks, speed_rad_s=args.prepare_speed_rad_s,
             execute_speed_scale=args.execute_speed_scale,
             trace_writer=trace_writer,
@@ -438,6 +450,7 @@ def main() -> None:
     parser.add_argument("--num-chunks", type=int, default=1,
                         help="Number of replanning rounds; 0 repeats until Ctrl-C")
     parser.add_argument("--policy-url", default=config.POLICY_URL)
+    parser.add_argument("--fovea", action="store_true", help="Opt-in Fovea v1 serial eight-step action/box policy")
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
@@ -451,6 +464,16 @@ def main() -> None:
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
+    if args.fovea:
+        if (args.broker_mode != 'serial' or args.task_mode != 'none' or args.sharpa_backend != 'sdk_direct'
+                or args.train_rtc or args.paper_rtc or args.train_paper_rtc
+                or args.initialization == 'policy' or args.prepare_policy_first):
+            parser.error('Fovea v1 requires serial sdk_direct, current/Home initialization, without RTC/task broker')
+        if args.execute_steps not in (None,8):
+            parser.error('Fovea v1 requires --execute-steps8')
+        args.execute_steps = 8
+        if args.policy_url == config.POLICY_URL:
+            args.policy_url = 'ws://127.0.0.1:8010'
     if args.task_mode == "tomato-b" and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
             or args.train_paper_rtc or config.MODEL_PROFILE.name != "full-delta"
             or args.sharpa_backend != "sdk_direct"):
@@ -495,6 +518,8 @@ def main() -> None:
     profile = resolve_speed(args.speed, args.execute_speed_scale)
     args.speed = profile.name
     args.execute_speed_scale = profile.execute_speed_scale
+    if args.fovea and args.execute_speed_scale != 1.0:
+        parser.error('Fovea v1 box targets require the original30Hz execution; use --speed fast')
     if args.train_rtc:
         from .model_loader import checkpoint_contract
         trained_metadata = checkpoint_contract()
@@ -519,6 +544,7 @@ def main() -> None:
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
         print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
+                          "fovea": args.fovea, "memory_enabled": False if args.fovea else None,
                           "paper_rtc": args.paper_rtc, "train_rtc": args.train_rtc,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
@@ -532,9 +558,9 @@ def main() -> None:
                                                   else "current_measured_positions"),
                           "hand_home": str(args.hand_home),
                           "action_shape": [config.ACTION_HORIZON, config.ACTION_DIM],
-                          "checkpoint": str(config.CHECKPOINT) if config.CHECKPOINT is not None else None,
-                          "model_profile": config.MODEL_PROFILE.name, "policy_url": args.policy_url,
-                          "training_action_supervision": config.MODEL_PROFILE.training_action_supervision,
+                          "checkpoint": None if args.fovea else str(config.CHECKPOINT) if config.CHECKPOINT is not None else None,
+                          "model_profile": "foveavla-v1" if args.fovea else config.MODEL_PROFILE.name, "policy_url": args.policy_url,
+                          "training_action_supervision": "delta_arm_absolute_hand" if args.fovea else config.MODEL_PROFILE.training_action_supervision,
                           "action_representation": "absolute_joint_position",
                           "sharpa_backend": args.sharpa_backend}, indent=2))
         return
@@ -542,6 +568,8 @@ def main() -> None:
         if args.mode != "dry-run":
             parser.error("Use a mode flag or --mode, not both")
         args.mode = "execute" if args.execute else "prepare" if args.prepare else "handoff-verify" if args.handoff_verify else "preflight-only"
+    if args.fovea and args.mode != 'execute':
+        parser.error('Use --fovea --check for offline settings or --fovea --execute for the serial hardware path')
     if args.broker_mode == "rtc":
         from .model_loader import checkpoint_contract
         contract = checkpoint_contract()

@@ -1,0 +1,83 @@
+{
+  "scope": "Full-size Fovea architecture/weight compatibility only; old action-only checkpoint, box output UNTRAINED; dummy images; no robot or training",
+  "trained_fovea": false,
+  "source_checkpoint": "/home/user/sharpa-pi05/.deployment/checkpoints/tomato-complete100-r11/16000",
+  "devices": [
+    "cuda:0"
+  ],
+  "results": [
+    {
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "token_ids": [
+        256575,
+        256643,
+        256392,
+        256575
+      ],
+      "receipt": {
+        "session_id": "architecture-smoke",
+        "query_index": 0,
+        "used_box": [
+          0.25,
+          0.22,
+          0.83,
+          0.86
+        ],
+        "next_box": [
+          0.25,
+          0.22,
+          0.83,
+          0.86
+        ],
+        "prediction_valid": false,
+        "execute_steps": 8,
+        "source_size": [
+          640,
+          400
+        ]
+      },
+      "infer_ms": 11405.404633958824
+    },
+    {
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "token_ids": [
+        256575,
+        256643,
+        256392,
+        256575
+      ],
+      "receipt": {
+        "session_id": "architecture-smoke",
+        "query_index": 0,
+        "used_box": [
+          0.25,
+          0.22,
+          0.83,
+          0.86
+        ],
+        "next_box": [
+          0.25,
+          0.22,
+          0.83,
+          0.86
+        ],
+        "prediction_valid": false,
+        "execute_steps": 8,
+        "source_size": [
+          640,
+          400
+        ]
+      },
+      "infer_ms": 108.60415000934154
+    }
+  ],
+  "elapsed_seconds": 18.622772334027104
+}

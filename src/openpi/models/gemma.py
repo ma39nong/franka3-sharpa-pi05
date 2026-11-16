@@ -387,6 +387,10 @@ class Module(nn.Module):
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
         return self.embedder.encode(tokens).astype(self.embed_dtype)
 
+    def decode_locations(self, hidden):
+        table = self.embedder.input_embedding_table[256000:257024]
+        return jnp.einsum("...d,vd->...v", hidden.astype(jnp.float32), table.astype(jnp.float32))
+
     @at.typecheck
     def __call__(
         self,
