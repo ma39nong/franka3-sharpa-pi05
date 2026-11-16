@@ -344,12 +344,13 @@ def plan_environment(plan):
                 "SHARPA_MODEL_PROFILE": profile.name,
                 "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
-    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR"):
+    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR"):
         env.pop(key, None)
     if plan["model"].get("crop_locator"):
         env.update(SHARPA_CROP_LOCATOR=plan["model"]["crop_locator"],
                    SHARPA_CROP_DEVICE=plan["settings"]["crop_device"],
-                   SHARPA_CROP_STATUS_DIR=str(Path(root)/".deployment/crop_live"))
+                   SHARPA_CROP_STATUS_DIR=str(Path(root)/".deployment/crop_live"),
+                   SHARPA_SHARED_ROI_DIR=str(Path(root)/".deployment/shared_roi"))
     env.setdefault("SHARPA_PYTHON", sys.executable)
     overlay = Path(plan["machine_root"]) / ".deployment/sharpa_ros_messages/install"
     if overlay.is_dir():

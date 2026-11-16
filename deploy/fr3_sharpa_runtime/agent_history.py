@@ -48,6 +48,7 @@ def atomic_json(path, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--shared-roi-directory",type=Path)
     args = parser.parse_args()
     import cv2
     from rclpy.executors import ExternalShutdownException
@@ -88,6 +89,7 @@ def main():
                 anchor = min(stamp_ns(v[0]) for v in provider.latest.values())
                 rows = select_history(provider.histories, anchor)
                 rgb = []
+                native_cam0 = []
                 for camera in ("cam0", "cam1", "cam2"):
                     frames = []
                     for row in rows:
@@ -97,6 +99,7 @@ def main():
                         import base64
 
                         pixels = np.frombuffer(base64.b64decode(payload["rgb_b64"]), np.uint8).reshape(payload["shape"])
+                        if camera == "cam0":native_cam0.append(pixels.copy())
                         frames.append(cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_AREA))
                     rgb.append(np.stack(frames))
                 joints = [
@@ -112,9 +115,14 @@ def main():
                 oid = str(anchor)
                 path = directory / (oid + ".npz")
                 temp = directory / (oid + ".tmp.npz")
-                np.savez(
-                    temp, rgb=np.stack(rgb), joints=np.asarray(joints, np.float32), joint_names=np.array(JOINT_NAMES)
-                )
+                extras = {}; shared_meta = None
+                if args.shared_roi_directory:
+                    from .shared_roi import read_history
+                    stamps=[{k:stamp_ns(v[0]) for k,v in row.items()} for row in rows]
+                    local,roi_meta,shared_meta=read_history(args.shared_roi_directory,stamps,native_rgb=native_cam0,now_unix=captured_unix,anchor_ns=anchor)
+                    rgb.append(np.stack([cv2.resize(im,(256,256),interpolation=cv2.INTER_AREA) for im in local]))
+                    extras=dict(roi_metadata=roi_meta,roi_contract=np.array(shared_meta['roi_contract']))
+                np.savez(temp,rgb=np.stack(rgb),joints=np.asarray(joints,np.float32),joint_names=np.array(JOINT_NAMES),**extras)
                 os.replace(temp, path)
                 # Preserve ROS epoch and source age. Never retimestamp an old frame as fresh.
                 metadata = dict(
@@ -125,6 +133,7 @@ def main():
                     ros_now=ros_now / 1e9,
                     captured_unix=captured_unix,
                     source_age_s=(ros_now - anchor) / 1e9,
+                    shared_roi=shared_meta,
                     history_source_ns={k: [stamp_ns(r[k][0]) for r in rows] for k in TOPICS},
                 )
                 atomic_json(directory / "latest.json", metadata)

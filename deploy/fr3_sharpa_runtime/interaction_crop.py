@@ -43,6 +43,7 @@ class InteractionCropper:
         self.status_dir = Path(status_dir) if status_dir else None
         self.counts = Counter()
         self.last = {}
+        self.shared_writer = None
         self.reset()
 
     def reset(self):
@@ -67,6 +68,9 @@ class InteractionCropper:
         instance = cls(locator, np.asarray(stats['q99'])-np.asarray(stats['q01']),
                        status_dir=os.environ.get('SHARPA_CROP_STATUS_DIR'))
         instance.locator_sha256 = sha
+        if os.environ.get("SHARPA_SHARED_ROI_DIR"):
+            from .shared_roi import SharedROIWriter
+            instance.shared_writer = SharedROIWriter(os.environ["SHARPA_SHARED_ROI_DIR"])
         return instance
 
     def apply(self, observation):
@@ -157,6 +161,10 @@ class InteractionCropper:
             temporary.write_bytes(encoded.tobytes());temporary.replace(self.status_dir/'preview.jpg')
             temporary = self.status_dir/'status.tmp'
             temporary.write_text(json.dumps(self.last));temporary.replace(self.status_dir/'status.json')
+        if self.shared_writer is not None:
+            self.shared_writer.submit(observation,crop,self.last)
+            self.last['shared_roi_error'] = self.shared_writer.error
+            self.last['shared_roi_dropped'] = self.shared_writer.dropped
         return {**observation, 'observation/interaction_image':crop,
                 'observation/interaction_valid':np.bool_(True)}
 

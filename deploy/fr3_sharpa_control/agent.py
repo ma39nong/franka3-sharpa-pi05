@@ -68,6 +68,9 @@ class DecisionGate:
                     raise ValueError("概率与 logits 不一致")
             if abs(packet["future_horizon_s"] - self.horizon) > 1e-6:
                 raise ValueError(f"需要 Future{self.horizon}s 权重")
+            if packet.get("control_eligible", True) is not True:
+                self.reset()
+                return None
             key = (task["run_id"], task["stage_version"], task["active_stage"])
             if self.key != key:
                 self.reset()
@@ -139,6 +142,8 @@ class AgentSupervisor:
             raise ValueError("请选择手动或 Agent 自动")
         with self.lock:
             if mode == "auto":
+                if self.state.get("control_eligible",True) is not True:
+                    raise ValueError("研究Memory模型当前仅观察，尚未完成自动控制验收")
                 if self.settings["profile"] != "workstation":
                     raise ValueError("开发机离线自检不允许自动控制；请在工作机选择实时模式")
                 if self.state["status"] != "ready" or time.time() - self.state.get("received_unix", 0) > 2:
@@ -426,7 +431,8 @@ class AgentSupervisor:
             setup = overlay / "setup.bash"
             if not setup.is_file():
                 raise FileNotFoundError(setup)
-            inner = f'source {shlex.quote(str(setup))}; export PYTHONPATH={shlex.quote(str(self.controller.root))}:"${{PYTHONPATH:-}}"; exec python -m deploy.fr3_sharpa_runtime.agent_history --directory {shlex.quote(str(self.directory))}'
+            roi_args = (' --shared-roi-directory '+shlex.quote(str(self.controller.root / '.deployment/shared_roi'))) if ready.get('requires_local_roi') else ''
+            inner = f'source {shlex.quote(str(setup))}; export PYTHONPATH={shlex.quote(str(self.controller.root))}:"${{PYTHONPATH:-}}"; exec python -m deploy.fr3_sharpa_runtime.agent_history --directory {shlex.quote(str(self.directory))}{roi_args}'
             log = (self.directory / "observation.log").open("w")
             logs.append(log)
             ros_env = dict(os.environ)
@@ -456,7 +462,7 @@ class AgentSupervisor:
             )
             with self.lock:
                 self.state.update(
-                    status="waiting", model_version=expected, message="模型已加载；等待真实三路相机与关节历史"
+                    status="waiting", model_version=expected, control_eligible=ready.get("control_eligible",True), requires_local_roi=ready.get("requires_local_roi",False), message="模型已加载；等待匹配的相机、关节及所需ROI历史"
                 )
             last = None
             while not self.closed.wait(0.025):

@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-16 Asia/Shanghai",
+  "branch": "tomato-four-view-live-crop",
+  "status": "interface_integration_verified_live_memory_not_accepted",
+  "runtime_tests": {
+    "passed": 694,
+    "warnings": 1328,
+    "environment": "deployment .venv JAX CPU for regression; real locator GPU for recorded replay"
+  },
+  "shared_roi_replay": {
+    "scope": "Recorded training episode, real locator and measured state; offline replay clock; two concurrent observation consumers; NO VLA/Memory model compute, ROS, hardware or accuracy evaluation",
+    "episode": 0,
+    "dataset": "/home/user/datasets/tomato_subtasks_normal_20261107/A/1102_588_616_normal_lerobot",
+    "source_frames": [
+      300,
+      303,
+      306,
+      309,
+      312,
+      315,
+      318,
+      321,
+      324,
+      327,
+      330,
+      333,
+      336,
+      339,
+      342,
+      345
+    ],
+    "samples": 16,
+    "pixel_parity": true,
+    "source_timestamp_parity": true,
+    "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+    "roi_revision": "causal_hand_recovery_v2",
+    "counts": {
+      "detected_local": 16
+    },
+    "producer_compute_ms": {
+      "first": 274.40891100559384,
+      "warm_p50": 10.206372942775488,
+      "warm_p95": 11.225075146649033
+    },
+    "hardware_commands": 0
+  },
+  "agent_service": {
+    "actual_b0_calls": 3,
+    "weights_sha256": "7b9275832dc559ad5f9b17faa6380bb5b7571897bcee8588cf91ad5e3c260b00",
+    "scope": "Recorded repeated input IPC; no concurrent VLA model or hardware"
+  },
+  "model_defaults_changed": false,
+  "rtc_changed": false,
+  "hardware_commands": 0,
+  "memory_automatic_control_enabled": false,
+  "pending": [
+    "Train and compare new local/history checkpoints",
+    "Continuous fresh10Hz ROI production scheduling for live Memory history",
+    "Live-causal ROI/training input parity acceptance",
+    "Whole VLA+Agent GPU end-to-end concurrency and ROS timing"
+  ],
+  "historical_branch_prefix_removed": true
+}

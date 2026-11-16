@@ -317,7 +317,7 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ## complete100 四路 r11：手动阶段＋实时局部 RGB
 
-本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。代码分支 `codex/tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发。
+本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。代码分支 `tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发。
 
 训练权重固定为 `pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11 / tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000 / 16000`。服务按checkpoint自带统计、Orbax manifest和参数元数据的SHA256识别该权重，启用四路及1024视觉token。同次4000/8000/12000也登记四路身份，GPU推理本次只验收16000；未知r11组合会报错，避免误按三路加载。模型输入顺序与训练一致：`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, interaction_0_rgb`；文本上限256，58D实测state，50步、30Hz；双臂Delta在输出端还原绝对目标，手部保持Absolute。
 
@@ -333,8 +333,8 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ```bash
 git fetch origin
-git switch --track origin/codex/tomato-four-view-live-crop  # 首次；已有本地分支则直接switch
-git pull --ff-only origin codex/tomato-four-view-live-crop
+git switch --track origin/tomato-four-view-live-crop  # 首次；已有本地分支则直接switch
+git pull --ff-only origin tomato-four-view-live-crop
 ```
 
 权重和定位器不进入Git。工作机权重应放本地SSD：网络挂载盘逐次文件身份检查实测增加约50–80ms，可能耗尽200ms观测新鲜度余量；不能仅挂载服务器目录代替本地复制。权重从28复制 `16000/params`、`16000/assets`，也可保留原完整checkpoint。28源目录：
@@ -416,3 +416,16 @@ export PYTHONPATH="$PWD/src:$PWD/packages/openpi-client/src:$PWD"
 本次修复的配对回放结果与真实权重推理检查见 `deploy/fr3_sharpa_runtime/validation/tomato-complete100-r11-recovery-v2.json`。对照使用同一录像、同一实测state、相同查询帧序；离线r11框仅在评分时读取，不提供给在线ROI。标注覆盖是与已有训练标注的一致性指标，不能作为独立定位准确率或实机成功率。
 
 配对测试：三段旧录像原始帧序13,837次查询，全图回退715→0；2Hz稀疏924次查询，全图回退29→2。715个新恢复的逐帧局部框均覆盖至少99%的已有离线标注区域；这些标注来自训练数据，不能视为独立语义准确率。真实16000权重120次录制输入推理及60次WebSocket调用通过；RTX5090回环普通/RTC P95分别102.9/131.2ms，全部通过200/500ms预算，包含ROI、预览写入、动作模型及通信，不含实际ROS/相机采集。689项运行时回归测试通过，生产入口四提示词及RTC预热通过。
+
+
+### 共享ROI与后续Memory Agent接口（2026-11-16）
+
+当前开发分支为`tomato-four-view-live-crop`。旧B0仍使用三路历史，自动切换授权、Current0.8/K2、Prompt/Chunk与RTC规则不变。新Memory模型必须另行训练和验收，尚未替换默认模型。
+
+四路服务通过`SHARPA_SHARED_ROI_DIR`发布实际送入策略的ROI224；默认计划指向`.deployment/shared_roi`。后台单槽队列只保留最新待写观测，64份记录有界保留；丢弃和写入错误单独记录。每份绑定policy session、原cam0像素SHA、完整ROS topic时间戳、ROI像素SHA和裁剪版本。ROI生成仍在该次策略输入前完成，发布是异步观察通道，不改变动作执行逻辑。
+
+Agent服务握手声明`requires_local_roi`与`control_eligible`。旧B0不要求ROI，新增Memory适配器只观察，不授予自动切换。需要ROI时，Agent sidecar按16个真实10Hz历史时刻精确匹配共享记录；来源、会话或像素不一致以及缺帧均拒绝。**仅按2Hz策略请求产生的裁剪不足以构建10Hz历史；本轮未实现常驻10Hz ROI生产调度，也不复用旧帧补齐。**
+
+Agent仓库`tools.serve_tomato_agent`可自动识别B0或新Memory checkpoint；后者需要四路RGB历史、ROI116元数据、命名58D关节和版本匹配的编码器。r11未来辅助坐标训练的Memory checkpoint仅允许显式离线回放，不能直接当作已验收的实时模型。
+
+离线验证入口为`python -m deploy.fr3_sharpa_runtime.shared_roi_replay_check --dataset DATASET --episode 0 --out NEW_OUTPUT --norm-stats CHECKPOINT_OWNED_NORM`，并设置`SHARPA_CROP_LOCATOR`。读取旧录像和实测状态，调用真实定位器，核对两个并发消费者的像素与时间戳；不包含动作/Memory模型计算，不启动ROS或机器人，不证明端到端并发延迟。

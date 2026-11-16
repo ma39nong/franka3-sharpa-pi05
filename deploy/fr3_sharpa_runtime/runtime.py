@@ -109,7 +109,7 @@ class SharpaRuntime:
         start = time.monotonic_ns()
         clean = validate_observation(observation)
         clean["_crop_context"] = {"source_monotonic_ns": observation.get("_captured_monotonic_ns"),
-                                  "session": self.crop_session}
+                                  "session": self.crop_session, "topic_stamp_ns": observation.get("_topic_stamp_ns", {})}
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=remaining(10),
