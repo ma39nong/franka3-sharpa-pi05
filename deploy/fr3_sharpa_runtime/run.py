@@ -261,10 +261,10 @@ def execute_policy_prepare(args):
         def acquire_after(completed):
             observation = observation_after_completion(args, completed)
             if getattr(args, "fovea", False) and runtime.pending is not None:
-                if (completed.get('status') != 'PASS' or completed.get('execute_steps') != 8
-                        or completed.get('policy_frames') != 8):
-                    raise RuntimeError('Fovea requires a confirmed eight-step execution before the next crop')
-                runtime.acknowledge_execution(8)
+                if (completed.get('status') != 'PASS' or completed.get('execute_steps') != 15
+                        or completed.get('policy_frames') != 15):
+                    raise RuntimeError('Fovea requires a confirmed fifteen-step execution before the next crop')
+                runtime.acknowledge_execution(15)
             return observation
         result = prepare_and_run_chunks(cached_first_infer,
             acquire_after, worker, initial,
@@ -450,7 +450,7 @@ def main() -> None:
     parser.add_argument("--num-chunks", type=int, default=1,
                         help="Number of replanning rounds; 0 repeats until Ctrl-C")
     parser.add_argument("--policy-url", default=config.POLICY_URL)
-    parser.add_argument("--fovea", action="store_true", help="Opt-in Fovea v1 serial eight-step action/box policy")
+    parser.add_argument("--fovea", action="store_true", help="Opt-in Fovea v1 serial fifteen-step action/box policy")
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
@@ -469,9 +469,9 @@ def main() -> None:
                 or args.train_rtc or args.paper_rtc or args.train_paper_rtc
                 or args.initialization == 'policy' or args.prepare_policy_first):
             parser.error('Fovea v1 requires serial sdk_direct, current/Home initialization, without RTC/task broker')
-        if args.execute_steps not in (None,8):
-            parser.error('Fovea v1 requires --execute-steps8')
-        args.execute_steps = 8
+        if args.execute_steps not in (None,15):
+            parser.error('Fovea v1 requires --execute-steps 15')
+        args.execute_steps = 15
         if args.policy_url == config.POLICY_URL:
             args.policy_url = 'ws://127.0.0.1:8010'
     if args.task_mode == "tomato-b" and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc

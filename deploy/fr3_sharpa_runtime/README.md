@@ -2,7 +2,7 @@
 
 ## FoveaVLA v1 独立入口（`tomato-foveavla-v1` 分支）
 
-本任务保留四路RGB和58D动作；第一轮使用固定主相机框，随后模型联合输出动作与下一轮框。没有历史帧Memory。主相机必须提供640×400原分辨率；全图/局部图共用训练侧的裁剪和location坐标实现。模型输出50步，串行执行前8步后才提交下一框并采集新图；重试不会推进框，无效预测沿用上一有效框。服务端不缓存历史画面，客户端只保留待执行/已执行框。
+本任务保留四路RGB和58D动作；第一轮使用固定主相机框，随后模型联合输出动作与下一轮框。没有历史帧Memory。当前契约版本为 `tomato-foveavla-rgb-v1-h15`，旧50/8 checkpoint与回执不能混用。主相机必须提供640×400原分辨率；全图/局部图共用训练侧的裁剪和location坐标实现。模型输出50步，串行执行前15步后才提交下一框并采集新图；重试不会推进框，无效预测沿用上一有效框。服务端不缓存历史画面，客户端只保留待执行/已执行框。
 
 ```bash
 # 新训练checkpoint才包含此契约；旧纯动作权重会被入口拒绝。
@@ -12,11 +12,11 @@ python -m deploy.fr3_sharpa_runtime.fovea_serve --checkpoint <新Fovea-step目�
 python -m deploy.fr3_sharpa_runtime.run --fovea --check
 ```
 
-现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 8 --speed fast --num-chunks 0`。当前v1按阶段手动停机更换指令并重启，首轮重新使用固定框；不接入旧七阶段RTC/Agent控制台，不支持时间拉伸或RTC。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
+现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 15 --speed fast --num-chunks 0`。当前v1按阶段手动停机更换指令并重启，首轮重新使用固定框；不接入旧七阶段RTC/Agent控制台，不支持时间拉伸或RTC。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
 
-初始框为源图归一化xyxy `[0.25,0.22,0.83,0.86]`。checkpoint拥有 `assets/fovea_contract.json`、数据清单指纹及归一化指纹，服务校验8步偏移、相机顺序、坐标格式和初始框。训练框含固定篮子/盘子区域等弱监督先验；改变场景需要重新检查。配置示例在 `examples/foveavla-v1-client.json`。
+初始框为源图归一化xyxy `[0.25,0.22,0.83,0.86]`。checkpoint拥有 `assets/fovea_contract.json`、数据清单指纹及归一化指纹，服务校验15步偏移、相机顺序、坐标格式和初始框。训练框含固定篮子/盘子区域等弱监督先验；改变场景需要重新检查。配置示例在 `examples/foveavla-v1-client.json`。
 
-本次只有代码、离线网络测试及结构冒烟测试，没有新Fovea训练结果或实机成功率。`validation/fovea_v1_architecture_smoke.json` 使用旧动作checkpoint验证完整尺寸结构兼容，框分支未训练，不能用于判断框预测质量。
+本次只有代码、离线网络测试及结构冒烟测试，没有新Fovea训练结果或实机成功率。`validation/fovea_v1_h8_architecture_smoke.json` 使用旧动作checkpoint验证完整尺寸结构兼容，该记录属于修改前的50/8结构测试，框分支未训练，不能用于判断当前50/15配置或框预测质量。
 
 统一UI、自动启动/停止、第一段chunk开始录制及自动视频导出见 [部署控制台](../fr3_sharpa_control/README.md)；完整三终端场景命令见 [部署启动指令](../../部署启动指令.md)。
 

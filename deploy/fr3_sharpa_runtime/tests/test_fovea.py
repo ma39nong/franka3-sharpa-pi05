@@ -28,7 +28,7 @@ def policy():
         JointProbe(),
         stats,
         {
-            "foveation": {"version": fovea.VERSION, "execute_steps": 8, "initial_box": list(fovea.INITIAL_BOX)},
+            "foveation": {"version": fovea.VERSION, "execute_steps": 15, "initial_box": list(fovea.INITIAL_BOX)},
             "warmed_up": True,
         },
     )
@@ -48,7 +48,7 @@ def context(runtime):
     return {
         "session_id": runtime.session,
         "query_index": runtime.query_index,
-        "executed_steps": 0 if runtime.query_index == 0 else 8,
+        "executed_steps": 0 if runtime.query_index == 0 else 15,
         "current_box": runtime.box.tolist(),
     }
 
@@ -64,9 +64,9 @@ def test_fixed_initial_predicted_next_crop_and_execution_ack():
     # Read-only retries don't advance the crop or the temporal query index.
     again = server.infer({**obs, "_fovea": context(client)})
     client.accept_result(server.metadata, again)
-    with pytest.raises(ValueError, match="eight-step"):
+    with pytest.raises(ValueError, match="fifteen-step"):
         client.acknowledge_execution(7)
-    client.acknowledge_execution(8)
+    client.acknowledge_execution(15)
     assert client.query_index == 1
     np.testing.assert_array_equal(client.box, first["foveation"]["next_box"])
     second = server.infer({**obs, "_fovea": context(client)})
@@ -76,18 +76,22 @@ def test_fixed_initial_predicted_next_crop_and_execution_ack():
     np.testing.assert_allclose(first["actions"][0, 7:29], 0, atol=1e-6)
     np.testing.assert_allclose(first["actions"][0, 29:36], 0.2, atol=1e-6)
     with pytest.raises(ValueError, match="execution"):
-        client.acknowledge_execution(8)
+        client.acknowledge_execution(15)
 
 
 def test_reject_wrong_offset_and_stale_receipt():
     server = policy()
     client = FoveaRuntime("ws://127.0.0.1:8010")
-    with pytest.raises(ValueError, match="exactly8"):
-        FoveaRuntime("ws://localhost", execute_steps=15)
-    ctx = {**context(client), "executed_steps": 8}
+    with pytest.raises(ValueError, match="exactly15"):
+        FoveaRuntime("ws://localhost", execute_steps=8)
+    ctx = {**context(client), "executed_steps": 15}
     with pytest.raises(ValueError, match="execution count"):
         server.infer({**observation(), "_fovea": ctx})
     result = server.infer({**observation(), "_fovea": context(client)})
+    result["foveation"]["execute_steps"] = 8
+    with pytest.raises(ValueError, match="receipt"):
+        client.accept_result(server.metadata, result)
+    result["foveation"]["execute_steps"] = 15
     result["foveation"]["session_id"] = "old"
     with pytest.raises(ValueError, match="receipt"):
         client.accept_result(server.metadata, result)
@@ -125,7 +129,7 @@ def test_websocket_two_queries_with_real_crop_transforms():
         assert started.wait(10)
         client = FoveaRuntime(f"ws://127.0.0.1:{port}")
         first = client.infer_chunk(observation())[1]
-        client.acknowledge_execution(8)
+        client.acknowledge_execution(15)
         second = client.infer_chunk(observation())[1]
         assert first.shape == second.shape == (50, 58)
         assert client.query_index == 1

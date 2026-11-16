@@ -12,6 +12,7 @@ from openpi.models.pi0 import Pi0
 from openpi.models.pi0 import make_attn_mask
 from openpi.models.pi0_config import Pi0Config
 from openpi.shared import array_typing as at
+from openpi.subtasks.fovea import EXECUTE_STEPS
 
 LOCATION_START = 256000
 BOS = 2
@@ -33,7 +34,7 @@ class FoveaConfig(Pi0Config):
     pi05: bool = True
     rtc_max_delay: int = 0
     box_loss_weight: float = 0.1
-    execute_steps: int = 8
+    execute_steps: int = EXECUTE_STEPS
 
     def __post_init__(self):
         super().__post_init__()

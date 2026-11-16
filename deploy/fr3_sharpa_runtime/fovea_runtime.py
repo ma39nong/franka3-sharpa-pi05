@@ -1,4 +1,4 @@
-"""Serial eight-step client: commit a future box only after successful execution."""
+"""Serial fifteen-step client: commit a future box only after successful execution."""
 
 import time
 import uuid
@@ -13,9 +13,9 @@ from .runtime import validate_observation
 
 
 class FoveaRuntime:
-    def __init__(self, policy_url, *, execute_steps=8):
+    def __init__(self, policy_url, *, execute_steps=fovea.EXECUTE_STEPS):
         if execute_steps != fovea.EXECUTE_STEPS:
-            raise ValueError("Fovea requires exactly8 executed control steps")
+            raise ValueError("Fovea requires exactly15 executed control steps")
         self.policy_url = policy_url
         self.session = uuid.uuid4().hex
         self.query_index = 0
@@ -41,7 +41,7 @@ class FoveaRuntime:
             contract = metadata.get("foveation", {})
             if (
                 contract.get("version") != fovea.VERSION
-                or contract.get("execute_steps") != 8
+                or contract.get("execute_steps") != fovea.EXECUTE_STEPS
                 or contract.get("initial_box") != list(fovea.INITIAL_BOX)
                 or not metadata.get("warmed_up")
             ):
@@ -58,7 +58,7 @@ class FoveaRuntime:
         if (
             receipt["session_id"] != self.session
             or receipt["query_index"] != self.query_index
-            or receipt["execute_steps"] != 8
+            or receipt["execute_steps"] != fovea.EXECUTE_STEPS
             or receipt["source_size"] != [640, 400]
             or not np.array_equal(receipt["used_box"], self.box)
         ):
@@ -76,8 +76,8 @@ class FoveaRuntime:
         return {**metadata, "foveation_query": receipt}, actions, chunk
 
     def acknowledge_execution(self, completed_steps):
-        if type(completed_steps) is not int or completed_steps != 8 or self.pending is None:
-            raise ValueError("Commit requires a successful eight-step execution and pending prediction")
+        if type(completed_steps) is not int or completed_steps != fovea.EXECUTE_STEPS or self.pending is None:
+            raise ValueError("Commit requires a successful fifteen-step execution and pending prediction")
         self.box = self.pending
         self.pending = None
         self.query_index += 1

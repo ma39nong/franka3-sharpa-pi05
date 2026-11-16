@@ -3,9 +3,9 @@
 import numpy as np
 from PIL import Image
 
-VERSION = "tomato-foveavla-rgb-v1"
+VERSION = "tomato-foveavla-rgb-v1-h15"
 IMAGE_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb", "interaction_0_rgb")
-EXECUTE_STEPS = 8
+EXECUTE_STEPS = 15
 ACTION_HORIZON = 50
 FPS = 30
 LOCATION_START = 256000
