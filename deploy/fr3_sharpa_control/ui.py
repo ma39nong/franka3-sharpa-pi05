@@ -49,7 +49,7 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
 <label>启动前相机策略</label><select id="camera_policy"><option value="exclusive">部署独占接管：停止同组已知相机服务</option><option value="require_free">要求相机空闲：发现占用即报错</option></select>
-<div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag，并在结束后生成三路及三联视频</label>
+<div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
 <label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator">
 <label>定位器计算设备</label><select id="crop_device"><option value="cuda">GPU（推荐）</option><option value="cpu">CPU（先测延迟）</option></select>
 <div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">

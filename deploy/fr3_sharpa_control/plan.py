@@ -348,7 +348,7 @@ def plan_environment(plan):
                 "SHARPA_MODEL_PROFILE": profile.name,
                 "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
-    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR"):
+    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR", "SHARPA_FOUR_VIEW_RECORD_DIR"):
         env.pop(key, None)
     if plan["model"].get("crop_locator"):
         env.update(SHARPA_CROP_LOCATOR=plan["model"]["crop_locator"],

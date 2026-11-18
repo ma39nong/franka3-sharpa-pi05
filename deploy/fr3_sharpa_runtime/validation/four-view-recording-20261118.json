@@ -1,0 +1,41 @@
+{
+  "status": "COMPLETE",
+  "directory": ".deployment/four-view-recording-acceptance-v2/video/four_view",
+  "frames": 116,
+  "fps": 30,
+  "input_samples_in_window": 29,
+  "pre_gate_samples": 1,
+  "initial_sample": "latest_completed_before_gate",
+  "time_axis": "recording_gate_monotonic",
+  "cadence": "actual_inference_samples_held_for_playback",
+  "synthetic_new_roi_frames": false,
+  "roi_recomputed": false,
+  "panel_order": [
+    "head",
+    "left_wrist",
+    "right_wrist",
+    "interaction"
+  ],
+  "layout": "2x2",
+  "journal": {
+    "status": "COMPLETE",
+    "accepted": 30,
+    "written": 30,
+    "dropped": 0,
+    "error": null,
+    "stream": "actual_policy_inputs",
+    "cadence": "one_per_inference_response",
+    "pixel_encoding": "lossless_uint8_rgb_npz"
+  },
+  "scope": "30 actual four-view inputs from native recorded new119 RGB/state through real CUDA model; simulated gate and real MP4 export; no ROS or robot",
+  "roundtrip_ms": {
+    "first": 102.07960498519242,
+    "warm_p50": 123.85408999398351,
+    "warm_p95": 132.4789198115468
+  },
+  "regression_tests_passed": 709,
+  "regression_scope": "Full deploy/fr3_sharpa_runtime/tests suite",
+  "javascript_syntax_check": true,
+  "ros_recording_validated": false,
+  "robot_started": false
+}

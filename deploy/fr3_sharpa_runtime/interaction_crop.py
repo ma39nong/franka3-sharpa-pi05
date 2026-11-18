@@ -157,6 +157,7 @@ class InteractionCropper:
             crop = np.zeros((224,224,3),np.uint8)
             x,y = (224-rw)//2,(224-rh)//2
             crop[y:y+rh,x:x+rw] = cv2.resize(image,(rw,rh),interpolation=cv2.INTER_AREA)
+        self.record_pixels = crop.copy() if context.get('record_roi') else None
         self.counts[mode] += 1
         self.last = dict(mode=mode, local_roi_valid=box is not None, image_available=True,
                          source_camera='cam0', source_size=[width,height], crop_box=box,

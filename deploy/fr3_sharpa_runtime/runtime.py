@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import os
 import uuid
 
 import numpy as np
@@ -42,6 +43,8 @@ def validate_observation(observation: dict) -> dict:
 class SharpaRuntime:
     """Request one 50-step prediction and prepare one independent session."""
 
+    four_view_recording = None
+
     def __init__(self, policy_url: str = config.POLICY_URL, *, paper_rtc=False, train_rtc=False):
         if not policy_url.startswith("ws://127.0.0.1:") and not policy_url.startswith("ws://localhost:"):
             raise ValueError("First runtime only accepts a loopback policy server")
@@ -49,6 +52,10 @@ class SharpaRuntime:
         self.train_rtc = train_rtc
         self.policy_url = policy_url
         self.crop_session = uuid.uuid4().hex
+        self.four_view_recording = None
+        if os.environ.get('SHARPA_FOUR_VIEW_RECORD_DIR'):
+            from .four_view_recording import recording_for
+            self.four_view_recording = recording_for(os.environ['SHARPA_FOUR_VIEW_RECORD_DIR'])
         self.adapter = SharpaActionAdapter()
         if (config.CHECKPOINT is not None and config.NORM_STATS is not None
                 and (config.CHECKPOINT / "params/_METADATA").is_file()):
@@ -110,6 +117,8 @@ class SharpaRuntime:
         clean = validate_observation(observation)
         clean["_crop_context"] = {"source_monotonic_ns": observation.get("_captured_monotonic_ns"),
                                   "session": self.crop_session, "topic_stamp_ns": observation.get("_topic_stamp_ns", {})}
+        if self.four_view_recording is not None:
+            clean["_crop_context"]["record_roi"] = True
         timing["client_preprocessing_ms"] = (time.monotonic_ns()-start)/1e6
         timing["websocket_connect_start_monotonic_ns"] = time.monotonic_ns()
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=remaining(10),
@@ -152,6 +161,13 @@ class SharpaRuntime:
             raise ValueError("Unexpected RTC receipt for ordinary inference")
         self.last_receipt = result.get("rtc")
         actions = as_finite_action_chunk(result["actions"])
+        if self.four_view_recording is not None:
+            payload = result.get('recording_roi')
+            if payload is None:
+                self.four_view_recording.error = 'Four-view service returned no actual ROI pixels'
+            else:
+                self.four_view_recording.submit(observation, payload, query_id=uuid.uuid4().hex,
+                                                task=observation.get('_task_record'))
         # Fresh session for this single chunk; this version never splices chunks.
         session_id = f"openpi-{uuid.uuid4().hex}"
         start = time.monotonic_ns()

@@ -39,6 +39,11 @@ class TimedPolicy:
         cropper = getattr(self.policy, "interaction_cropper", None)
         if cropper is not None:
             result["interaction_crop"] = dict(cropper.last)
+            if obs.get('_crop_context', {}).get('record_roi'):
+                from .four_view_recording import pixel_sha
+                pixels = cropper.record_pixels
+                result['recording_roi'] = dict(pixels=pixels,
+                    metadata={**cropper.last, 'roi_pixel_sha256':pixel_sha(pixels)})
             timing["interaction_crop"] = dict(cropper.last)
         result["diagnostic_timing"] = timing
         return result

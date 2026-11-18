@@ -489,6 +489,8 @@ class DeploymentController:
             env["SHARPA_TASK_RUN_ID"] = self.task_run_id
         if self.plan["settings"]["record"]:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
+            if self.plan['model'].get('crop_locator'):
+                env['SHARPA_FOUR_VIEW_RECORD_DIR'] = str(directory/'policy_views')
         try:
             self._require_model(self.plan, env)
             self._command(self.plan["check"], "parameter_check", env)

@@ -494,3 +494,35 @@ bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --smoke-only --enable
 五阶段真实Unix IPC与生产TaskRTC配合模拟硬件所有者验证，全套运行时回归705项通过，
 浏览器核对权重识别、五阶段按钮及执行配置预检通过；未运行ROS、SDK或机器人。
 以上耗时不包含工控机真实相机／ROS传输，不是新数据泛化、动作可执行性或采摘成功率。
+
+### 四路模型的录制与四联回放（2026-11-18）
+
+勾选“录制ROSbag及视频”后，三路模型继续原录制流程；已识别的100条／119条四路模型会额外保存
+**每次推理实际使用的三路原图、第四路ROI原像素及时间戳**，不是导出时重新定位。
+模型服务通过本机响应回传ROI，执行客户端用有界后台队列写无损NPZ，不阻塞等待磁盘写入。
+源时间戳、ROI像素SHA、裁剪模式／回退原因、Prompt和任务请求版本保留在各NPZ metadata中。
+队列丢帧、像素校验失败或写盘失败会记录为INCOMPLETE／FAILED；不会把缺失ROI当成成功录制。
+
+日志目录新增：
+
+```text
+policy_views/                 # 实际四路输入NPZ、写入状态
+video/four_view/head.mp4
+video/four_view/left_wrist.mp4
+video/four_view/right_wrist.mp4
+video/four_view/interaction.mp4
+video/four_view/four_cameras.mp4   # 头部／左腕；右腕／局部，2×2布局
+```
+
+原始ROSbag、`video/head.mp4`、左右腕MP4和`video/three_cameras.mp4`仍保留完整相机流。
+第四路是派生的策略输入，按真实推理请求产生，不是独立30Hz相机，也没有新增一个常驻ROS图像话题。
+四联与对应四份单路视频采用录制gate的单调时钟，从同一推理样本同步显示四个面板；
+30fps只用于播放，在下一份实际输入到来前保持上一帧，画面标注`policy input HELD`及保持时长。
+开始gate之前最后一份输入可作为首块的初始画面并单独记数；结束后样本排除。
+推理输入记录不等于动作已执行，过时／取消请求可能仍有记录，应按metadata中的任务版本与执行日志核对。
+正常停止后等待后台视频导出完成；ROI样本缺失或不完整时导出明确失败，原bag及NPZ保留。
+
+本次用119条20000真实GPU模型和新录制RGB／实测关节完成30次普通／RTC请求，
+录下30份四路输入、丢帧0；真实MP4导出得到五个视频，四联1280×720。
+采集gate为离线模拟，未运行真实ROS录制或机器人；不宣称全硬件链路已验收。
+开启四路记录的本机往返P95约132ms，工控机磁盘、ROS与GPU竞争仍需现场实测。

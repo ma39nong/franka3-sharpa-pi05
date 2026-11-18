@@ -90,7 +90,7 @@ class TaskRTC:
             observation = self.capture(ticket, timeout)
         if not self.control.valid(ticket):
             raise InterruptedError("superseded after observation; no policy request sent")
-        observation = dict(observation, prompt=ticket["prompt"])
+        observation = dict(observation, prompt=ticket["prompt"], _task_record={k:ticket[k] for k in ("run_id", "request_id", "stage_id", "stage_version")})
         age = time.monotonic_ns() - observation["_captured_monotonic_ns"]
         if not 0 <= age <= 200_000_000:
             raise ValueError("Task observation stale before inference")
