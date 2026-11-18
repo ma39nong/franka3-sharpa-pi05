@@ -20,6 +20,40 @@ def test_direct_validator_rejects_slew():
         validate_direct_hand_actions(actions)
 
 
+def test_flash_slew_override_accepts_015_but_preserves_ordinary_010_limit():
+    actions = chunk()
+    actions[1:, RIGHT_SHARPA_SLICE.start] = 0.15
+    with pytest.raises(ValueError, match="slew"):
+        validate_direct_hand_actions(actions)
+    validate_direct_hand_actions(actions, hand_slew_limit_rad=0.20)
+
+
+@pytest.mark.parametrize("value", [0, -0.1, float("nan"), float("inf"), True])
+def test_invalid_hand_slew_override_is_rejected(value):
+    with pytest.raises(ValueError, match="finite and positive"):
+        validate_direct_hand_actions(chunk(), hand_slew_limit_rad=value)
+
+
+def test_flash_command_windows_enforce_020_at_window_boundary(monkeypatch):
+    from deploy.fr3_sharpa_runtime import sdk_direct_motion_ros as motion
+    from deploy.fr3_sharpa_runtime import sdk_direct
+
+    limits = np.tile([0., 1.5], (22, 1))
+    monkeypatch.setattr(sdk_direct, "hand_joint_limits", lambda: limits)
+    def hand_check(actions, **options):
+        validate_direct_hand_actions(actions, **options)
+    monkeypatch.setattr(motion, "validate_action_ranges", hand_check)
+    commands = np.zeros((55, 58), dtype=np.float32)
+    commands[50:, RIGHT_SHARPA_SLICE.start] = 0.15
+    motion.validate_flash_commands(commands)
+    commands[50:, RIGHT_SHARPA_SLICE.start] = 0.20
+    with pytest.raises(ValueError, match="slew"):
+        motion.validate_flash_commands(commands)
+    commands[50:, RIGHT_SHARPA_SLICE.start] = -0.01
+    with pytest.raises(ValueError, match="joint limits"):
+        motion.validate_flash_commands(commands)
+
+
 def test_scaled_action_frames_preserves_targets_and_stretches_time():
     actions = chunk()
     actions[1, 0] = 0.1

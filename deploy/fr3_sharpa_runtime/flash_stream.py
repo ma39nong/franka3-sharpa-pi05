@@ -11,6 +11,8 @@ import numpy as np
 
 from .protocol import as_finite_action_chunk
 
+FLASH_HAND_SLEW_LIMIT_RAD = 0.20
+
 
 @dataclass(frozen=True)
 class FlashSettings:

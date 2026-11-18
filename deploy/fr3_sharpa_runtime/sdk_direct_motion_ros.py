@@ -30,6 +30,16 @@ from .sdk_direct import (DEFAULT_PREDICTION_CLIP_RAD, SharpaSdkDirectExecutor, a
                          chunk_command_frames, clip_hand_predictions, play_command_frames, prepare_command_with_limits)
 
 
+def validate_flash_commands(commands):
+    from .flash_stream import FLASH_HAND_SLEW_LIMIT_RAD
+    # Preserve every transition across the existing validator's 50-row windows.
+    for offset in range(0, len(commands), 49):
+        part = commands[offset:offset + 50]
+        padded = np.repeat(part[-1:], 50, axis=0)
+        padded[:len(part)] = part
+        validate_action_ranges(padded, hand_slew_limit_rad=FLASH_HAND_SLEW_LIMIT_RAD)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--enable-hardware", action="store_true", required=True)
@@ -69,15 +79,6 @@ def main() -> None:
     stream_tick = None
     stream_log = None
     stream_last_command = None
-
-    def validate_flash_commands(commands):
-        # Existing range API consumes 50 rows. Preserve every transition while
-        # checking arbitrary committed/suffix sequences with overlapping windows.
-        for offset in range(0, len(commands), 49):
-            part = commands[offset:offset + 50]
-            padded = np.repeat(part[-1:], 50, axis=0)
-            padded[:len(part)] = part
-            validate_action_ranges(padded)
 
     def verify_flash_plan(plan):
         if config.MODEL_PROFILE.name != "flash-absolute":
@@ -202,7 +203,10 @@ def main() -> None:
                             raise TimeoutError("FLASH trajectory reached stop reserve")
                     transition = target_chunk(command)
                     transition[0] = stream_last_command
-                    validate_action_ranges(transition)  # Includes the actual splice slew.
+                    if hasattr(stream, "settings"):
+                        validate_flash_commands(transition)
+                    else:
+                        validate_action_ranges(transition)  # Includes the actual splice slew.
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     stream_last_command = command.copy()

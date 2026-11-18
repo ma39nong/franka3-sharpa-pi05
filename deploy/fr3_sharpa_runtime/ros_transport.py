@@ -18,7 +18,7 @@ from .protocol import (
     DT_NS, LEFT_FR3_SLICE, LEFT_SHARPA_SLICE, RIGHT_FR3_SLICE,
     RIGHT_SHARPA_SLICE, SHARPA_JOINT_NAMES, as_finite_action_chunk,
 )
-from .sdk_direct import SharpaSdkDirectExecutor, validate_direct_hand_actions
+from .sdk_direct import SDK_SLEW_LIMIT_RAD, SharpaSdkDirectExecutor, validate_direct_hand_actions
 
 
 def _stamp(ns):
@@ -83,7 +83,8 @@ def _require_parameter(node, remote: str, name: str, expected):
         raise RuntimeError(f"{remote} parameter {name} is not enabled")
 
 
-def validate_action_ranges(actions: np.ndarray, *, check_slew: bool = True) -> None:
+def validate_action_ranges(actions: np.ndarray, *, check_slew: bool = True,
+                           hand_slew_limit_rad: float = SDK_SLEW_LIMIT_RAD) -> None:
     """Intrinsic chunk checks, independent of any offline or live state."""
     from teleop_core.safety import LOWER_LIMITS, UPPER_LIMITS
 
@@ -91,7 +92,7 @@ def validate_action_ranges(actions: np.ndarray, *, check_slew: bool = True) -> N
     arm = np.concatenate((actions[:, LEFT_FR3_SLICE], actions[:, RIGHT_FR3_SLICE]), axis=1)
     if np.any(arm < LOWER_LIMITS) or np.any(arm > UPPER_LIMITS):
         raise ValueError("FR3 chunk exceeds existing gateway joint limits")
-    validate_direct_hand_actions(actions, check_slew=check_slew)
+    validate_direct_hand_actions(actions, check_slew=check_slew, hand_slew_limit_rad=hand_slew_limit_rad)
 
 
 def validate_gateway_graph(node) -> None:

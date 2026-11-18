@@ -9,7 +9,7 @@ import uuid
 import numpy as np
 
 from .flash_contract import validate_flash_observation
-from .flash_stream import FlashSettings, observation_anchor
+from .flash_stream import FLASH_HAND_SLEW_LIMIT_RAD, FlashSettings, observation_anchor
 
 
 def settings_from_args(args):
@@ -40,7 +40,7 @@ def run_flash_async(runtime, observe, worker, first, initial_observation, args,
     def save(status, **fields):
         report = dict(status=status, broker_mode="flashRTC", run_session_id=session,
                       accepted_chunks=accepted, stage=stage, elapsed_s=clock() - started,
-                      settings=asdict(settings), **fields)
+                      settings=asdict(settings), hand_slew_limit_rad=FLASH_HAND_SLEW_LIMIT_RAD, **fields)
         report["rejected_candidates"] = rejected
         report["pipeline_latency_ms"] = ({str(p): float(np.percentile(pipeline_ms, p)) for p in (50, 95, 99)}
                                          if pipeline_ms else {})

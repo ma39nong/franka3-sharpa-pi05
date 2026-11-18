@@ -79,6 +79,8 @@ trace继续记录真实history/context、请求回执、配置/统计身份及�
 
 两种模式继续使用相同的 `serve.sh --model flash-absolute` 服务、`runtime.sh`、Current/Home、相机准入、SDK反馈、录制和失能读回流程。无需生成新的契约或验证报告。只切换这两种模式时，GUI可复用已经预热的同一FLASH模型服务；切换其他模型沿用原有身份检查。
 
+2026-11-11 按用户要求，`flashRTC` 的部署侧手部相邻帧变化检查调整为 **0.20 rad**（达到或超过仍拒绝），覆盖首段安装、候选安装和实际发帧检查；运行报告的 `hand_slew_limit_rad` 保存该值。普通 pi05、串行、普通 RTC，以及 Home/慢速接近仍沿用原来的0.10 rad检查。GUI接缝位置阈值依然独立生效；此次调整没有修改设备SDK配置，也不代表已经通过实机验证。
+
 ```bash
 # 串行：先检查参数；将 --check 替换为 --execute --enable-hardware 才会执行。
 bash deploy/fr3_sharpa_runtime/runtime.sh --model flash-absolute \

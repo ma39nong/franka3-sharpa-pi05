@@ -205,15 +205,19 @@ def clip_hand_predictions(actions, *, execute_steps=15, max_correction_rad=DEFAU
                        "corrections": corrections}
 
 
-def validate_direct_hand_actions(actions: np.ndarray, *, check_slew: bool = True) -> None:
+def validate_direct_hand_actions(actions: np.ndarray, *, check_slew: bool = True,
+                                 hand_slew_limit_rad: float = SDK_SLEW_LIMIT_RAD) -> None:
     """Validate finite positions, native Wave limits and per-frame slew."""
+    if (isinstance(hand_slew_limit_rad, bool) or not np.isfinite(hand_slew_limit_rad)
+            or hand_slew_limit_rad <= 0):
+        raise ValueError("Hand slew limit must be finite and positive")
     chunk = as_finite_action_chunk(actions)
     limits = hand_joint_limits()
     for side, part in (("left", LEFT_SHARPA_SLICE), ("right", RIGHT_SHARPA_SLICE)):
         hand = chunk[:, part]
         if np.any(hand < limits[:, 0]) or np.any(hand > limits[:, 1]):
             raise ValueError(f"{side} Sharpa SDK command exceeds Wave joint limits")
-        if check_slew and len(hand) > 1 and np.max(np.abs(np.diff(hand, axis=0))) >= SDK_SLEW_LIMIT_RAD:
+        if check_slew and len(hand) > 1 and np.max(np.abs(np.diff(hand, axis=0))) >= hand_slew_limit_rad:
             raise ValueError(f"{side} Sharpa SDK command exceeds slew limit")
 
 
