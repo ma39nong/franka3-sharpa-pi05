@@ -146,7 +146,9 @@ class RTCTimeline:
         self.invalidated = True
         self.generation += 1
 
-    def install(self, actions, receipt, now, *, task_epoch=None):
+    def install(self, actions, receipt, now, *, task_epoch=None, prepare_entry=None, admit_entry=None):
+        if prepare_entry is not None and admit_entry is not None:
+            raise ValueError("Supply only one RTC entry validator")
         if self.invalidated or task_epoch != self.task_epoch:
             raise ValueError("RTC task epoch mismatch or invalidated stream")
         if self.pending is None:
@@ -159,10 +161,26 @@ class RTCTimeline:
         skipped = math.ceil(max(0.0, now - sent) * self.node_hz - 1e-9)
         if skipped > context.prefix_attention_horizon or skipped >= 50:
             raise TimeoutError("RTC latency exceeded the guided prefix horizon")
+        bridge_steps = 0
+        if prepare_entry is not None or admit_entry is not None:
+            candidate = as_finite_action_chunk(actions)
+            try:
+                if prepare_entry is not None:
+                    actions, bridge_steps = prepare_entry(candidate, skipped)
+                else:
+                    admit_entry(candidate[skipped])
+            except ValueError as error:
+                # Consume this receipt only. The previous plan keeps its
+                # original generation, time anchor and exhaustion deadline.
+                self.pending = None
+                return {"rejected": True, "reason": str(error), "generation": self.generation}
         self._install(actions, now, skipped)
-        return {
+        result = {
             "skipped": skipped,
             "source_generation": context.source_number,
             "generation": self.generation,
             "actual_delay_s": now - sent,
         }
+        if prepare_entry is not None:
+            result["entry_bridge_steps"] = bridge_steps
+        return result

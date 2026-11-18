@@ -128,12 +128,10 @@ class MotionWorker:
     def _close_direct(self):
         deadline = time.monotonic() + self._close_grace_s
         try:
-            try:
-                self.process.stdin.close()
-            except (OSError, ValueError):
-                pass
             # The SDK worker has its own process group. Interrupt its active
             # motion, but still wait for its final confirmation over the pipe.
+            # Keep stdin open until that confirmation: EOF followed by SIGINT
+            # could interrupt entry into the worker's protected cleanup block.
             if self.process.poll() is None:
                 try:
                     os.killpg(self.process.pid, signal.SIGINT)
@@ -158,4 +156,8 @@ class MotionWorker:
                     pass
                 self.process.wait(timeout=5)
         finally:
+            try:
+                self.process.stdin.close()
+            except (OSError, ValueError):
+                pass
             self._protocol_read.close()

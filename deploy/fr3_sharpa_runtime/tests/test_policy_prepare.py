@@ -1,5 +1,4 @@
-from deploy.fr3_sharpa_runtime.protocol import DT_NS, FPS
-from types import SimpleNamespace
+from deploy.fr3_sharpa_runtime.protocol import DT_NS
 import sys
 import numpy as np
 import pytest
@@ -43,6 +42,18 @@ def test_commanded_arrival_alone_is_not_measured_arrival():
     clock += DT_NS
     with pytest.raises(TimeoutError):
         planner.step(live(state, clock), now_ros_ns=clock, now_monotonic_ns=clock)
+
+
+def test_timeout_identifies_blocked_right_hand_joint():
+    target = np.zeros(58, dtype=np.float32)
+    state = target.copy()
+    state[51] = 0.031  # right ring PIP; left hand is already at target
+    planner = SlowApproach(target, target, tolerance_rad=0.02, timeout_s=0.1)
+    planner.step(live(state, 1_000_000_000), now_ros_ns=1_000_000_000,
+                 now_monotonic_ns=1_000_000_000, enforce_execute_delta=False)
+    with pytest.raises(TimeoutError, match="worst_right_sharpa=.*ring_PIP"):
+        planner.step(live(state, 1_200_000_000), now_ros_ns=1_200_000_000,
+                     now_monotonic_ns=1_200_000_000, enforce_execute_delta=False)
 
 
 def test_tracking_lag_stops_without_weakening_existing_delta_limit():

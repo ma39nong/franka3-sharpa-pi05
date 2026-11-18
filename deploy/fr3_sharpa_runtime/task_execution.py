@@ -67,6 +67,7 @@ def execute_task(args):
         run._start_observation_worker(args.ros_overlay)
         if args.initialization == "home":
             from .home_pose import home_target, load_home
+            from .policy_prepare import HOME_TOLERANCE_RAD
 
             arms, metadata = load_home(args.home_poses, args.home_task, hand_path=args.hand_home)
             feedback = worker.request({"operation": "feedback"}, timeout=6)
@@ -76,7 +77,7 @@ def execute_task(args):
                     operation="prepare",
                     target=target.tolist(),
                     speed_rad_s=args.prepare_speed_rad_s,
-                    tolerance_rad=0.02,
+                    tolerance_rad=HOME_TOLERANCE_RAD,
                     home_recovery=True,
                 ),
                 timeout=180,

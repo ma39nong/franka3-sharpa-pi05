@@ -157,7 +157,7 @@ def execute_policy_prepare(args):
         return execute_task(args)
     import shlex
     from .motion_worker import MotionWorker
-    from .policy_prepare import prepare_and_run_chunks
+    from .policy_prepare import HOME_TOLERANCE_RAD, prepare_and_run_chunks
     from .execution_trace import ExecutionTraceWriter
     setup = args.ros_overlay / "setup.bash"
     if not setup.is_file():
@@ -247,7 +247,7 @@ def execute_policy_prepare(args):
         if getattr(args, "broker_mode", "serial") == "rtc":
             if initial_target is not None:
                 prepared = worker.request({"operation": "prepare", "target": initial_target.tolist(),
-                    "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": 0.02, "home_recovery": True})
+                    "speed_rad_s": args.prepare_speed_rad_s, "tolerance_rad": HOME_TOLERANCE_RAD, "home_recovery": True})
                 if prepared.get("status") != "PASS":
                     raise RuntimeError("Home failed before RTC")
                 initial = observation_after_completion(args, prepared)

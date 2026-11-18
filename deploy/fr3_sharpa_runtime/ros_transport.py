@@ -15,7 +15,7 @@ from .feedback import ROSFeedbackProvider
 from .preflight import execute_preflight
 from .ros_observation import MAX_AGE_NS
 from .protocol import (
-    DT_NS, LEFT_FR3_SLICE, RIGHT_FR3_SLICE,
+    DT_NS, FR3_POLICY_NAMES, LEFT_FR3_SLICE, RIGHT_FR3_SLICE,
     SHARPA_JOINT_NAMES, as_finite_action_chunk,
 )
 from .sdk_direct import SharpaSdkDirectExecutor, validate_direct_hand_actions
@@ -89,9 +89,56 @@ def validate_action_ranges(actions: np.ndarray, *, check_slew: bool = True) -> N
 
     actions = as_finite_action_chunk(actions)
     arm = np.concatenate((actions[:, LEFT_FR3_SLICE], actions[:, RIGHT_FR3_SLICE]), axis=1)
-    if np.any(arm < LOWER_LIMITS) or np.any(arm > UPPER_LIMITS):
-        raise ValueError("FR3 chunk exceeds existing gateway joint limits")
+    outside = (arm < LOWER_LIMITS) | (arm > UPPER_LIMITS)
+    if outside.any():
+        frame, joint = np.argwhere(outside)[0]
+        raise ValueError(
+            "FR3 chunk exceeds existing gateway joint limits: "
+            f"{FR3_POLICY_NAMES[joint]} frame[{frame}]={arm[frame, joint]:.6f} rad, "
+            f"allowed [{LOWER_LIMITS[joint]:.6f}, {UPPER_LIMITS[joint]:.6f}] rad"
+        )
     validate_direct_hand_actions(actions, check_slew=check_slew)
+
+
+class RTCCommandLimiter:
+    """Keep online task commands continuous inside the installed device bounds."""
+
+    def __init__(self, arm_speed):
+        from teleop_core.safety import LOWER_LIMITS, UPPER_LIMITS
+        from .protocol import LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE
+        from .sdk_direct import SDK_SLEW_LIMIT_RAD, _hand_bounds_float32, hand_joint_limits
+
+        if not np.isfinite(arm_speed) or arm_speed <= 0:
+            raise ValueError("RTC requires a finite positive gateway speed")
+        arm = np.column_stack((LOWER_LIMITS, UPPER_LIMITS))
+        hand = hand_joint_limits()
+        bounds = np.concatenate((arm[:7], hand, arm[7:], hand))
+        self.lower, self.upper = _hand_bounds_float32(bounds)
+        self.step = np.full(58, arm_speed * DT_NS / 1e9)
+        self.step[LEFT_SHARPA_SLICE] = self.step[RIGHT_SHARPA_SLICE] = SDK_SLEW_LIMIT_RAD
+        # Leave room for command rounding and the strict hand slew comparison.
+        rounding = np.spacing(np.maximum(np.abs(self.lower), np.abs(self.upper))).astype(np.float64) * 2
+        self.step = np.maximum(0.0, self.step - rounding)
+
+    def project(self, actions):
+        raw = as_finite_action_chunk(actions)
+        return np.clip(raw, self.lower, self.upper)
+
+    def step_toward(self, previous, target):
+        previous, target = np.asarray(previous), np.asarray(target)
+        if (previous.shape != (58,) or target.shape != (58,)
+                or not np.isfinite(previous).all() or not np.isfinite(target).all()):
+            raise ValueError("RTC dispatch requires finite 58D commands")
+        if np.any((previous < self.lower) | (previous > self.upper)):
+            raise ValueError("Previous RTC command is outside the installed joint limits")
+        desired = np.clip(target, self.lower, self.upper).astype(np.float64)
+        delta = desired - previous
+        # One interpolation fraction keeps both arms and hands in phase.
+        moving = np.abs(delta) > self.step
+        if not moving.any():
+            return desired.astype(np.float32)
+        fraction = np.min(self.step[moving] / np.abs(delta[moving]))
+        return (previous + fraction * delta).astype(np.float32)
 
 
 def read_gateway_joint_speed(node):

@@ -390,11 +390,19 @@ def test_parent_worker_budget_covers_full_disable_window(monkeypatch, tmp_path):
         pid=12345, stdin=io.StringIO(), poll=lambda: None, wait=lambda **kwargs: waits.append(kwargs["timeout"])
     )
     monkeypatch.setattr(motion_worker.subprocess, "Popen", lambda *args, **kwargs: process)
-    monkeypatch.setattr(motion_worker.os, "killpg", lambda *args: None)
-    monkeypatch.setattr(MotionWorker, "_await_shutdown", lambda self, deadline: True)
+    def interrupt(*args):
+        assert not process.stdin.closed  # Do not race EOF cleanup with SIGINT.
+
+    def acknowledge(self, deadline):
+        assert not process.stdin.closed
+        return True
+
+    monkeypatch.setattr(motion_worker.os, "killpg", interrupt)
+    monkeypatch.setattr(MotionWorker, "_await_shutdown", acknowledge)
     worker = MotionWorker(["fake"], cwd=tmp_path, protocol_fd=True)
     worker.close()
     assert waits[0] > 120
+    assert process.stdin.closed
 
 
 def test_outer_session_waits_for_configured_disable_grace_before_cleanup(monkeypatch):

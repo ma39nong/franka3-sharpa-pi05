@@ -214,8 +214,15 @@ def validate_direct_hand_actions(actions: np.ndarray, *, check_slew: bool = True
         hand = chunk[:, part]
         if np.any(hand < limits[:, 0]) or np.any(hand > limits[:, 1]):
             raise ValueError(f"{side} Sharpa SDK command exceeds Wave joint limits")
-        if check_slew and len(hand) > 1 and np.max(np.abs(np.diff(hand, axis=0))) >= SDK_SLEW_LIMIT_RAD:
-            raise ValueError(f"{side} Sharpa SDK command exceeds slew limit")
+        if check_slew and len(hand) > 1:
+            delta = np.abs(np.diff(hand, axis=0))
+            frame, joint = np.unravel_index(np.argmax(delta), delta.shape)
+            if delta[frame, joint] >= SDK_SLEW_LIMIT_RAD:
+                raise ValueError(
+                    f"{side} Sharpa command exceeds deployment slew limit: "
+                    f"{SHARPA_JOINT_NAMES[joint]} frames {frame}->{frame + 1} "
+                    f"change={delta[frame, joint]:.6f} rad, limit={SDK_SLEW_LIMIT_RAD:.6f} rad"
+                )
 
 
 @dataclass

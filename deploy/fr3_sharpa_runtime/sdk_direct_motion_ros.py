@@ -66,6 +66,7 @@ def main() -> None:
     stream_tick = None
     stream_log = None
     stream_last_command = None
+    entry_bridge_until = None
 
     def stream_event(name, **fields):
         if stream_log is not None:
@@ -75,6 +76,12 @@ def main() -> None:
             stream_log.flush()
 
     def stream_actions(request):
+        if args.online_task_handoff:
+            raw = as_finite_action_chunk(request["actions"])
+            projected = command_limiter.project(raw)
+            adjustment = np.abs(projected - raw)
+            return projected, {"joint_range_projected_values": int(np.count_nonzero(adjustment)),
+                               "max_joint_range_projection_rad": float(adjustment.max())}
         actions, clipping = clip_hand_predictions(request["actions"], execute_steps=50,
             max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
         validate_action_ranges(actions, check_slew=False)
@@ -108,9 +115,11 @@ def main() -> None:
             rclpy.spin_once(node, timeout_sec=0.05)
         validate_gateway_admission(node)
         gateway_speed = None
+        command_limiter = None
         if args.online_task_handoff:
-            from .ros_transport import read_gateway_joint_speed
+            from .ros_transport import RTCCommandLimiter, read_gateway_joint_speed
             gateway_speed = read_gateway_joint_speed(node)
+            command_limiter = RTCCommandLimiter(gateway_speed)
         existing = {
             topic: node.get_publishers_info_by_topic(topic)
             for topic in ("/sharpa/left/joint_states", "/sharpa/right/joint_states")
@@ -180,23 +189,30 @@ def main() -> None:
                         raise RuntimeError("RTC 30Hz deadline missed; stopped")
                     current = fresh_feedback()
                     handover_tick = args.online_task_handoff and stream.switch is not None
+                    entry_bridge_tick = entry_bridge_until is not None and stream_tick <= entry_bridge_until
                     previous_handoff_token = stream.applied_token if args.online_task_handoff else None
-                    command = stream.sample(now)
+                    sample_time = max(stream.installed_at, stream_tick) if entry_bridge_tick and not handover_tick else now
+                    target = stream.sample(sample_time)
+                    command = (command_limiter.step_toward(stream_last_command, target)
+                               if command_limiter is not None else target)
                     transition = target_chunk(command)
                     transition[0] = stream_last_command
                     validate_action_ranges(transition)  # Includes the actual splice slew.
-                    if handover_tick:
+                    if command_limiter is not None:
                         from .stage_handoff import validate_command_step
                         validate_command_step(stream_last_command, command, gateway_speed)
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     stream_last_command = command.copy()
+                    if args.online_task_handoff:
+                        stream.mark_dispatched(now, command)
                     if args.online_task_handoff and stream.applied_token != previous_handoff_token:
                         stream.applied_monotonic_s = time.monotonic()
                         stream_event("handoff_applied", token=stream.applied_token,
                                      generation=stream.generation, phase=stream.phase(now))
                     stream_event("frame", generation=stream.generation, phase=stream.phase(now),
                                  command=command.tolist(), measured=current.state.tolist(),
+                                 rtc_step_limited=bool(np.any(command != target)),
                                  handoff_state=("blend" if stream.bridge else "bounded_previous")
                                      if args.online_task_handoff and stream.switch else "stage",
                                  handoff_token=stream.switch["token"]
@@ -223,6 +239,8 @@ def main() -> None:
                     timeline_class = RTCTimeline
                 actions, clipping_report = stream_actions(request)
                 current = fresh_feedback()
+                if args.online_task_handoff:
+                    validate_action_ranges(target_chunk(actions[0]), check_slew=False)
                 # Only the initial handover uses the existing slow approach.
                 if request.get("strict_start"):
                     from .preflight import execute_preflight
@@ -237,6 +255,8 @@ def main() -> None:
                         approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
                 executor.resume_stream()
                 def send_initial(frame):
+                    if args.online_task_handoff:
+                        validate_action_ranges(target_chunk(frame), check_slew=False)
                     executor.send(frame[LEFT_SHARPA_SLICE], frame[RIGHT_SHARPA_SLICE])
                     publish_frame(frame)
                 play_command_frames(frames, send_initial, fresh_feedback)
@@ -248,6 +268,7 @@ def main() -> None:
                                      task_epoch=request.get("task_epoch"))
                 stream_tick = now
                 stream_last_command = actions[0].copy()
+                entry_bridge_until = None
                 path = Path(request["events_path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
                 stream_log = path.open("x", encoding="utf-8")
@@ -270,7 +291,8 @@ def main() -> None:
                 if not args.online_task_handoff or stream is None:
                     raise ValueError("Online task handover is not enabled or no active stream")
                 fresh_feedback()
-                boundary = stream.begin_switch(request["task_epoch"], request["request_id"], time.monotonic())
+                boundary = stream.begin_switch(request["task_epoch"], request["request_id"], time.monotonic(),
+                                               finish_chunk=request.get("finish_chunk") is True)
                 stream_event("switch_requested", boundary=boundary, arm_speed=gateway_speed)
                 print(json.dumps({"status": "PASS", "boundary": boundary}), file=protocol, flush=True)
             elif operation == "stream_handoff":
@@ -279,20 +301,45 @@ def main() -> None:
                 actions, clipping_report = stream_actions(request)
                 fresh_feedback()
                 now = time.monotonic()
-                result = stream.prepare_handoff(actions, request["ticket"], now, stream_tick,
-                                                 stream_last_command, gateway_speed, validate_action_ranges)
+                from .stage_handoff import HandoffTrajectoryRejected
+                try:
+                    result = stream.prepare_handoff(actions, request["ticket"], now, stream_tick,
+                                                     stream_last_command, gateway_speed, validate_action_ranges,
+                                                     validate_continuation=False,
+                                                     limit_step=command_limiter.step_toward)
+                except HandoffTrajectoryRejected as error:
+                    result = {"rejected": True, "reason": str(error), "token": request["ticket"]["token"]}
+                    stream_event("handoff_rejected", **result)
+                    print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
+                    continue
                 stream_event("handoff_armed", **result, clipping=clipping_report)
                 print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_install":
                 if stream is None:
                     raise ValueError("No active RTC stream")
                 actions, clipping_report = stream_actions(request)
+                def validate_window(window, *, check_slew=True):
+                    padded = target_chunk(window[-1])
+                    padded[:len(window)] = window
+                    validate_action_ranges(padded, check_slew=check_slew)
+
+                def prepare_entry(candidate, skipped):
+                    from .stage_handoff import prepare_rtc_entry
+                    return prepare_rtc_entry(candidate, skipped, stream_last_command, gateway_speed,
+                                             lambda window: validate_window(window, check_slew=False),
+                                             validate_window)
+
                 result = stream.install(actions, request["receipt"], time.monotonic(),
-                                        task_epoch=request.get("task_epoch"))
-                # Validate the actual last command -> first new command before acknowledging.
-                transition = target_chunk(stream.sample(time.monotonic()))
-                transition[0] = stream_last_command
-                validate_action_ranges(transition)
+                                        task_epoch=request.get("task_epoch"),
+                                        prepare_entry=prepare_entry if args.online_task_handoff else None)
+                if result.get("rejected"):
+                    stream_event("install_rejected", **result, receipt=request["receipt"])
+                    print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
+                    continue
+                if not args.online_task_handoff:
+                    validate_window(np.stack((stream_last_command, stream.sample(time.monotonic()))))
+                steps = result.get("entry_bridge_steps", 0)
+                entry_bridge_until = stream.installed_at + steps / stream.node_hz if steps else None
                 stream_event("install", **result, receipt=request["receipt"], clipping=clipping_report)
                 print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
             elif operation == "stream_stop":
@@ -346,6 +393,7 @@ def main() -> None:
                                         # (0.05 rad) without changing that gate.
                                         tolerance_rad=float(request.get("tolerance_rad", 0.049)))
                 next_tick = time.monotonic_ns()
+                next_progress = next_tick
                 settled = False
                 last_error = None
                 while not settled:
@@ -363,6 +411,14 @@ def main() -> None:
                     command, boundary_corrections = prepare_command_with_limits(
                         command, previous_command, speed_rad_s=prepare_speed)
                     approach.previous = command.copy()
+                    if now >= next_progress:
+                        print(json.dumps({"event": "prepare_progress",
+                                          "elapsed_s": (now - approach.started_ns) / 1e9,
+                                          "measured_state_rad": current.state.tolist(),
+                                          "command_rad": command.tolist(),
+                                          "maximum_pose_error_rad": last_error}),
+                              file=sys.stderr, flush=True)
+                        next_progress = now + 1_000_000_000
                     if boundary_corrections:
                         print(json.dumps({"event": "prepare_hand_boundary_projection",
                                           "corrections": boundary_corrections}), file=sys.stderr, flush=True)
