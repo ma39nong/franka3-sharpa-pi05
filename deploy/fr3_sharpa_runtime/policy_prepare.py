@@ -19,7 +19,8 @@ ERROR_GROUPS = {
     "right_sharpa": RIGHT_SHARPA_SLICE,
 }
 
-HOME_TOLERANCE_RAD = 0.02
+# Fixed-Home completion tolerance; command safety limits are separate.
+HOME_TOLERANCE_RAD = 0.025
 
 
 def target_chunk(target):
