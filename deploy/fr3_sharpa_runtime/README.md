@@ -239,3 +239,7 @@ source deploy/fr3_sharpa_runtime/env.sh
 ```
 
 旧 guarded 路径说明见 [LEGACY.md](LEGACY.md)。历史 `--preflight-only` 仍检查 guarded driver，不能用它代替 sdk_direct 的现场验收。
+
+
+119条五阶段四路手动部署已独立接入，操作、复制目录、精确Prompt和Agent限制见
+[119条部署说明](../fr3_sharpa_control/README.md#119条手中调整独立五阶段四路部署2026-11-18)。

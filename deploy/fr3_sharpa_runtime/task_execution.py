@@ -9,7 +9,7 @@ import threading
 
 from .task_control import TaskControl, TaskLease, TaskServer
 from .task_rtc import SDKTaskBackend, TaskRTC
-from .task_stages import stage
+from .task_stages import stage, TASK_CONTRACTS
 
 
 def execute_task(args):
@@ -29,7 +29,8 @@ def execute_task(args):
         with log_lock, (directory / "task-events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
 
-    task = TaskControl(run_id, args.initial_stage, emit=emit)
+    profile = getattr(args, "task_mode", "tomato-b")
+    task = TaskControl(run_id, args.initial_stage, emit=emit, profile=profile)
     server = TaskServer(path, task)
     lease = TaskLease(task, lambda: os.kill(os.getpid(), signal.SIGINT))
     lease.start()
@@ -39,6 +40,8 @@ def execute_task(args):
         metadata = runtime.inspect_metadata(require_rtc=True)
         if (
             not metadata.get("tomato_model")
+            or metadata["tomato_model"].get("task_profile", "tomato-b") != profile
+            or (profile == "tomato-in-hand119" and metadata["tomato_model"].get("stage_contract") != TASK_CONTRACTS[profile])
             or metadata.get("train_rtc")
             or metadata.get("paper_algorithm")
             or metadata.get("model_profile") != "full-delta"
@@ -82,7 +85,7 @@ def execute_task(args):
 
         def observe(**options):
             snapshot = task.snapshot()
-            return run.live_observation(args.ros_overlay, stage(snapshot["requested_stage"]).prompt, **options)
+            return run.live_observation(args.ros_overlay, stage(snapshot["requested_stage"], profile).prompt, **options)
 
         worker.request({"operation": "feedback"}, timeout=6)
         # Home may finish before the camera clocks have settled. Consume the

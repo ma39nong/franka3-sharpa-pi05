@@ -429,3 +429,68 @@ Agent服务握手声明`requires_local_roi`与`control_eligible`。旧B0不要�
 Agent仓库`tools.serve_tomato_agent`可自动识别B0或新Memory checkpoint；后者需要四路RGB历史、ROI116元数据、命名58D关节和版本匹配的编码器。r11未来辅助坐标训练的Memory checkpoint仅允许显式离线回放，不能直接当作已验收的实时模型。
 
 离线验证入口为`python -m deploy.fr3_sharpa_runtime.shared_roi_replay_check --dataset DATASET --episode 0 --out NEW_OUTPUT --norm-stats CHECKPOINT_OWNED_NORM`，并设置`SHARPA_CROP_LOCATOR`。读取旧录像和实测状态，调用真实定位器，核对两个并发消费者的像素与时间戳；不包含动作/Memory模型计算，不启动ROS或机器人，不证明端到端并发延迟。
+
+## 119条手中调整：独立五阶段四路部署（2026-11-18）
+
+部署分支为 `codex/tomato-in-hand119-deploy`，从 `tomato-four-view-live-crop/9d5d4d2` 开发。
+旧100条七阶段、原英文Prompt及ROI保持原契约。119条使用独立任务模式 `tomato-in-hand119`：
+
+| 阶段ID | 操作员看到的阶段 | 训练英文Prompt |
+| --- | --- | --- |
+| pickup | 拿起番茄串 | Right hand grasps and lifts the truss to the center |
+| harvest_1 | 首次采摘 | Left hand picks tomatoes into left basket while right hand holds truss |
+| adjust_in_hand | 手中调整 | Right hand adjusts tomato truss position and orientation at the center |
+| harvest_2 | 再次采摘 | Left hand picks tomatoes into left basket while right hand holds truss |
+| return_stem | 最终放回 | Right hand returns the held object to the right plate |
+
+“无放回”是中途不放回整串、在手中调整，最终仍有放回动作。内部ID `return_stem` 为兼容保留，
+不要求已经摘光或持有物一定是裸杆。两段采摘共用英文Prompt，但拥有不同进度位置。
+只更换任务阶段图及Prompt目录，复用现有执行状态机、单一硬件所有者、普通RTC、
+在线有时限轨迹交接、版本失效、暂停／停止／清理机制。手动点击不会立即伪报新阶段已生效；
+新观测和新Prompt首块经执行端接入才更新实际阶段。最后阶段不自动完成，仍需人工确认。
+
+### 工控机复制与操作
+
+1. 更新并切到上述分支，保持工控机原有 Python／ROS／Gello 环境。
+2. 复制一个完整步骤目录的 `params/` 和 `assets/`。本轮已登记新权重10000／15000／20000，
+   真实GPU和通信验收使用20000；25000／30000尚未取得，不按名称自动登记。
+   默认位置为部署仓库 `.deployment/checkpoints/tomato-in-hand119/20000/`。
+   也可以在UI选择工控机的实际位置，不能选只包含多个步骤的父目录。
+3. 复制整个 `.deployment/crop_locator/`，包括 `model.pt`、`receipt.json` 和 `primary/`；
+   Git不会传输这些模型文件。与100条共用定位器权重，但选框及窗口规则按模型分别选择。
+4. 启动 `bash deploy/fr3_sharpa_control/ui.sh --port 8788`，打开 `http://127.0.0.1:8788/`。
+5. 点击 **119条四路 · 手中调整**，核对仓库、checkpoint及定位器路径。预设为Full Delta、
+   普通RTC、Fast、15步触发、连续轮数0、Current、五阶段手动、初始“拿起番茄串”。
+   录制勾选保留操作员当前选择。误配100条／119条任务会在启动设备前拒绝。
+6. 点击“启动推理”，预热就绪后“核对执行配置”。实际机器人启动由操作员现场点击“启动执行”；
+   READY后点击“开始当前阶段”。按实物动作完成情况点击“切换到下一阶段”，最终放回后人工完成任务。
+   非首次阶段启动需要明确恢复确认；运行中不能直接跳段或回退。
+
+仅加载模型、不连接机器人可执行：
+
+```bash
+export SHARPA_FULL_DELTA_CHECKPOINT=/工控机实际路径/20000
+export SHARPA_CROP_LOCATOR=/工控机部署仓库/.deployment/crop_locator
+bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --smoke-only --enable-rtc \
+  --report .deployment/inhand119-20000-smoke.json
+```
+
+### 局部图与Agent边界
+
+119条局部图采用训练 `full-block-right-truss-180-v1` 的当前帧目标规则：
+右手及附近番茄串为锚，左手移动到篮子不会把局部图带走；640×400参考尺寸下窗口180～300像素、
+上下文比例1.12。当前RGB检测与有限过去跟踪可复用已有恢复机制；不调用离线未来插值、
+不输入人工阶段真值。缺少可验证右手或目标超过局部窗口时，回退当前时刻全图并明确记录原因。
+这是离线未来辅助坐标的因果部署对应方案，不能声称像素与离线局部视频完全一致或定位已获独立验收。
+
+旧mengxiang／tairan没有训练本任务的手中调整与新顺序。UI保持手动；Supervisor和执行端IPC均拒绝
+旧Agent自动推进119条任务。可启动旧Agent观察输出，但这些概率不能作为本任务成功／阶段完成的依据。
+后来四路Memory研究权重也未因此获得自动控制权限。
+
+本轮证据见 `deploy/fr3_sharpa_runtime/validation/in-hand119-20000-online.json`：
+真实20000权重恢复、四路输入、四种训练原文Prompt、50×58有限动作、普通RTC预热均通过；
+新录制三路RGB＋具名实测关节经真实定位器与GPU模型完成30次本机普通／RTC通信，
+这批样本均为当前检测局部图，往返中位数约116ms、P95约131ms。
+五阶段真实Unix IPC与生产TaskRTC配合模拟硬件所有者验证，全套运行时回归705项通过，
+浏览器核对权重识别、五阶段按钮及执行配置预检通过；未运行ROS、SDK或机器人。
+以上耗时不包含工控机真实相机／ROS传输，不是新数据泛化、动作可执行性或采摘成功率。

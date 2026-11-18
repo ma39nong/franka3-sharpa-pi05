@@ -38,6 +38,9 @@ class DecisionGate:
         import math
 
         try:
+            if task.get("task_profile", "tomato-b") != "tomato-b":
+                self.reset()
+                return None
             t = packet["input_timestamp"]
             if (
                 packet["protocol"] != "tomato-stage-prediction-v1"
@@ -149,6 +152,8 @@ class AgentSupervisor:
                 if self.state["status"] != "ready" or time.time() - self.state.get("received_unix", 0) > 2:
                     raise ValueError("Agent 和实时观测尚未就绪")
                 task = self._task()
+                if task and task.get("task_profile", "tomato-b") != "tomato-b":
+                    raise ValueError("119条五阶段尚未适配旧Agent；请保持手动切换")
                 if (
                     not task
                     or task["execution_state"] not in ("READY", "RUNNING")
@@ -306,6 +311,8 @@ class AgentSupervisor:
     def _submit_target(self, target, task):
         if self.mode != "auto" or not target:
             return
+        if task.get("task_profile", "tomato-b") != "tomato-b":
+            raise ValueError("119条任务禁止旧Agent提交阶段切换")
         result = task_rpc(
             self.controller.task_endpoint,
             self.controller.task_run_id,
@@ -517,8 +524,10 @@ class AgentSupervisor:
                     if epoch != self.epoch:
                         continue
                     observed_task = display_task
+                    if display_task.get("task_profile", "tomato-b") != "tomato-b":
+                        observed_task = dict(run_id="observe119", stage_version=0, active_stage="pickup_1", requested_stage="pickup_1", execution_state="READY")
                     if self.settings.get("provider") == "tairan" and self.mode != "auto":
-                        observed_task = {**display_task, "execution_state": "READY"}
+                        observed_task = {**observed_task, "execution_state": "READY"}
                     target = self.gate.update(packet, observed_task, now=time.time(), model_version=expected)
                     self.state.update(
                         status="ready",

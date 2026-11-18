@@ -124,10 +124,8 @@ def prepare_policy_validation():
                 if path.is_file():
                     verified[key] = hashlib.sha256(path.read_bytes()).hexdigest()
         if signature[1] is not None and contract.get("tomato_model") and contract["tomato_model"].get("online_roi_required"):
-            from .interaction_crop import InteractionCropper, LOCATOR_SHA256
-            verified["interaction_crop"] = {"enabled": True, "locator_sha256": LOCATOR_SHA256,
-                "image_keys": contract["tomato_model"]["image_keys"], "uses_future_frames": False,
-                "roi_revision": InteractionCropper.revision}
+            from .interaction_crop import crop_capabilities, LOCATOR_SHA256
+            verified["interaction_crop"] = crop_capabilities(contract["tomato_model"], LOCATOR_SHA256)
         if signature != _asset_signature(paths):
             raise ValueError("Checkpoint assets changed during validation; execution blocked")
         _validation_cache = (context, signature, verified)

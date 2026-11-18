@@ -208,10 +208,12 @@ class DeploymentSettings:
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
         from deploy.fr3_sharpa_runtime.task_stages import stage
-        stage(self.initial_stage)
-        if self.task_mode not in ("none", "tomato-b") or type(self.recovery_confirmed) is not bool:
+        task_profile = self.task_mode if self.task_mode != "none" else "tomato-b"
+        stage(self.initial_stage, task_profile)
+        first_stage = "pickup" if task_profile == "tomato-in-hand119" else "pickup_1"
+        if self.task_mode not in ("none", "tomato-b", "tomato-in-hand119") or type(self.recovery_confirmed) is not bool:
             raise ValueError("任务模式或人工恢复确认无效")
-        if self.initial_stage != "pickup_1" and (self.task_mode != "tomato-b" or not self.recovery_confirmed):
+        if self.initial_stage != first_stage and (self.task_mode == "none" or not self.recovery_confirmed):
             raise ValueError("非首次阶段启动需要明确人工恢复确认并重新核对配置")
         if self.camera_policy not in ("exclusive", "require_free"):
             raise ValueError("相机策略仅支持独占接管或要求设备空闲")
@@ -244,10 +246,12 @@ class DeploymentSettings:
             model["supported_modes"] = ["serial", "rtc"]
         if not model["profile"]:
             raise ValueError(model["evidence"])
-        if self.task_mode == "tomato-b":
+        if self.task_mode != "none":
             if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
                     or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
                 raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
+            if model["tomato_model"].get("task_profile", "tomato-b") != self.task_mode:
+                raise ValueError("权重与任务流程不匹配：100条用七阶段，119条用五阶段")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:

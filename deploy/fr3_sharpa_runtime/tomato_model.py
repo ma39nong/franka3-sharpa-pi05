@@ -1,4 +1,4 @@
-"""Content identity for normal93 B-coarse and complete100 four-view r11 runs.
+"""Content identity for normal93, complete100 r11 and five-stage in-hand119.
 
 Names and paths are not evidence. These fingerprints bind the Orbax manifest,
 parameter metadata and checkpoint-owned normalization, independent of location.
@@ -22,7 +22,20 @@ R11_STEPS = {
 }
 
 
+IN_HAND_STATS_SHA256 = "8b06358841e0570ff842883ab8a49a0fd3c9be7b68b59820d93741cd8a06ccde"
+IN_HAND_STEPS = {'a48a691acbc68dc0742071970f9de31c3437666dbf0c305170e4b7e083e14345': 10000, '98f287ff0f89a3f76e2e41096fdddde35362451f5770fe15564081aac1139841': 15000, 'd43cc4708b3019e99f5162a3fde6cf92c866835e42470fc1a7028f1b877accd0': 20000}
+
 def identify(stats_sha, manifest_sha, metadata_sha):
+    if stats_sha == IN_HAND_STATS_SHA256:
+        if metadata_sha != METADATA_SHA256 or manifest_sha not in IN_HAND_STEPS:
+            raise ValueError("119条权重必须匹配已核对的10000/15000/20000参数与配套统计")
+        return dict(name=f"in-hand119 四路五阶段 · {IN_HAND_STEPS[manifest_sha]}",
+                    training_date="2026-11-18", subtask_variant="in_hand_b_coarse", profile="full-delta",
+                    action_dim=58, action_horizon=50, action_hz=30,
+                    task_profile="tomato-in-hand119", stage_contract="tomato-in-hand-five-phases-v3",
+                    image_keys=list(FOUR_IMAGE_KEYS), visual_tokens=1024,
+                    roi_profile="in_hand119_right_truss_v1", offline_training_roi_uses_future=True,
+                    online_roi_required=True, evidence="verified checkpoint-owned statistics and Orbax fingerprints")
     if stats_sha == R11_STATS_SHA256:
         if metadata_sha != METADATA_SHA256 or manifest_sha not in R11_STEPS:
             raise ValueError("Four-view r11 statistics require a verified matching 4000/8000/12000/16000 checkpoint")

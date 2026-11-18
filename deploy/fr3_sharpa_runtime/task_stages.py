@@ -1,4 +1,4 @@
-"""Frozen B-coarse instructions. Progress labels never enter the model prompt."""
+"""Independent frozen seven/five-stage contracts. Progress IDs never enter prompts."""
 
 from dataclasses import dataclass
 
@@ -36,11 +36,53 @@ STAGES = tuple(
 PHASES = tuple(s.id for s in STAGES)
 
 
-def stage(value):
-    if value not in PHASES:
-        raise ValueError(f"未知任务阶段: {value!r}")
-    return STAGES[PHASES.index(value)]
+IN_HAND_PROMPTS = {
+    "pickup": "Right hand grasps and lifts the truss to the center",
+    "harvest": "Left hand picks tomatoes into left basket while right hand holds truss",
+    "adjust": "Right hand adjusts tomato truss position and orientation at the center",
+    "return": "Right hand returns the held object to the right plate",
+}
 
 
-def catalog():
-    return [dict(id=s.id, label=s.label, action=s.action, prompt=s.prompt) for s in STAGES]
+@dataclass(frozen=True)
+class InHandStage(Stage):
+    @property
+    def prompt(self):
+        return IN_HAND_PROMPTS[self.action]
+
+
+IN_HAND_STAGES = tuple(InHandStage(*row) for row in (
+    ("pickup", "拿起番茄串", "pickup"),
+    ("harvest_1", "首次采摘", "harvest"),
+    ("adjust_in_hand", "手中调整", "adjust"),
+    ("harvest_2", "再次采摘", "harvest"),
+    ("return_stem", "最终放回", "return"),
+))
+TASK_CONTRACTS = {"tomato-b": "tomato-coarse-four-prompts-en-v4",
+                  "tomato-in-hand119": "tomato-in-hand-five-phases-v3"}
+
+
+def stages(profile="tomato-b"):
+    if profile == "tomato-b":
+        return STAGES
+    if profile == "tomato-in-hand119":
+        return IN_HAND_STAGES
+    raise ValueError(f"未知任务模式: {profile!r}")
+
+
+def phase_ids(profile="tomato-b"):
+    return tuple(s.id for s in stages(profile))
+
+
+def stage(value, profile="tomato-b"):
+    for item in stages(profile):
+        if item.id == value:
+            # Preserve old Stage.prompt semantics; only the new contract uses
+            # its own verbatim training prompts.
+            return item
+    raise ValueError(f"未知任务阶段: {value!r} ({profile})")
+
+
+def catalog(profile="tomato-b"):
+    return [dict(id=s.id, label=s.label, action=s.action, prompt=stage(s.id, profile).prompt)
+            for s in stages(profile)]

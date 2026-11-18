@@ -256,7 +256,7 @@ class DeploymentController:
             self.task_endpoint = None
             self.task_run_id = None
             self.task_last = None
-            if operation == "execute" and plan["settings"].get("task_mode") == "tomato-b":
+            if operation == "execute" and plan["settings"].get("task_mode") in ("tomato-b", "tomato-in-hand119"):
                 self.task_endpoint = Path(tempfile.mkdtemp(prefix="sharpa-task-")) / "task.sock"
                 self.task_run_id = uuid.uuid4().hex
             self.state = {"phase": "validating", "message": "正在检查模型契约和参数", "running": True,

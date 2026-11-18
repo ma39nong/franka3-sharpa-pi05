@@ -152,7 +152,7 @@ def observation_after_completion(args, report):
 
 def execute_policy_prepare(args):
     """Live-state execution, with optional Home/policy prepare before prediction prefixes."""
-    if getattr(args, "task_mode", "none") == "tomato-b":
+    if getattr(args, "task_mode", "none") in ("tomato-b", "tomato-in-hand119"):
         from .task_execution import execute_task
         return execute_task(args)
     import shlex
@@ -441,9 +441,9 @@ def main() -> None:
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
-    parser.add_argument("--task-mode", choices=("none", "tomato-b"), default="none")
-    from .task_stages import PHASES
-    parser.add_argument("--initial-stage", choices=PHASES, default="pickup_1")
+    parser.add_argument("--task-mode", choices=("none", "tomato-b", "tomato-in-hand119"), default="none")
+    from .task_stages import PHASES, phase_ids
+    parser.add_argument("--initial-stage", choices=tuple(dict.fromkeys((*PHASES, *phase_ids("tomato-in-hand119")))), default="pickup_1")
     parser.add_argument("--ros-overlay", type=Path, help="ROS overlay containing teleop_interfaces for Pixi ROS Python")
     parser.add_argument("--enable-hardware", action="store_true")
     parser.add_argument("--sharpa-backend", choices=("litchibot", "sdk_direct"), default="sdk_direct",
@@ -451,7 +451,13 @@ def main() -> None:
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
-    if args.task_mode == "tomato-b" and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
+    if args.task_mode != "none":
+        from .task_stages import stage
+        try:
+            stage(args.initial_stage, args.task_mode)
+        except ValueError as error:
+            parser.error(str(error))
+    if args.task_mode in ("tomato-b", "tomato-in-hand119") and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
             or args.train_paper_rtc or config.MODEL_PROFILE.name != "full-delta"
             or args.sharpa_backend != "sdk_direct"):
         parser.error("番茄 B 状态机仅支持 full-delta / sdk_direct / 普通 RTC")
