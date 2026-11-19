@@ -125,10 +125,21 @@ def test_provider_defaults_are_separate(tmp_path):
     a = AgentSettings.parse({}, tmp_path)
     b = AgentSettings.parse(dict(provider="tairan"), tmp_path)
     assert a.provider == "mengxiang" and b.provider == "tairan"
-    assert a.checkpoint != b.checkpoint and "/tairan/" in b.repository
-    assert b.handshake_config.endswith("configs/tairan_handshake.json")
+    assert a.checkpoint != b.checkpoint and b.repository.endswith("/agents/inhand119_four")
+    assert b.checkpoint.endswith("/head/best_head.pt") and b.pretrained.endswith("/encoder")
+    assert b.profile == "workstation"
     with pytest.raises(ValueError):
         AgentSettings.parse(dict(provider="unknown"), tmp_path)
+
+
+def test_saved_four_view_and_previous_tairan_use_new_tairan_provider(tmp_path):
+    four = AgentSettings.parse(dict(provider="inhand119_four", gello_repository="custom-gello"), tmp_path)
+    old = AgentSettings.parse(dict(provider="tairan", handshake_config="configs/tairan_handshake.json",
+                                   repository="old-source", checkpoint="old.pt", python="old-python",
+                                   pretrained="old-encoder", gello_repository="custom-gello"), tmp_path)
+    assert old == four
+    assert four.provider == "tairan"
+    assert four.gello_repository.endswith("/custom-gello")
 
 
 def test_activation_timestamp_only_changes_on_stage_version():

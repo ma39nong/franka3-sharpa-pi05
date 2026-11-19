@@ -58,8 +58,10 @@ IN_HAND_STAGES = tuple(InHandStage(*row) for row in (
     ("harvest_2", "再次采摘", "harvest"),
     ("return_stem", "最终放回", "return"),
 ))
+IN_HAND_PROFILE = "tomato-in-hand119"
+IN_HAND_AGENT_SOURCE = "inhand119_agent"
 TASK_CONTRACTS = {"tomato-b": "tomato-coarse-four-prompts-en-v4",
-                  "tomato-in-hand119": "tomato-in-hand-five-phases-v3"}
+                  IN_HAND_PROFILE: "tomato-in-hand-five-phases-v3"}
 
 
 def stages(profile="tomato-b"):

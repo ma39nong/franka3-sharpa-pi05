@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .controller import DeploymentController
 from .plan import desktop, inspect_checkpoint, repository_info
-from .agent_settings import AgentSettings
+from .agent_settings import AGENT_PROVIDERS, AgentSettings
 from deploy.fr3_sharpa_runtime.task_stages import catalog
 from dataclasses import asdict
 
@@ -63,26 +63,29 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="control-line"><strong>执行端</strong><span id="executionState" class="muted">未运行</span><div class="actions"><button id="preview" onclick="preview()">核对执行配置</button><button id="start" class="primary" onclick="start()" disabled>启动执行</button><button id="stop" class="stop" onclick="stop()" disabled>停止执行</button></div></div>
 <p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div></article></section>
 <section class="card" id="taskPanel" aria-label="番茄采摘任务状态机"><h2>番茄采摘任务状态机</h2>
-<div class="notice" id="taskInstructions">手动测试：直接使用下方阶段按钮，无需启动 Agent。<br>自动切换：先在上方启动执行、等待任务就绪；再选择 Agent → 启动观察 → 等待“实时就绪” → 改为“Agent 自动切换”。</div>
-<div class="row"><div><label>阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()"><option value="manual">手动切换（默认）</option><option value="auto">Agent 自动切换</option></select></div><div><label>自动切换使用的 Agent</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang · 当前阶段确认</option><option value="tairan">tairan · 未来提议＋当前确认</option></select></div><div class="actions"><button id="startAgent" class="primary" onclick="agentCommand('start-agent')">启动观察（不自动切换）</button><button id="stopAgent" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button><button onclick="takeOver()">切回手动接管</button></div></div>
-<p id="agentEnvironmentHint" class="muted"></p>
-<p class="muted">需要换 Agent 时，先停止当前 Agent。切回手动不会停止当前动作；自动模式下停止 Agent 会同时停止执行。</p><div id="agentStatus" class="notice" role="status">手动切换 · Agent 未启动</div><div id="agentError" class="error"></div>
+<p class="muted" id="taskInstructions">执行端就绪后，点击「开始当前阶段」。</p>
+<div class="row">
+<div><label for="agentMode">阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()" aria-describedby="agentModeHint"><option value="manual">手动切换（默认）</option><option id="agentAutoMode" value="auto" disabled>Agent 自动切换</option></select><p class="muted" id="agentModeHint">启动 Agent 并等任务就绪后可用。</p></div>
+<div><label for="agentProvider">Agent 模型</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang</option><option value="tairan">tairan · 四路</option></select></div>
+<div class="actions"><button id="startAgent" class="primary" onclick="agentCommand('start-agent')">启动 Agent</button><button id="stopAgent" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button></div>
+</div>
+<p id="agentStatus" class="muted" role="status">Agent 未启动</p><div id="agentError" class="error"></div>
 <details id="agentPaths"><summary>首次配置／修改工作机上的 Agent 路径</summary>
 <p class="muted">选择 Agent 会自动填入对应配置。路径不符时在这里修改；无需选择运行环境。</p>
 <div class="row"><div><label>Agent 仓库目录</label><input id="agentRepository"></div><div><label>Agent 权重路径（可相对 Agent 仓库）</label><input id="agentCheckpoint"></div></div>
 <div class="row"><div><label>Agent Python 路径</label><input id="agentPython"></div><div><label>编码器目录</label><input id="agentPretrained"></div></div>
-<div id="agentHandshakeSettings"><label>tairan 握手配置（可相对 Agent 仓库）</label><input id="agentHandshake"></div>
 <div class="row"><div><label>工作机 Gello 仓库</label><input id="agentGello"></div><div><label>ROS 消息 overlay（可相对部署仓库）</label><input id="agentOverlay"></div></div>
 <div class="actions" style="margin-top:12px"><button id="checkAgent" onclick="checkAgentEnvironment()">检查工作机配置</button></div><div id="agentEnvironmentReport" role="status"></div></details>
-<details><summary>查看 Agent 判断与切换规则</summary><div id="agentProbabilities" class="task-grid"></div><p class="muted">Agent 订阅工作机已有的相机和关节反馈，不启动硬件。mengxiang 用当前阶段连续确认；tairan 用未来提议和当前确认握手。两者只推进下一合法阶段。切回手动不停止当前动作，停止动作请使用暂停／停止执行；自动模式下停止 Agent 会同时停止执行。最终放杆仍需人工验收完成。</p></details>
-<div id="taskStages" class="task-stages"></div><details><summary>训练四种英文指令（固定原文）</summary><pre id="trainingPrompts">pickup: Right hand grasps and lifts the truss to the center
+<div id="agentProbabilities" class="task-grid"></div><details><summary>查看 Agent 预测与切换规则</summary><p class="muted">tairan 用于 119 条五阶段，采用 K1。单次观测中，当前和 +1 秒对下一阶段的概率均达到 80% 时，请求切换。切回手动或停止 tairan 后，当前动作继续执行。mengxiang 用于 100 条七阶段，自动模式下停止 mengxiang 会同时停止执行。最终阶段由人工确认完成。</p></details>
+<div id="taskStages" class="task-stages"></div>
+<div id="autoActivePrompt" class="notice" hidden><strong id="autoPromptStage"></strong><p id="autoPromptText"></p></div><details><summary>训练四种英文指令（固定原文）</summary><pre id="trainingPrompts">pickup: Right hand grasps and lifts the truss to the center
 harvest: Right hand holds truss while left hand picks tomatoes into left basket
 return: Right hand returns the held object to the right plate
 adjust: Right fingers reposition the truss on the right plate</pre></details><p class="muted">阶段持续运行，不会自动等待。119条任务：右手拿稳果串并到达中央、左手刚准备靠近时，切到首次采摘，不必等左手到中央。手动运行时可按 N 切到下一阶段；输入框内或切换过程中不响应快捷键。“已离开”仅表示阶段交接，不代表任务成功。</p>
 <div id="taskStatus" class="task-grid"><span>尚未启动番茄任务</span></div>
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
 <div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
-<p class="notice">119 条任务手动切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
+<p class="notice">119 条任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
 <section class="dashboard-row logs" id="logs" aria-label="三个终端日志">
 <article class="card" id="terminal-hardware"><h2>终端一 · 硬件日志</h2><pre id="log-hardware" role="log" aria-label="硬件日志">尚无硬件日志</pre></article>
 <article class="card" id="terminal-inference"><h2>终端二 · 推理日志</h2><pre id="log-inference" role="log" aria-label="推理日志">尚无推理日志</pre></article>
@@ -123,17 +126,58 @@ for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=p
 for(let f of fields)$(f).disabled=busy;if(!busy){$('steps').disabled=$('mode').value.startsWith('soft-');$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value)}}catch(e){failure(e)}}
 
 let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';
-const agentFields={provider:'agentProvider',handshake_config:'agentHandshake',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
-function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;updateAgentChoice();$('agentError').textContent=''}
+const agentFields={provider:'agentProvider',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
+function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;updateAgentChoice();updateAgentModeControl();$('agentError').textContent=''}
 function agentConfig(){return {...Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value])),profile:'workstation'}}
-function updateAgentChoice(){$('agentHandshakeSettings').hidden=$('agentProvider').value!=='tairan';$('agentEnvironmentHint').textContent=$('agentProvider').value==='mengxiang'?'mengxiang：根据当前阶段的连续确认推进，未来结果只作提示。':'tairan：根据未来阶段提议与当前确认握手推进。';if($('task_mode').value==='tomato-in-hand119')$('agentEnvironmentHint').textContent='119条五阶段仅手动切换。旧Agent未适配手中调整，可观察输出但不能自动推进。';$('agentEnvironmentReport').textContent=''}
+function updateAgentChoice(){$('agentEnvironmentReport').textContent=''}
 async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
 let agentState=null,agentRequestPending=false;
-function agentTaskReady(){return taskState?.task_profile!=='tomato-in-hand119'&&!!taskState&&!taskState.communication_error&&['READY','RUNNING'].includes(taskState.execution_state)&&(taskState.execution_state==='READY'||taskState.requested_stage===taskState.active_stage)}
-function renderAgent(a){if(!a)return;agentState=a;$('agentMode').value=a.mode;$('agentMode').disabled=(a.status!=='ready'||!agentTaskReady())&&a.mode!=='auto';$('startAgent').disabled=agentRequestPending||!['stopped','failed'].includes(a.status);$('stopAgent').disabled=['stopped','stopping'].includes(a.status);$('agentRepository').disabled=$('startAgent').disabled;$('agentCheckpoint').disabled=$('startAgent').disabled;for(let id of Object.values(agentFields))$(id).disabled=$('startAgent').disabled;$('checkAgent').disabled=$('startAgent').disabled;$('agentStatus').textContent=a.mode==='auto'?`${a.provider} · 自动切换中`:(a.status==='ready'?(agentTaskReady()?`${a.provider} · 实时就绪，当前仅观察；可将上方切换方式改为 Agent 自动切换。`:`${a.provider} · 实时就绪，当前仅观察；请先启动执行，等任务就绪后启用自动切换。`):a.status==='waiting'?`${a.provider} · 等待工作机相机和关节观测；当前仍为手动切换。`:a.status==='loading'?`${a.provider} · 正在加载；当前仍为手动切换。`:a.status==='failed'?`Agent 启动失败：${a.message}`:a.status==='stopping'?'Agent 正在停止。':'手动切换 · Agent 未启动。直接使用下方阶段按钮；需要自动切换时先启动观察。');if((taskState?.task_profile||$('task_mode').value)==='tomato-in-hand119')$('agentStatus').textContent='119条五阶段：人工判断并切换。旧Agent仅作观察，不代表本任务阶段验收。';if(a.status==='failed')$('agentError').textContent=a.message;let box=$('agentProbabilities');box.replaceChildren();for(let [label,title]of [['current','Current 当前'],['future','Future+'+(a.future_horizon_s||($('agentProvider').value==='tairan'?1:1.5))+'s']]){let span=document.createElement('span');span.textContent=title+'：'+(a[label]?Object.entries(a[label]).map(([k,v])=>k+' '+(v*100).toFixed(1)+'%').join(' · '):'等待观测');box.append(span)}if(a.policy_state){let span=document.createElement('span');span.textContent='tairan 握手：'+a.policy_state;box.append(span)}if(a.requested_stage){let span=document.createElement('span');span.textContent='请求：'+a.requested_stage+' / 实际：'+(a.active_stage||'等待接入');box.append(span)}}
+function updateAgentModeControl(){
+const a=agentState;
+const taskProfile=taskState?.task_profile||$('task_mode').value;
+const expectedProvider=taskProfile==='tomato-in-hand119'?'tairan':'mengxiang';
+const provider=['stopped','failed',undefined].includes(a?.status)?$('agentProvider').value:a.provider;
+const taskReady=!!taskState&&!taskState.communication_error&&
+ (taskState.execution_state==='READY'||(taskState.execution_state==='RUNNING'&&taskState.active_stage===taskState.requested_stage));
+let hint='';
+if(a?.mode!=='auto'){
+ if(provider!==expectedProvider)hint='此任务请使用 '+expectedProvider+'。';
+ else if(a?.status==='stopped'||a?.status==='failed'||!a)hint='启动 Agent 并等任务就绪后可用。';
+ else if(a.status!=='ready'||a.control_eligible===false)hint='等待 Agent 实时预测。';
+ else if(!taskReady)hint='等待任务就绪。';
+}
+$('agentAutoMode').disabled=!!hint;
+$('agentModeHint').textContent=hint;
+$('agentModeHint').hidden=!hint;
+}
+function renderAgent(a){
+if(!a)return;
+agentState=a;
+$('agentMode').value=a.mode;
+updateAgentModeControl();
+const canStart=!agentRequestPending&&['stopped','failed'].includes(a.status);
+$('startAgent').disabled=!canStart;
+$('stopAgent').disabled=['stopped','stopping'].includes(a.status);
+for(const id of Object.values(agentFields))$(id).disabled=!canStart;
+$('checkAgent').disabled=!canStart;
+const messages={stopped:'Agent 未启动',loading:'正在加载',ready:'实时预测就绪',waiting:'等待实时观测',stopping:'正在停止',failed:'Agent 已退出'};
+const detail=a.provider==='tairan'&&['waiting','ready'].includes(a.status)?a.message:messages[a.status];
+$('agentStatus').textContent=[a.provider,detail,a.mode==='auto'?'自动切换':''].filter(Boolean).join(' · ');
+if(a.status==='failed')$('agentError').textContent=a.message;
+const box=$('agentProbabilities');
+box.replaceChildren();
+if(!['ready','waiting'].includes(a.status))return;
+const horizon=a.future_horizon_s||(a.provider==='tairan'?1:1.5);
+const show=text=>{const span=document.createElement('span');span.textContent=text;box.append(span)};
+for(const [label,title] of [['current','当前预测'],['future','采集后 +'+horizon+' 秒']]){
+ const values=a[label]?Object.entries(a[label]).map(([k,v])=>k+' '+(v*100).toFixed(1)+'%').join(' · '):'等待观测';
+ show(title+'：'+values);
+}
+if(a.status==='ready'&&Number.isInteger(a.roi_fallback_frames))show('第四路 ROI 回退全图 '+a.roi_fallback_frames+'/16 帧');
+if(a.provider==='tairan'&&a.status==='ready')show('推理耗时 '+Math.round(a.latency_ms)+' ms');
+}
 async function agentCommand(path){if(agentRequestPending)return;const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
 async function agentModeChanged(){try{$('agentError').textContent='';renderAgent(await api('agent-mode',{mode:$('agentMode').value}));renderTask(taskState)}catch(e){$('agentError').textContent=e.message;if(agentState)$('agentMode').value=agentState.mode}}
-async function takeOver(){try{$('agentError').textContent='';renderAgent(await api('agent-mode',{mode:'manual'}));renderTask(taskState)}catch(e){$('agentError').textContent=e.message}}
 let taskState=null, taskPending=false, taskPolling=false, taskCatalogs={};
 function manualNextKey(event){
 if(event.code!=='KeyN'||event.repeat||event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return;
@@ -147,9 +191,14 @@ async function refreshTask(){if(!taskState||taskPolling||!['RUNNING','RESUMING',
 const oldStageList=[['pickup_1','首次拿起'],['harvest_1','首次采摘'],['return_truss','放回整串'],['adjust','调整'],['pickup_2','再次拿起'],['harvest_2','再次采摘'],['return_stem','放回裸杆']];
 const inHandStageList=[['pickup','拿起番茄串'],['harvest_1','首次采摘'],['adjust_in_hand','手中调整'],['harvest_2','再次采摘'],['return_stem','最终放回']];
 let stageList=oldStageList;
-function taskModeChanged(){$('taskInstructions').textContent=$('task_mode').value==='tomato-in-hand119'?'119条五阶段：由你判断动作是否完成，再点击下一阶段。无需启动Agent；旧Agent仅可观察，不允许自动切换。':'手动测试无需启动Agent；100条七阶段可另行测试Agent自动切换。';let list=$('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList;let value=$('initial_stage').value;$('initial_stage').replaceChildren();for(let[id,label]of list){let o=document.createElement('option');o.value=id;o.textContent=label;$('initial_stage').append(o)}$('initial_stage').value=list.some(x=>x[0]===value)?value:list[0][0];updateAgentChoice();renderTask(taskState);if(agentState)renderAgent(agentState)}
-function renderTask(t){if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;taskState=t;let rows=t?.stages||taskCatalogs[$('task_mode').value]||taskCatalogs['tomato-b']||[];if(rows.length)$('trainingPrompts').textContent=[...new Map(rows.map(s=>[s.action,s.prompt]))].map(([action,prompt])=>action+': '+prompt).join('\\n');stageList=t?.stages?.map(s=>[s.id,s.label])||($('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList);let state=t?.execution_state||'IDLE',available=!!t&&!t.communication_error,idx=stageList.findIndex(x=>x[0]===t?.requested_stage),canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);let box=$('taskStages');box.replaceChildren();stageList.forEach(([id,name],i)=>{let b=document.createElement('button');b.textContent=(t?.active_stage===id?'● ':t?.requested_stage===id?'◷ ':'')+name+(t?.completed_stages?.includes(id)?' · 已离开':'');b.className=t?.active_stage===id?'active':t?.requested_stage===id?'pending':t?.completed_stages?.includes(id)?'passed':'';b.disabled=!canSwitch||i!==idx+1;b.onclick=()=>taskCommand('stage',id);box.append(b)});
-let values={'请求阶段':t?.requested_stage||'—','当前阶段':t?.active_stage||'尚未接入','执行状态':t?.communication_error?'通信中断（上次 '+state+'）':['SWITCH_REQUESTED','SWITCHING'].includes(state)?(t?.inference_status==='finishing_chunk'?'等当前动作块结束':'正在切换（'+state+'）'):state,'Prompt 类别':t?.stages?.find(x=>x.id===t.active_stage)?.action||'—','Stage Version':t?.stage_version??'—','Chunk ID':t?.active_chunk_id||'—','RTC 模式':t?.rtc_mode||'—','执行进度':t?.chunk_progress?Number(t.chunk_progress.phase).toFixed(1)+'/50':'—','在途推理':t?.inference_status||'—','最新请求':t?.request_status||'—','允许恢复':t?.safe_to_resume?'是，仍需明确授权':'否'};let status=$('taskStatus');status.replaceChildren();for(let [k,v]of Object.entries(values)){let span=document.createElement('span');span.textContent=k+'：'+v;status.append(span)}$('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';$('taskError').textContent=t?.communication_error||t?.last_error||'';
+function taskModeChanged(){$('taskInstructions').textContent=$('task_mode').value==='tomato-in-hand119'?'从 Home 启动后，点击「开始当前阶段」。':'执行端就绪后，点击「开始当前阶段」。';let list=$('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList;let value=$('initial_stage').value;$('initial_stage').replaceChildren();for(let[id,label]of list){let o=document.createElement('option');o.value=id;o.textContent=label;$('initial_stage').append(o)}$('initial_stage').value=list.some(x=>x[0]===value)?value:list[0][0];updateAgentChoice();renderTask(taskState);if(agentState)renderAgent(agentState)}
+function renderTask(t){if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;taskState=t;updateAgentModeControl();let rows=t?.stages||taskCatalogs[$('task_mode').value]||taskCatalogs['tomato-b']||[];if(rows.length)$('trainingPrompts').textContent=[...new Map(rows.map(s=>[s.action,s.prompt]))].map(([action,prompt])=>action+': '+prompt).join('\\n');stageList=t?.stages?.map(s=>[s.id,s.label])||($('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList);let state=t?.execution_state||'IDLE',available=!!t&&!t.communication_error,idx=stageList.findIndex(x=>x[0]===t?.requested_stage),canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);let box=$('taskStages');box.replaceChildren();stageList.forEach(([id,name],i)=>{let b=document.createElement('button');b.textContent=(t?.active_stage===id?'● ':t?.requested_stage===id?'◷ ':'')+name+(t?.completed_stages?.includes(id)?' · 已离开':'');b.className=t?.active_stage===id?'active':t?.requested_stage===id?'pending':t?.completed_stages?.includes(id)?'passed':'';b.disabled=!canSwitch||i!==idx+1;b.onclick=()=>taskCommand('stage',id);box.append(b)});
+let values={'请求阶段':t?.requested_stage||'—','当前阶段':t?.active_stage||'尚未接入','执行状态':t?.communication_error?'通信中断（上次 '+state+'）':['SWITCH_REQUESTED','SWITCHING'].includes(state)?(t?.inference_status==='finishing_chunk'?'等当前动作块结束':'正在切换（'+state+'）'):state,'Prompt 类别':t?.stages?.find(x=>x.id===t.active_stage)?.action||'—','Stage Version':t?.stage_version??'—','Chunk ID':t?.active_chunk_id||'—','RTC 模式':t?.rtc_mode||'—','执行进度':t?.chunk_progress?Number(t.chunk_progress.phase).toFixed(1)+'/50':'—','在途推理':t?.inference_status||'—','最新请求':t?.request_status||'—','允许恢复':t?.safe_to_resume?'是，仍需明确授权':'否'};let status=$('taskStatus');status.replaceChildren();for(let [k,v]of Object.entries(values)){let span=document.createElement('span');span.textContent=k+'：'+v;status.append(span)}$('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';
+const active=rows.find(stage=>stage.id===t?.active_stage);
+$('autoActivePrompt').hidden=agentState?.mode!=='auto';
+$('autoPromptStage').textContent=(t?.communication_error?'上次确认的 Prompt':'当前激活的 Prompt')+(active?' · '+active.label:'');
+$('autoPromptText').textContent=t?.active_prompt||'等待执行端接入首个动作块';
+$('taskError').textContent=t?.communication_error||t?.last_error||'';
 $('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=stageList.length-1;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state)}
 async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent=''}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
 async function recoverTask(){let target=prompt('请输入要恢复的阶段 ID：'+stageList.map(x=>x[0]).join('、'));if(!target)return;if(!stageList.some(x=>x[0]===target)){failure(Error('未知阶段'));return}if(confirm('仅允许就绪或已安全暂停时跳转；运行中请先独立暂停。确认人工恢复到 '+target+'？'))await taskCommand('recover',target,true)}
@@ -180,7 +229,7 @@ def server_for(root, *, port=8766):
                    "crop_locator": str(Path(root)/".deployment/crop_locator"), "crop_device": "cuda"}
 
     in_hand_preset = {**crop_preset, "checkpoint": str(Path(root)/".deployment/checkpoints/tomato-in-hand119/20000"),
-                      "task_mode": "tomato-in-hand119", "initial_stage": "pickup"}
+                      "task_mode": "tomato-in-hand119", "initial_stage": "pickup", "initialization": "home"}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
@@ -213,7 +262,7 @@ def server_for(root, *, port=8766):
                 elif parsed.path == "/assets/liqing-logo.png":
                     self.send(200, (Path(__file__).parent / "assets/liqing-logo.png").read_bytes(), "image/png")
                 elif parsed.path == "/api/info":
-                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "crop_preset": crop_preset, "in_hand_preset": in_hand_preset, "task_catalogs": {p: catalog(p) for p in ("tomato-b", "tomato-in-hand119")}, "agent_defaults": {**controller.agent.settings, "profile": "workstation"}, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name, "profile": "workstation"}, root)) for name in ("mengxiang", "tairan")}})
+                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "crop_preset": crop_preset, "in_hand_preset": in_hand_preset, "task_catalogs": {p: catalog(p) for p in ("tomato-b", "tomato-in-hand119")}, "agent_defaults": {**controller.agent.settings, "profile": "workstation"}, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name, "profile": "workstation"}, root)) for name in AGENT_PROVIDERS}})
                 elif parsed.path == "/api/task-status":
                     self.send(200, controller.task_status())
                 elif parsed.path == "/api/crop-preview":

@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-from .task_stages import phase_ids, catalog, stage, TASK_CONTRACTS
+from .task_stages import phase_ids, catalog, stage, TASK_CONTRACTS, IN_HAND_PROFILE, IN_HAND_AGENT_SOURCE
 
 TRANSITIONS = {
     "IDLE": {"READY", "STOPPING", "FAULT"},
@@ -117,7 +117,7 @@ class TaskControl:
 
     def command(self, command, request_id, *, expected_version, target=None, confirmed=False, client_clicked_unix_ms=None, http_received_monotonic_ns=None, source="operator"):
         received_ns = time.monotonic_ns()
-        if source not in ("operator", "agent") or (source == "agent" and command != "stage"):
+        if source not in ("operator", "agent", IN_HAND_AGENT_SOURCE) or (source != "operator" and command != "stage"):
             raise ValueError("Agent 仅可请求下一阶段")
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise ValueError("有效 request_id 必填")
@@ -132,7 +132,12 @@ class TaskControl:
             d = self.data
             state = d["execution_state"]
             if source == "agent" and self.profile != "tomato-b":
-                raise ValueError("119条五阶段仅允许人工控制，旧Agent未适配本任务")
+                raise ValueError("旧Agent 不支持 119 条五阶段，请选择四路 Agent 或手动切换")
+            if source == IN_HAND_AGENT_SOURCE and (
+                self.profile != IN_HAND_PROFILE or state != "RUNNING"
+                or d["active_stage"] != d["requested_stage"]
+            ):
+                raise ValueError("四路 Agent 只可推进稳定运行中的 119 条任务")
             if command != "stop" and (type(expected_version) is not int or expected_version != d["stage_version"]):
                 raise ValueError("阶段版本已改变，请刷新状态后操作")
             if state in ("STOPPING", "STOPPED", "COMPLETED"):

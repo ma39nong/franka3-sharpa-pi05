@@ -7,6 +7,12 @@ import shutil
 import subprocess
 import json
 
+TAIRAN_PROVIDER = "tairan"
+AGENT_PROVIDERS = ("mengxiang", TAIRAN_PROVIDER)
+IN_HAND_NORM = Path(".deployment/checkpoints/tomato-in-hand119/20000/assets") / (
+    "tomato_in_hand119_rgb_crop_v3_r1_delta_30hz/norm_stats.json"
+)
+
 
 @dataclass
 class AgentSettings:
@@ -18,7 +24,6 @@ class AgentSettings:
     pretrained: str = "pretrained/vjepa2-vitl-fpc64-256"
     sample_npz: str = "runs/tomato/optimization_20261108/validation_observation.npz"
     gello_repository: str = ""
-    handshake_config: str = ""
     ros_overlay: str = ".deployment/sharpa_ros_messages/install"
 
     @classmethod
@@ -31,17 +36,23 @@ class AgentSettings:
     @classmethod
     def parse(cls, values, deployment_root):
         defaults = asdict(cls.defaults())
-        if values.get("provider") == "tairan":
-            base = Path(deployment_root) / ".deployment/agents/tairan"
+        values = dict(values)
+        # Keep existing workstation settings readable across the provider rename.
+        handshake = values.pop("handshake_config", "")
+        if values.get("provider") == "inhand119_four":
+            values["provider"] = TAIRAN_PROVIDER
+        elif values.get("provider") == TAIRAN_PROVIDER and isinstance(handshake, str) and handshake.endswith(".json"):
+            # The old three-camera bundle used a JSON handshake and different model paths.
+            for name in ("repository", "checkpoint", "pretrained", "python", "sample_npz", "profile"):
+                values.pop(name, None)
+        if values.get("provider") == TAIRAN_PROVIDER:
             defaults.update(
-                repository=str(base / "source"),
-                checkpoint=str(base / "artifacts/joint/best_head.pt"),
-                python=str(Path.home() / "vjepa2_training/.venv-tomato/bin/python"),
-                pretrained=str(base / "encoder"),
-                sample_npz=str(
-                    Path.home() / "vjepa2_training/runs/tomato/optimization_20261108/validation_observation.npz"
-                ),
-                handshake_config="configs/tairan_handshake.json",
+                profile="workstation",
+                repository=str(Path(deployment_root) / ".deployment/agents/inhand119_four"),
+                checkpoint="head/best_head.pt",
+                python=str(Path(deployment_root) / ".venv/bin/python"),
+                pretrained="encoder",
+                sample_npz="",
             )
         unknown = set(values) - set(defaults)
         if unknown:
@@ -50,13 +61,13 @@ class AgentSettings:
         if any(not isinstance(v, str) for v in defaults.values()):
             raise ValueError("Agent 配置必须为文本")
         obj = cls(**defaults)
-        if obj.provider not in ("mengxiang", "tairan"):
-            raise ValueError("请选择 mengxiang 或 tairan")
+        if obj.provider not in AGENT_PROVIDERS:
+            raise ValueError("请选择已支持的 Agent 模型")
         if obj.profile not in ("development", "workstation"):
             raise ValueError("请选择开发机自检或工作机实时模式")
         for name in ("repository", "gello_repository"):
             setattr(obj, name, str(Path(getattr(obj, name)).expanduser().resolve()))
-        for name in ("checkpoint", "python", "pretrained", "sample_npz", "ros_overlay", "handshake_config"):
+        for name in ("checkpoint", "python", "pretrained", "sample_npz", "ros_overlay"):
             value = Path(getattr(obj, name)).expanduser()
             parent = Path(deployment_root) if name == "ros_overlay" else Path(obj.repository)
             absolute = value if value.is_absolute() else parent / value
@@ -65,71 +76,33 @@ class AgentSettings:
             setattr(obj, name, os.path.abspath(absolute) if name == "python" else str(absolute.resolve()))
         return obj
 
-    def check(self):
+    def check(self, deployment_root=None):
         checks = []
 
         def add(name, ok, detail):
             checks.append(dict(name=name, ok=bool(ok), detail=str(detail)))
 
+        entry = {
+            "mengxiang": "tools/serve_tomato_agent.py",
+            TAIRAN_PROVIDER: "tools/tomato_phase_model.py",
+        }[self.provider]
         for name, path in [
-            (
-                "Agent仓库",
-                Path(self.repository)
-                / (
-                    "tools/serve_tomato_agent.py"
-                    if self.provider == "mengxiang"
-                    else "tools/verify_tairan_deployment.py"
-                ),
-            ),
+            ("Agent仓库", Path(self.repository) / entry),
             ("Python环境", Path(self.python)),
             ("Agent权重", Path(self.checkpoint)),
             ("编码器权重", Path(self.pretrained) / "model.safetensors"),
             ("编码器配置", Path(self.pretrained) / "config.json"),
         ]:
             add(name, path.is_file(), path)
-        if self.provider == "tairan":
-            add("tairan握手配置", Path(self.handshake_config).is_file(), self.handshake_config)
-            for name in (
-                "manifest.json",
-                "split.json",
-                "training_config.json",
-                "validation_lock.json",
-                "validation_receipt.json",
-            ):
-                add(
-                    "tairan " + name,
-                    (Path(self.checkpoint).parent / name).is_file(),
-                    Path(self.checkpoint).parent / name,
-                )
-            if all(c["ok"] for c in checks) and os.access(self.python, os.X_OK):
-                try:
-                    env = dict(os.environ)
-                    env.pop("PYTHONPATH", None)
-                    verified = subprocess.run(
-                        [
-                            self.python,
-                            "-m",
-                            "tools.verify_tairan_deployment",
-                            "--run-dir",
-                            str(Path(self.checkpoint).parent),
-                            "--encoder-dir",
-                            self.pretrained,
-                        ],
-                        cwd=self.repository,
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    add(
-                        "tairan九文件与来源校验",
-                        verified.returncode == 0,
-                        "PASS：正式权重、归一化、源码与完整配置匹配"
-                        if verified.returncode == 0
-                        else verified.stderr[-1600:],
-                    )
-                except (OSError, subprocess.TimeoutExpired) as error:
-                    add("tairan九文件与来源校验", False, error)
+        if self.provider == TAIRAN_PROVIDER:
+            manifest = Path(self.checkpoint).with_name("manifest.json")
+            add("119 条训练清单", manifest.is_file(), manifest)
+            root = Path(deployment_root) if deployment_root else Path(__file__).resolve().parents[2]
+            norm = root / IN_HAND_NORM
+            locator = root / ".deployment/crop_locator"
+            add("119 条 ROI 归一化", norm.is_file(), norm)
+            add("119 条 ROI 定位器", all((locator / name).is_file() for name in
+                                       ("model.pt", "primary/model.pt", "receipt.json")), locator)
         add("Python可执行", os.access(self.python, os.X_OK), self.python)
         if os.access(self.python, os.X_OK):
             try:
@@ -154,7 +127,11 @@ class AgentSettings:
                 )
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                 add("模型依赖与CUDA BF16", False, error)
-        if self.profile == "development":
+        if self.profile == "development" and self.provider == TAIRAN_PROVIDER:
+            script = Path(self.repository) / "offline_check.py"
+            add("119 条实时模式", False, f"请选工作机实时模式；离线回放入口为 {script}")
+            note = "四路观察的实时输入来自工作机。"
+        elif self.profile == "development":
             add("离线观测样本", Path(self.sample_npz).is_file(), self.sample_npz)
             note = "开发机仅加载模型并读取离线NPZ自检；不启动ROS、不检查DDS、不连接任务执行端。回放请求使用测试时间，不能当作真实采集延迟。"
         else:
@@ -196,7 +173,7 @@ def main():
     parser.add_argument("--deployment-root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
     values = json.loads(args.config.read_text()) if args.config else {}
-    report = AgentSettings.parse(values, args.deployment_root).check()
+    report = AgentSettings.parse(values, args.deployment_root).check(args.deployment_root)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     raise SystemExit(0 if report["ready"] else 1)
 

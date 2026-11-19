@@ -1,10 +1,12 @@
 """Read-only ROS history sidecar: source-time causal 10Hz/16-frame windows."""
 
 import argparse
+from bisect import bisect_right
 from collections import deque
 import json
 import os
 from pathlib import Path
+import threading
 import time
 
 import numpy as np
@@ -20,18 +22,27 @@ JOINT_NAMES = tuple(
 
 def select_history(histories, anchor_ns, *, tolerance_ns=40_000_000):
     """Original samples only; no future frames, interpolation or timestamp repair."""
+    entries = {}
+    timestamps = {}
+    for key in TOPICS:
+        entries[key] = {}
+        for entry in histories[key]:
+            stamp = stamp_ns(entry[0])
+            if 0 < stamp <= anchor_ns:
+                entries[key].setdefault(stamp, entry)
+        timestamps[key] = sorted(entries[key])
     rows = []
     for offset in range(15, -1, -1):
         target = anchor_ns - offset * 100_000_000
         row = {}
         for key in TOPICS:
-            candidates = [v for v in histories[key] if 0 < stamp_ns(v[0]) <= target]
-            if not candidates:
+            index = bisect_right(timestamps[key], target) - 1
+            if index < 0:
                 raise ValueError("历史预热中：" + key)
-            entry = max(candidates, key=lambda v: stamp_ns(v[0]))
-            if target - stamp_ns(entry[0]) > tolerance_ns:
+            stamp = timestamps[key][index]
+            if target - stamp > tolerance_ns:
                 raise ValueError("历史缺帧：" + key)
-            row[key] = entry
+            row[key] = entries[key][stamp]
         stamps = [stamp_ns(v[0]) for v in row.values()]
         if max(stamps) - min(stamps) > tolerance_ns:
             raise ValueError("历史多模态未对齐")
@@ -45,49 +56,81 @@ def atomic_json(path, value):
     os.replace(temp, path)
 
 
+class HistoryBuffer:
+    """Keep receiving original messages while another thread prepares windows."""
+
+    def __init__(self, capacity):
+        self.lock = threading.Lock()
+        self.latest = {}
+        self.histories = {key: deque(maxlen=capacity) for key in TOPICS}
+
+    def remember(self, key, message):
+        now = time.monotonic_ns()
+        entry = (message, now)
+        with self.lock:
+            self.latest[key] = entry
+            history = self.histories[key]
+            history.append(entry)
+            while history and now - history[0][1] > 3_000_000_000:
+                history.popleft()
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.latest), {key: tuple(rows) for key, rows in self.histories.items()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--shared-roi-directory",type=Path)
+    roi = parser.add_mutually_exclusive_group()
+    roi.add_argument("--shared-roi-directory", type=Path)
+    roi.add_argument("--native-agent-roi", action="store_true")
     args = parser.parse_args()
     import cv2
-    from rclpy.executors import ExternalShutdownException
+    from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 
     provider = ObservationProvider(node_name="fr3_sharpa_agent_observation")
-    provider.histories = {k: deque(maxlen=256) for k in TOPICS}
+    buffer = HistoryBuffer(1024 if args.native_agent_roi else 256)
+    provider.remember = buffer.remember
+    executor = SingleThreadedExecutor(context=provider.node.context)
+    executor.add_node(provider.node)
+    spin_finished = threading.Event()
+    spin_errors = []
 
-    # Extend ONLY this independent subscriber's buffer; original runtime untouched.
-    def remember(key, message):
-        now = time.monotonic_ns()
-        entry = (message, now)
-        provider.latest[key] = entry
-        history = provider.histories[key]
-        history.append(entry)
-        while history and now - history[0][1] > 3_000_000_000:
-            history.popleft()
+    def receive():
+        try:
+            executor.spin()
+        except ExternalShutdownException:
+            pass
+        except Exception as error:
+            spin_errors.append(error)
+        finally:
+            spin_finished.set()
 
-    # Subscription lambdas look up provider.remember at callback time.
-    provider.remember = remember
+    receiver = threading.Thread(target=receive, name="agent-ros-receiver")
     directory = args.directory
     directory.mkdir(parents=True, exist_ok=True)
-    last_emit = 0.0
+    cv2.setNumThreads(1)
+    next_emit = time.monotonic()
+    receiver.start()
     try:
-        while True:
-            provider.rclpy.spin_once(provider.node, timeout_sec=0.005)
-            now = time.monotonic()
-            if now - last_emit < 0.5:
-                continue
-            last_emit = now
+        while not spin_finished.wait(max(0.0, next_emit - time.monotonic())):
+            cycle_start = time.monotonic()
+            next_emit = max(next_emit + 0.5, cycle_start)
             try:
-                if len(provider.latest) != len(TOPICS):
+                latest, histories = buffer.snapshot()
+                if len(latest) != len(TOPICS):
                     raise ValueError("等待三路相机和四组关节反馈")
                 ros_now = provider.node.get_clock().now().nanoseconds
                 captured_unix = time.time()
-                issues = timing_issues(provider.latest, ros_now, time.monotonic_ns())
+                issues = timing_issues(latest, ros_now, time.monotonic_ns())
                 if issues:
                     raise ValueError("; ".join(issues))
-                anchor = min(stamp_ns(v[0]) for v in provider.latest.values())
-                rows = select_history(provider.histories, anchor)
+                anchor = min(stamp_ns(v[0]) for v in latest.values())
+                rows = select_history(
+                    histories, anchor,
+                    tolerance_ns=75_000_000 if args.native_agent_roi else 40_000_000,
+                )
                 rgb = []
                 native_cam0 = []
                 for camera in ("cam0", "cam1", "cam2"):
@@ -99,7 +142,8 @@ def main():
                         import base64
 
                         pixels = np.frombuffer(base64.b64decode(payload["rgb_b64"]), np.uint8).reshape(payload["shape"])
-                        if camera == "cam0":native_cam0.append(pixels.copy())
+                        if camera == "cam0" and (args.native_agent_roi or args.shared_roi_directory):
+                            native_cam0.append(pixels)
                         frames.append(cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_AREA))
                     rgb.append(np.stack(frames))
                 joints = [
@@ -116,6 +160,11 @@ def main():
                 path = directory / (oid + ".npz")
                 temp = directory / (oid + ".tmp.npz")
                 extras = {}; shared_meta = None
+                if args.native_agent_roi:
+                    extras = dict(
+                        native_cam0=np.stack(native_cam0),
+                        cam0_stamp_ns=np.array([stamp_ns(row["cam0"][0]) for row in rows], dtype=np.int64),
+                    )
                 if args.shared_roi_directory:
                     from .shared_roi import read_history
                     stamps=[{k:stamp_ns(v[0]) for k,v in row.items()} for row in rows]
@@ -135,6 +184,7 @@ def main():
                     source_age_s=(ros_now - anchor) / 1e9,
                     shared_roi=shared_meta,
                     history_source_ns={k: [stamp_ns(r[k][0]) for r in rows] for k in TOPICS},
+                    preparation_ms=(time.monotonic() - cycle_start) * 1000,
                 )
                 atomic_json(directory / "latest.json", metadata)
                 for old in directory.glob("*.npz"):
@@ -142,9 +192,13 @@ def main():
                         old.unlink(missing_ok=True)
             except (ValueError, TimeoutError) as error:
                 atomic_json(directory / "latest.json", dict(valid=False, error=str(error), captured_unix=time.time()))
+        if spin_errors:
+            raise spin_errors[0]
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        executor.shutdown()
+        receiver.join()
         provider.close()
 
 

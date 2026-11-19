@@ -285,7 +285,9 @@ sudo bash /home/user/gello_upper_body_teleop/ops/setup/install_dds_buffers.sh
 
 该命令会在所选Agent Python的独立短进程中导入模型依赖并核对CUDA/BF16；不会安装依赖或下载权重。检查通过不等于真实ROS流或实机动作已验收。
 
-### mengxiang / tairan 双 Agent（2026-11-15）
+### mengxiang / tairan 双 Agent（2026-11-15，历史配置）
+
+当前 UI 的 `tairan` 使用 119 条四路模型。下文的三路权重、握手配置与旧入口仅供查阅。当前的启动方式见 119 条任务一节。
 
 工作机同步部署代码（先处理工作机自己的未提交修改，避免覆盖现场配置）：
 
@@ -495,9 +497,9 @@ bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --smoke-only --enable
 不输入人工阶段真值。缺少可验证右手或目标超过局部窗口时，回退当前时刻全图并明确记录原因。
 这是离线未来辅助坐标的因果部署对应方案，不能声称像素与离线局部视频完全一致或定位已获独立验收。
 
-旧mengxiang／tairan没有训练本任务的手中调整与新顺序。UI保持手动；Supervisor和执行端IPC均拒绝
-旧Agent自动推进119条任务。可启动旧Agent观察输出，但这些概率不能作为本任务成功／阶段完成的依据。
-后来四路Memory研究权重也未因此获得自动控制权限。
+本任务在 UI 选择 `tairan · 四路`，默认使用 `.deployment/agents/inhand119_four`
+下的 `head/best_head.pt` 与 `encoder/`。默认手动。启动 Agent 并等实时预测与任务就绪后，
+在「阶段切换方式」选择「Agent 自动切换」。tairan 采用 K1，单次观测的当前和 +1 秒预测对下一阶段的概率均达到 80% 时请求切换。当前生效的英文 Prompt 显示在阶段按钮下方。
 
 本轮证据见 `deploy/fr3_sharpa_runtime/validation/in-hand119-20000-online.json`：
 真实20000权重恢复、四路输入、四种训练原文Prompt、50×58有限动作、普通RTC预热均通过；
