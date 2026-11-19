@@ -93,7 +93,7 @@ Main提供普通串行、RTC和Paper RTC；Soft分支增加串行Soft和异步So
 
 ## 启动前部署独占相机
 
-主界面新增“启动前相机策略”，默认是“部署独占接管”，也可选“要求相机空闲”。核对配置会显示并冻结该选项；改动后需重新核对。点击启动执行即授权按此策略处理相机：独占模式会中断使用旧相机服务的遥操预览或录制，模型预热阶段不会接管相机。
+控制台默认采用部署独占接管，局部图定位器使用 GPU。启动执行时，独占接管会中断使用旧相机服务的遥操预览或录制。模型预热阶段不会接管相机。
 
 接管只针对 Docker 中标签为 teleop-cameras／openpi-cameras、命令为 triple_camera.launch.py、且挂载配置的三台序列号及头部/左右语义与本机部署配置完全一致的服务。使用不可变容器 ID 停止，检查容器 Running=false、PID=0，并等待可见USB/网络/驱动占用消失；不按容器名通配停止，不执行remove-orphans、USB reset或杀未知进程。部分相机重叠、无法核对配置或未知进程占用均拒绝启动，并记录容器名、命令、可见PID或设备句柄。操作系统权限可能限制占用诊断，不能将未列出PID当作设备一定空闲。
 
@@ -243,9 +243,11 @@ Train RTC需填写实际训练的最大延迟（1..49），可设置初始延迟
 
 ### Agent 实时接入与手动／自动选择（2026-11-12）
 
-番茄任务面板提供“手动切换／Agent 自动状态机”、“启动 Agent（先观察）”、“停止 Agent”和“切回手动接管”。默认始终为手动；刷新页面显示服务器当前模式，新执行会话不会继承自动授权。先按上文启动 π₀.₅ 推理与任务执行端，再启动 Agent，等待真实观测就绪后选择自动，最后开始当前阶段。也可以在已有相机和关节反馈时单独启动 Agent，只观察概率。
+启动推理前，可以点击番茄任务面板的阶段按钮选择初始阶段。选中的按钮会显示“初始阶段”。从后续阶段启动时，需要勾选“人工恢复”并核对执行配置。
 
-部署界面固定使用工作机实时模式，不再提供开发机／离线NPZ入口。默认手动切换；需要自动切换时先等执行端就绪，选择Agent、启动观察，再等“实时就绪”后启用自动。展开“首次配置／修改工作机上的 Agent 路径”可修改仓库、Python、checkpoint、编码器、Gello和ROS overlay。mengxiang默认仓库为`~/vjepa2_training`，权重为`runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt`。相对模型路径以Agent仓库为基准；overlay以部署仓库为基准。Python保留虚拟环境调用路径，不解引用解释器软链接。模型运行于该仓库 `.venv-tomato` 独立进程，编码器只加载一次。ROS 采集运行于现有 Pixi ros2 环境，并复用现有 domain、CycloneDDS 配置和消息 overlay。Agent 不启动相机、硬件、Home 或 SDK，不创建动作发布者。
+阶段切换默认手动，也可以提前选择“Agent 自动切换”。预选在当前页面等待，直到指定 Agent 的实时预测和任务执行端都就绪，才向控制台申请启用自动切换。执行端就绪后，仍由操作员点击“开始当前阶段”。已结束的执行会话不会把自动授权带到下一次执行。已有相机和关节反馈时，也可以单独启动 Agent 观察概率。
+
+部署界面使用工作机实时模式。展开“首次配置／修改工作机上的 Agent 路径”可修改仓库、Python、checkpoint、编码器、Gello和ROS overlay。mengxiang默认仓库为`~/vjepa2_training`，权重为`runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt`。相对模型路径以Agent仓库为基准；overlay以部署仓库为基准。Python保留虚拟环境调用路径，不解引用解释器软链接。模型运行于该仓库 `.venv-tomato` 独立进程，编码器只加载一次。ROS 采集运行于现有 Pixi ros2 环境，并复用现有 domain、CycloneDDS 配置和消息 overlay。Agent 不启动相机、硬件、Home 或 SDK，不创建动作发布者。
 
 只读采集保留约3秒历史；每0.5秒按源时间选三路相机各16帧、10Hz，以及58维实测关节位置。相机固定 cam0/cam1/cam2，RGB、256×256、INTER_AREA 与训练一致；关节带完整 `.position` 名称，由模型按名称重排。历史各采样点仅取目标时间之前的原始样本，最大偏差40ms；缺帧、时钟域不一致和过期数据不会伪造补齐。必须预热至少1.5秒且各流持续有效。
 
@@ -498,8 +500,8 @@ bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --smoke-only --enable
 这是离线未来辅助坐标的因果部署对应方案，不能声称像素与离线局部视频完全一致或定位已获独立验收。
 
 本任务在 UI 选择 `tairan · 四路`，默认使用 `.deployment/agents/inhand119_four`
-下的 `head/best_head.pt` 与 `encoder/`。默认手动。启动 Agent 并等实时预测与任务就绪后，
-在「阶段切换方式」选择「Agent 自动切换」。tairan 采用 K1，单次观测的当前和 +1 秒预测对下一阶段的概率均达到 80% 时请求切换。当前生效的英文 Prompt 显示在阶段按钮下方。
+下的 `head/best_head.pt` 与 `encoder/`。默认手动，可在「阶段切换方式」提前选择「Agent 自动切换」。
+启动 Agent 并等实时预测与任务就绪后，预选的自动切换才会生效。tairan 采用 K1，单次观测的当前和 +1 秒预测对下一阶段的概率均达到 80% 时请求切换。当前生效的英文 Prompt 显示在阶段按钮下方。
 
 本轮证据见 `deploy/fr3_sharpa_runtime/validation/in-hand119-20000-online.json`：
 真实20000权重恢复、四路输入、四种训练原文Prompt、50×58有限动作、普通RTC预热均通过；

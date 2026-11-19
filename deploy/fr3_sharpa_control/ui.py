@@ -27,12 +27,14 @@ input[type=checkbox]{width:auto}.row{display:flex;gap:10px;align-items:end}.row>
 button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#17394a;font:600 13px system-ui;cursor:pointer;white-space:nowrap}button.primary{background:#087b75;color:white}button.stop{background:#b63f37;color:white}button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
+.agent-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto;gap:10px;align-items:end}.agent-controls select,.agent-controls button{min-height:42px}
+@media(max-width:600px){.agent-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.agent-controls>.actions{grid-column:1/-1}}
 .logs .card{padding:14px;display:flex;flex-direction:column}.logs h2{font-size:15px;margin-bottom:10px}.logs pre{height:clamp(180px,21vh,270px);max-height:none;background:#132b38;color:#d5e5ed;padding:12px;border-radius:6px;margin:0;overflow:auto}.logs .is-active{border-color:#7bb5b0;box-shadow:0 0 0 1px #7bb5b0}
 .page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
 dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:350px;overflow:auto}#entries button{display:block;background:white;text-align:left;width:100%;border-bottom:1px solid #e5edf1}details{margin:11px 0}summary{cursor:pointer;font-weight:600}.preview{min-height:60px}
 @media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}header{padding:6px 18px}main{padding:14px}}
 @media(max-width:520px){.brand-logo{height:60px;width:220px}.card{padding:14px}.row{flex-wrap:wrap}.row>*{flex-basis:42%}}
-.task-stages{display:flex;gap:8px;flex-wrap:wrap}.task-stages .active{background:#087b75;color:white}.task-stages .pending{outline:2px solid #d69e36}.task-stages .passed{border-bottom:3px solid #7bb5b0}.task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}#taskPanel{margin-bottom:16px}#taskError{color:#b7352f}</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
+.task-stages{display:flex;gap:8px;flex-wrap:wrap}.task-stages .active{background:#087b75;color:white}.task-stages .pending{outline:2px solid #d69e36}.task-stages .passed{border-bottom:3px solid #7bb5b0}.task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}.task-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}@media(max-width:1100px){.task-layout{grid-template-columns:minmax(0,1fr)}.task-layout>#dagger-panel:empty{display:none}}#taskError{color:#b7352f}</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
 <main><section class="dashboard-row configuration" aria-label="部署配置与控制"><article class="card" id="weights-card"><h2>1 · 权重与代码</h2>
 <label>部署仓库目录</label><div class="path"><input id="repository"><button onclick="browse('repository')">选择目录</button></div>
 <div class="muted" id="repoInfo">Main 与 Soft 可各用一个部署目录；不会在运行中切换 Git 分支。</div>
@@ -48,27 +50,27 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option><option value="soft-serial">串行 Soft</option><option value="soft-async">异步 Soft · 50→30→26＋4→20</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
-<label>启动前相机策略</label><select id="camera_policy"><option value="exclusive">部署独占接管：停止同组已知相机服务</option><option value="require_free">要求相机空闲：发现占用即报错</option></select>
-<div class="notice">独占接管会停止同组 teleop-cameras／openpi-cameras，旧遥操预览或录制会中断。只在启动前操作；未知占用不杀进程，运行中不重启相机。支持并行启动的Home模式会在视频验证期间开始回位；两边均成功后才开始任务。</div><label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
+<label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
 <label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator">
-<label>定位器计算设备</label><select id="crop_device"><option value="cuda">GPU（推荐）</option><option value="cpu">CPU（先测延迟）</option></select>
-<div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">
 <label>任务控制</label><select id="task_mode"><option value="none">普通部署 · 无阶段状态机</option><option value="tomato-b">100条有放回 · 七阶段</option><option value="tomato-in-hand119">119条手中调整 · 五阶段手动</option></select>
-<label>任务初始阶段</label><select id="initial_stage"><option value="pickup_1">首次拿起</option><option value="harvest_1">首次采摘</option><option value="return_truss">放回整串</option><option value="adjust">调整</option><option value="pickup_2">再次拿起</option><option value="harvest_2">再次采摘</option><option value="return_stem">放回裸杆</option></select>
 <label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
 <div class="muted">非首次阶段必须勾选并重新核对配置。恢复会获取新观测和首块，不复用旧动作。</div>
 <label>归档父目录</label><div class="path"><input id="output"><button onclick="browse('output')">选择目录</button></div><div class="muted">自动创建 日期/小时.分钟（如15.43）；同一分钟重启自动加后缀，不覆盖旧记录。</div>
 </article><article class="card" id="control-card"><h2>3 · 推理与执行</h2>
 <div class="control-line"><strong>推理端</strong><span id="modelState" class="muted">未启动</span><div class="actions"><button id="startModel" class="primary" onclick="startModel()">启动推理</button><button id="closeModel" class="stop" onclick="closeModel()" disabled>停止推理</button></div></div>
 <div class="control-line"><strong>执行端</strong><span id="executionState" class="muted">未运行</span><div class="actions"><button id="preview" onclick="preview()">核对执行配置</button><button id="start" class="primary" onclick="start()" disabled>启动执行</button><button id="stop" class="stop" onclick="stop()" disabled>停止执行</button></div></div>
-<p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div></article></section>
+<p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div>
+<div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">
+</article></section>
+<div class="task-layout">
 <section class="card" id="taskPanel" aria-label="番茄采摘任务状态机"><h2>番茄采摘任务状态机</h2>
 <p class="muted" id="taskInstructions">执行端就绪后，点击「开始当前阶段」。</p>
-<div class="row">
-<div><label for="agentMode">阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()" aria-describedby="agentModeHint"><option value="manual">手动切换（默认）</option><option id="agentAutoMode" value="auto" disabled>Agent 自动切换</option></select><p class="muted" id="agentModeHint">启动 Agent 并等任务就绪后可用。</p></div>
+<div class="agent-controls">
+<div><label for="agentMode">阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()" aria-describedby="agentModeHint"><option value="manual">手动切换（默认）</option><option value="auto">Agent 自动切换</option></select></div>
 <div><label for="agentProvider">Agent 模型</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang</option><option value="tairan">tairan · 四路</option></select></div>
 <div class="actions"><button id="startAgent" class="primary" onclick="agentCommand('start-agent')">启动 Agent</button><button id="stopAgent" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button></div>
 </div>
+<p class="muted" id="agentModeHint" hidden></p>
 <p id="agentStatus" class="muted" role="status">Agent 未启动</p><div id="agentError" class="error"></div>
 <details id="agentPaths"><summary>首次配置／修改工作机上的 Agent 路径</summary>
 <p class="muted">选择 Agent 会自动填入对应配置。路径不符时在这里修改；无需选择运行环境。</p>
@@ -78,14 +80,13 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="actions" style="margin-top:12px"><button id="checkAgent" onclick="checkAgentEnvironment()">检查工作机配置</button></div><div id="agentEnvironmentReport" role="status"></div></details>
 <div id="agentProbabilities" class="task-grid"></div><details><summary>查看 Agent 预测与切换规则</summary><p class="muted">tairan 用于 119 条五阶段，采用 K1。单次观测中，当前和 +1 秒对下一阶段的概率均达到 80% 时，请求切换。切回手动或停止 tairan 后，当前动作继续执行。mengxiang 用于 100 条七阶段，自动模式下停止 mengxiang 会同时停止执行。最终阶段由人工确认完成。</p></details>
 <div id="taskStages" class="task-stages"></div>
-<div id="autoActivePrompt" class="notice" hidden><strong id="autoPromptStage"></strong><p id="autoPromptText"></p></div><details><summary>训练四种英文指令（固定原文）</summary><pre id="trainingPrompts">pickup: Right hand grasps and lifts the truss to the center
-harvest: Right hand holds truss while left hand picks tomatoes into left basket
-return: Right hand returns the held object to the right plate
-adjust: Right fingers reposition the truss on the right plate</pre></details><p class="muted">阶段持续运行，不会自动等待。119条任务：右手拿稳果串并到达中央、左手刚准备靠近时，切到首次采摘，不必等左手到中央。手动运行时可按 N 切到下一阶段；输入框内或切换过程中不响应快捷键。“已离开”仅表示阶段交接，不代表任务成功。</p>
-<div id="taskStatus" class="task-grid"><span>尚未启动番茄任务</span></div>
+<div id="autoActivePrompt" class="notice" hidden><strong id="autoPromptStage"></strong><p id="autoPromptText"></p></div>
+<input type="hidden" id="initial_stage">
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
 <div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
 <p class="notice">119 条任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
+<div class="card" id="dagger-panel"></div>
+</div>
 <section class="dashboard-row logs" id="logs" aria-label="三个终端日志">
 <article class="card" id="terminal-hardware"><h2>终端一 · 硬件日志</h2><pre id="log-hardware" role="log" aria-label="硬件日志">尚无硬件日志</pre></article>
 <article class="card" id="terminal-inference"><h2>终端二 · 推理日志</h2><pre id="log-inference" role="log" aria-label="推理日志">尚无推理日志</pre></article>
@@ -95,9 +96,9 @@ adjust: Right fingers reposition the truss on the right plate</pre></details><p 
 </main>
 <dialog id="picker"><h2>选择工作机上的路径</h2><div class="path"><input id="browsePath"><button onclick="loadDirectory()">打开</button><button onclick="upDirectory()">上一级</button></div><div id="entries"></div><div class="actions"><button class="primary" id="chooseDirectory" onclick="choosePath(document.getElementById('browsePath').value)">选择此目录</button><button onclick="document.getElementById('picker').close()">取消</button></div></dialog>
 <script>
-let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
+let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, executionActive=false, executionStarting=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','camera_policy','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','crop_device'];
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator'];
 function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
 async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
 function failure(e){$('error').textContent=e.message}
@@ -108,19 +109,30 @@ function updateModes(){let modes=repoModes.filter(m=>!modelModes||modelModes.inc
 function modelTypeChanged(reset=false){let t=$('model_type').value,train=t.startsWith('train-');modelModes=t==='auto'?null:t==='lora'?['serial']:train?['serial',t==='train-paper-rtc'?'train-paper-rtc':'train-rtc']:['serial',t==='paper-delta'?'paper-rtc':'rtc','soft-serial','soft-async'];if(t!=='auto')$('semantics').value=t.includes('delta')||t==='train-paper-rtc'?'delta':'absolute';if(reset&&!train&&t!=='auto'){$('train_rtc_max_delay').value=0;$('rtc_initial_delay_steps').value=0}updateModes();invalidate()}
 async function inspect(){try{const c=config();const d=await api('inspect',c);modelModes=d.supported_modes;const modes=updateModes();$('identity').textContent=`${d.tomato_model?d.tomato_model.name+' · ':''}${d.finetune_mode} · ${d.semantics||'语义未知'} · 30 Hz / 58D / horizon 50\n${d.evidence}${d.train_rtc?" · Train RTC 最大延迟="+d.train_rtc.max_delay+"步":""}\n归一化：${d.normalization}；噪声：${d.paper_algorithm?'相关噪声 β='+d.paper_algorithm.beta:'独立高斯'}\n可用模式：${modeNames(modes)}`;invalidate()}catch(e){failure(e)}}
 async function repositoryChanged(){try{let d=await api('repository?path='+encodeURIComponent($('repository').value));repoModes=d.modes;$('repoInfo').textContent='当前分支：'+d.branch+'；仅可选当前代码支持的模式';updateModes();invalidate()}catch(e){failure(e)}}
-async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,初始阶段:c.initial_stage,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,相机策略:c.camera_policy,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
-async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}taskModeChanged();$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
+async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,初始阶段:c.initial_stage,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
+async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';taskModeChanged();modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
 async function startModel(){try{const c=config();showLog('inference');await api('start-model',{settings:c});await refresh()}catch(e){failure(e)}}
 function showLog(name){for(let key of ['hardware','inference','execution'])$('terminal-'+key).classList.toggle('is-active',key===name)}
-async function start(){try{if(approved!==JSON.stringify(config()))throw Error('配置已改变，请重新核对');await api('start',{settings:config(),approval:approvedPlan});showLog('execution');busy=true;$('start').disabled=true;await refresh()}catch(e){failure(e)}}
-async function stop(){try{await api('stop',{});await refresh()}catch(e){failure(e)}}
+async function start(){
+if(executionStarting)return;
+try{
+ if(approved!==JSON.stringify(config()))throw Error('配置已改变，请重新核对');
+ executionStarting=true;$('start').disabled=true;renderTask(taskState);
+ const status=await api('start',{settings:config(),approval:approvedPlan});
+ executionActive=status.execution_running;busy=status.running;showLog('execution');
+ await refresh();
+}catch(e){failure(e)}finally{executionStarting=false;renderTask(taskState);applyPendingAgentMode()}
+}
+async function stop(){try{autoModePending=false;updateAgentModeControl();await api('stop',{});await refresh()}catch(e){failure(e)}}
 async function closeModel(){try{await api('close-model',{});await refresh()}catch(e){failure(e)}}
 async function refresh(){try{let s=await api('status');busy=s.running;
-renderAgent(s.agent);renderTask(s.task);
+if(executionActive&&!s.execution_running)autoModePending=false;
+executionActive=s.execution_running;
+renderAgent(s.agent);renderTask(s.task);applyPendingAgentMode();
 $('phase').textContent=({idle:'空闲',validating:'配置检查',hardware_up:'启动硬件',model_loading:'推理预热中',model_stopping:'停止推理中',model_ready:'推理就绪',model_off:'推理已停止',recording_ready:'准备录制',running:'执行中',stopping:'停止执行中',failed:'失败',stopped:'执行已停止',finished:'执行已完成'})[s.phase]||s.phase;
 $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'正在加载／停止':s.model_ready?(s.model_owned?'已就绪':'已就绪（外部终端）'):s.model_running?'未就绪':'未启动';$('executionState').textContent=s.execution_running?'执行／清理中':'未运行';
 if(s.interaction_crop){let r=s.interaction_crop;$('cropStatus').textContent=`局部图：${r.mode} · ${r.source_monotonic_ns==null?'模型预热样本':r.age_s>2?'画面已过期':'最新查询'} · 检测 ${r.detector_ms.toFixed(1)} ms / 恢复 ${(r.recovery_ms??0).toFixed(1)} ms / 裁剪合计 ${r.crop_total_ms.toFixed(1)} ms · 原图 ${r.source_size.join('×')} · ${JSON.stringify(r.counts)}`;$('cropPreview').style.display='block';$('cropPreview').src='/api/crop-preview?t='+r.updated_wall_time}else{$('cropPreview').style.display='none';$('cropStatus').textContent='局部图：等待四路模型启动及新观测'}
-$('stop').disabled=!s.execution_running||s.stop_requested;$('start').disabled=busy||!s.model_ready||JSON.stringify(s.model_key)!==approvedModelKey||approved!==JSON.stringify(config());$('startModel').disabled=busy||!$('checkpoint').value;$('closeModel').disabled=s.execution_running||(!s.model_owned&&!s.model_loading);$('preview').disabled=busy;
+$('stop').disabled=!s.execution_running||s.stop_requested;$('start').disabled=busy||executionStarting||!s.model_ready||JSON.stringify(s.model_key)!==approvedModelKey||approved!==JSON.stringify(config());$('startModel').disabled=busy||!$('checkpoint').value;$('closeModel').disabled=s.execution_running||(!s.model_owned&&!s.model_loading);$('preview').disabled=busy;
 $('directory').textContent=s.directory?'本次日志目录：'+s.directory:'';$('recordStatus').textContent=[s['recording.json']?'录制：'+s['recording.json'].status:'',s['video_export.json']?'视频：'+s['video_export.json'].status:'',s.exports.length?'后台导出：'+s.exports.length+'项':''].filter(Boolean).join(' · ');
 for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;let text=s.logs[key]||({'hardware':'尚无硬件日志','inference':'尚无推理日志','execution':'尚无执行日志'})[key];if(pre.textContent!==text){pre.textContent=text;if(end)pre.scrollTop=pre.scrollHeight}}
 for(let f of fields)$(f).disabled=busy;if(!busy){$('steps').disabled=$('mode').value.startsWith('soft-');$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value)}}catch(e){failure(e)}}
@@ -131,29 +143,34 @@ function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentC
 function agentConfig(){return {...Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value])),profile:'workstation'}}
 function updateAgentChoice(){$('agentEnvironmentReport').textContent=''}
 async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
-let agentState=null,agentRequestPending=false;
-function updateAgentModeControl(){
-const a=agentState;
-const taskProfile=taskState?.task_profile||$('task_mode').value;
-const expectedProvider=taskProfile==='tomato-in-hand119'?'tairan':'mengxiang';
-const provider=['stopped','failed',undefined].includes(a?.status)?$('agentProvider').value:a.provider;
-const taskReady=!!taskState&&!taskState.communication_error&&
- (taskState.execution_state==='READY'||(taskState.execution_state==='RUNNING'&&taskState.active_stage===taskState.requested_stage));
-let hint='';
-if(a?.mode!=='auto'){
- if(provider!==expectedProvider)hint='此任务请使用 '+expectedProvider+'。';
- else if(a?.status==='stopped'||a?.status==='failed'||!a)hint='启动 Agent 并等任务就绪后可用。';
- else if(a.status!=='ready'||a.control_eligible===false)hint='等待 Agent 实时预测。';
- else if(!taskReady)hint='等待任务就绪。';
+let agentState=null,agentRequestPending=false,autoModePending=false,agentModeRequest=null;
+function agentAutoBlockReason(){
+ const a=agentState;
+ const t=executionActive?taskState:null;
+ const profile=t?.task_profile||$('task_mode').value;
+ const expectedProvider=profile==='tomato-in-hand119'?'tairan':'mengxiang';
+ const provider=['stopped','failed',undefined].includes(a?.status)?$('agentProvider').value:a.provider;
+ if(provider!==expectedProvider)return '此任务请使用 '+expectedProvider+'。';
+ if(!a||['stopped','failed'].includes(a.status))return '请启动 Agent。';
+ if(a.status!=='ready'||a.control_eligible===false)return '等待 Agent 实时预测就绪。';
+ if(!t||t.communication_error||!(t.execution_state==='READY'||
+    (t.execution_state==='RUNNING'&&t.active_stage===t.requested_stage)))return '等待任务就绪。';
+ return '';
 }
-$('agentAutoMode').disabled=!!hint;
-$('agentModeHint').textContent=hint;
-$('agentModeHint').hidden=!hint;
+function updateAgentModeControl(){
+ $('agentMode').value=agentModeRequest||(autoModePending?'auto':agentState?.mode||'manual');
+ $('agentMode').disabled=!!agentModeRequest;
+ const reason=autoModePending?agentAutoBlockReason():'';
+ const hint=agentModeRequest?'正在应用切换方式。':autoModePending?'已预选自动切换。'+reason:'';
+ $('agentModeHint').textContent=hint;
+ $('agentModeHint').hidden=!hint;
+}
+function applyPendingAgentMode(){
+ if(autoModePending&&!executionStarting&&!agentModeRequest&&!agentRequestPending&&!taskPending&&!agentAutoBlockReason())return setAgentMode('auto');
 }
 function renderAgent(a){
 if(!a)return;
 agentState=a;
-$('agentMode').value=a.mode;
 updateAgentModeControl();
 const canStart=!agentRequestPending&&['stopped','failed'].includes(a.status);
 $('startAgent').disabled=!canStart;
@@ -176,8 +193,21 @@ for(const [label,title] of [['current','当前预测'],['future','采集后 +'+h
 if(a.status==='ready'&&Number.isInteger(a.roi_fallback_frames))show('第四路 ROI 回退全图 '+a.roi_fallback_frames+'/16 帧');
 if(a.provider==='tairan'&&a.status==='ready')show('推理耗时 '+Math.round(a.latency_ms)+' ms');
 }
-async function agentCommand(path){if(agentRequestPending)return;const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
-async function agentModeChanged(){try{$('agentError').textContent='';renderAgent(await api('agent-mode',{mode:$('agentMode').value}));renderTask(taskState)}catch(e){$('agentError').textContent=e.message;if(agentState)$('agentMode').value=agentState.mode}}
+async function agentCommand(path){if(agentRequestPending)return;if(path==='stop-agent'){autoModePending=false;updateAgentModeControl()}const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
+async function setAgentMode(mode){
+ agentModeRequest=mode;autoModePending=false;updateAgentModeControl();
+ try{renderAgent(await api('agent-mode',{mode}))}
+ catch(e){$('agentError').textContent=e.message}
+ finally{agentModeRequest=null;renderTask(taskState)}
+}
+function agentModeChanged(){
+ if(agentModeRequest)return;
+ $('agentError').textContent='';
+ autoModePending=$('agentMode').value==='auto';
+ updateAgentModeControl();
+ if(autoModePending)return applyPendingAgentMode();
+ if(agentState?.mode==='auto')return setAgentMode('manual');
+}
 let taskState=null, taskPending=false, taskPolling=false, taskCatalogs={};
 function manualNextKey(event){
 if(event.code!=='KeyN'||event.repeat||event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return;
@@ -191,22 +221,71 @@ async function refreshTask(){if(!taskState||taskPolling||!['RUNNING','RESUMING',
 const oldStageList=[['pickup_1','首次拿起'],['harvest_1','首次采摘'],['return_truss','放回整串'],['adjust','调整'],['pickup_2','再次拿起'],['harvest_2','再次采摘'],['return_stem','放回裸杆']];
 const inHandStageList=[['pickup','拿起番茄串'],['harvest_1','首次采摘'],['adjust_in_hand','手中调整'],['harvest_2','再次采摘'],['return_stem','最终放回']];
 let stageList=oldStageList;
-function taskModeChanged(){$('taskInstructions').textContent=$('task_mode').value==='tomato-in-hand119'?'从 Home 启动后，点击「开始当前阶段」。':'执行端就绪后，点击「开始当前阶段」。';let list=$('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList;let value=$('initial_stage').value;$('initial_stage').replaceChildren();for(let[id,label]of list){let o=document.createElement('option');o.value=id;o.textContent=label;$('initial_stage').append(o)}$('initial_stage').value=list.some(x=>x[0]===value)?value:list[0][0];updateAgentChoice();renderTask(taskState);if(agentState)renderAgent(agentState)}
-function renderTask(t){if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;taskState=t;updateAgentModeControl();let rows=t?.stages||taskCatalogs[$('task_mode').value]||taskCatalogs['tomato-b']||[];if(rows.length)$('trainingPrompts').textContent=[...new Map(rows.map(s=>[s.action,s.prompt]))].map(([action,prompt])=>action+': '+prompt).join('\\n');stageList=t?.stages?.map(s=>[s.id,s.label])||($('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList);let state=t?.execution_state||'IDLE',available=!!t&&!t.communication_error,idx=stageList.findIndex(x=>x[0]===t?.requested_stage),canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);let box=$('taskStages');box.replaceChildren();stageList.forEach(([id,name],i)=>{let b=document.createElement('button');b.textContent=(t?.active_stage===id?'● ':t?.requested_stage===id?'◷ ':'')+name+(t?.completed_stages?.includes(id)?' · 已离开':'');b.className=t?.active_stage===id?'active':t?.requested_stage===id?'pending':t?.completed_stages?.includes(id)?'passed':'';b.disabled=!canSwitch||i!==idx+1;b.onclick=()=>taskCommand('stage',id);box.append(b)});
-let values={'请求阶段':t?.requested_stage||'—','当前阶段':t?.active_stage||'尚未接入','执行状态':t?.communication_error?'通信中断（上次 '+state+'）':['SWITCH_REQUESTED','SWITCHING'].includes(state)?(t?.inference_status==='finishing_chunk'?'等当前动作块结束':'正在切换（'+state+'）'):state,'Prompt 类别':t?.stages?.find(x=>x.id===t.active_stage)?.action||'—','Stage Version':t?.stage_version??'—','Chunk ID':t?.active_chunk_id||'—','RTC 模式':t?.rtc_mode||'—','执行进度':t?.chunk_progress?Number(t.chunk_progress.phase).toFixed(1)+'/50':'—','在途推理':t?.inference_status||'—','最新请求':t?.request_status||'—','允许恢复':t?.safe_to_resume?'是，仍需明确授权':'否'};let status=$('taskStatus');status.replaceChildren();for(let [k,v]of Object.entries(values)){let span=document.createElement('span');span.textContent=k+'：'+v;status.append(span)}$('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';
+function configuredStageList(){
+ return $('task_mode').value==='tomato-in-hand119'?inHandStageList:oldStageList;
+}
+function taskModeChanged(){
+ const list=configuredStageList(), initial=$('initial_stage');
+ if($('task_mode').value==='none'||!list.some(([id])=>id===initial.value)){
+  initial.value=list[0][0];
+  $('recovery_confirmed').checked=false;
+ }
+ updateAgentChoice();renderTask(taskState);
+}
+function selectInitialStage(id){
+ if(executionActive||executionStarting||$('task_mode').value==='none'||$('initial_stage').value===id)return;
+ $('initial_stage').value=id;
+ $('recovery_confirmed').checked=false;
+ invalidate();renderTask(taskState);
+}
+function renderTask(t){
+ if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;
+ taskState=t;updateAgentModeControl();
+ const live=executionActive&&!executionStarting;
+ const configuring=!executionActive&&!executionStarting&&$('task_mode').value!=='none';
+ const configured=configuredStageList();
+ const rows=(live?t?.stages:null)||taskCatalogs[$('task_mode').value]||taskCatalogs['tomato-b']||[];
+ stageList=(live?t?.stages?.map(s=>[s.id,s.label]):null)||configured;
+ const state=t?.execution_state||'IDLE', available=live&&!!t&&!t.communication_error;
+ const idx=stageList.findIndex(([id])=>id===t?.requested_stage);
+ const canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);
+ const initial=$('initial_stage').value;
+ $('taskInstructions').textContent=configuring
+  ?'点击下方阶段按钮选择初始阶段。'+(initial!==configured[0][0]?'从后续阶段启动需要勾选「人工恢复」并重新核对配置。':'')
+  :$('task_mode').value==='tomato-in-hand119'?'从 Home 启动后，点击「开始当前阶段」。':'执行端就绪后，点击「开始当前阶段」。';
+ const box=$('taskStages');box.replaceChildren();
+ stageList.forEach(([id,name],i)=>{
+  const b=document.createElement('button');
+  if(configuring){
+   const selected=id===initial;
+   b.textContent=name+(selected?' · 初始阶段':'');
+   b.className=selected?'active':'';
+   b.setAttribute('aria-pressed',String(selected));
+   b.onclick=()=>selectInitialStage(id);
+  }else{
+   const active=live&&t?.active_stage===id, requested=live&&t?.requested_stage===id;
+   const passed=live&&t?.completed_stages?.includes(id);
+   b.textContent=(active?'● ':requested?'◷ ':'')+name+(passed?' · 已离开':'');
+   b.className=active?'active':requested?'pending':passed?'passed':'';
+   b.disabled=!canSwitch||i!==idx+1;
+   b.onclick=()=>taskCommand('stage',id);
+  }
+  box.append(b);
+ });
+$('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';
 const active=rows.find(stage=>stage.id===t?.active_stage);
 $('autoActivePrompt').hidden=agentState?.mode!=='auto';
 $('autoPromptStage').textContent=(t?.communication_error?'上次确认的 Prompt':'当前激活的 Prompt')+(active?' · '+active.label:'');
 $('autoPromptText').textContent=t?.active_prompt||'等待执行端接入首个动作块';
 $('taskError').textContent=t?.communication_error||t?.last_error||'';
 $('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=stageList.length-1;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state)}
-async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent=''}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
+async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;if(['pause','resume','recover','complete'].includes(command))autoModePending=false;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent=''}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
 async function recoverTask(){let target=prompt('请输入要恢复的阶段 ID：'+stageList.map(x=>x[0]).join('、'));if(!target)return;if(!stageList.some(x=>x[0]===target)){failure(Error('未知阶段'));return}if(confirm('仅允许就绪或已安全暂停时跳转；运行中请先独立暂停。确认人工恢复到 '+target+'？'))await taskCommand('recover',target,true)}
 async function browse(target,file=false){if(busy)return;pickerTarget=target;pickerFile=file;$('chooseDirectory').hidden=file;$('browsePath').value=$(target).value||$('repository').value;$('picker').showModal();await loadDirectory()}
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对'}}
-(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('task_mode').addEventListener('change',taskModeChanged);let savedInitial=$('initial_stage').value||d.defaults?.initial_stage;taskModeChanged();if(savedInitial&&[...$('initial_stage').options].some(o=>o.value===savedInitial))$('initial_stage').value=savedInitial;modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();if(!$('mode').value.startsWith('soft-'))$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
 </script></html>"""
 
 
@@ -218,6 +297,9 @@ def server_for(root, *, port=8766):
     with suppress(OSError, ValueError):
         defaults.update(json.loads((Path(root) / ".deployment/control_last.json").read_text()))
 
+    # The UI uses the current DeploymentSettings defaults for these options.
+    defaults.pop("camera_policy", None)
+    defaults.pop("crop_device", None)
     defaults["recovery_confirmed"] = False  # Reauthorization is never restored from a saved checkbox.
     tomato_preset = {"repository": str(root), "checkpoint": str(Path(root) / ".deployment/checkpoints/tomato-b-coarse/7999"),
                      "model_type": "full-delta", "semantics": "delta", "mode": "rtc", "speed": "fast",
@@ -226,7 +308,7 @@ def server_for(root, *, port=8766):
                      "train_rtc_max_delay": 0, "rtc_initial_delay_steps": 0}
 
     crop_preset = {**tomato_preset, "checkpoint": str(Path(root)/".deployment/checkpoints/tomato-complete100-r11/16000"),
-                   "crop_locator": str(Path(root)/".deployment/crop_locator"), "crop_device": "cuda"}
+                   "crop_locator": str(Path(root)/".deployment/crop_locator")}
 
     in_hand_preset = {**crop_preset, "checkpoint": str(Path(root)/".deployment/checkpoints/tomato-in-hand119/20000"),
                       "task_mode": "tomato-in-hand119", "initial_stage": "pickup", "initialization": "home"}

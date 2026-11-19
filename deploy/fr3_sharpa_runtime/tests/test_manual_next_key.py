@@ -65,31 +65,112 @@ def test_agent_auto_option_stays_in_stage_mode_dropdown():
     mode, options = parser.selects["agentMode"]
     assert "disabled" not in mode
     assert [option["value"] for option in options] == ["manual", "auto"]
-    assert "disabled" in options[1]
+    assert "disabled" not in options[1]
+    assert "initial_stage" not in parser.selects
     assert [option["value"] for option in parser.selects["agentProvider"][1]] == ["mengxiang", "tairan"]
+
+
+
+def test_prestart_stage_selection_and_deferred_agent_mode():
+    from deploy.fr3_sharpa_control.ui import HTML
 
     node = shutil.which("node")
     if not node:
-        return
-    start = HTML.index("function updateAgentModeControl()")
-    end = HTML.index("function renderAgent(a)", start)
-    script = """
+        pytest.skip("Node required for UI state transitions")
+    script = HTML.split("<script>", 1)[1].split("(async()=>{let d=await api('info')", 1)[0]
+    harness = """
 const assert=require('node:assert/strict');
-const nodes={agentMode:{disabled:false},agentAutoMode:{},agentProvider:{value:'tairan'},
-             agentModeHint:{},task_mode:{value:'tomato-in-hand119'}};
-const $=id=>nodes[id];
-let agentState={mode:'manual',provider:'tairan',status:'waiting'},taskState=null;
-""" + HTML[start:end] + """
-updateAgentModeControl();
-assert.equal(nodes.agentMode.disabled,false);
-assert.equal(nodes.agentAutoMode.disabled,true);
-agentState.status='ready';
-taskState={task_profile:'tomato-in-hand119',execution_state:'READY'};
-updateAgentModeControl();
-assert.equal(nodes.agentAutoMode.disabled,false);
-agentState.provider='mengxiang';
-updateAgentModeControl();
-assert.equal(nodes.agentAutoMode.disabled,true);
-assert.equal(nodes.agentMode.disabled,false);
+const nodes=new Map(), calls=[];
+function element(){
+ return {
+  textContent:'',value:'',checked:false,disabled:false,children:[],
+  replaceChildren(){this.children=[]},
+  append(child){this.children.push(child)},
+  setAttribute(name,value){this[name]=value},
+ };
+}
+const document={
+ addEventListener(){},
+ createElement:element,
+ getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id)},
+};
+async function fetch(path, request){
+ const payload=JSON.parse(request.body);
+ calls.push([path,payload]);
+ return {ok:true,json:async()=>({...agentState,mode:payload.mode})};
+}
 """
-    subprocess.run([node, "-"], input=script, text=True, check=True)
+    scenario = """
+(async()=>{
+ $('task_mode').value='tomato-in-hand119';
+ $('agentProvider').value='tairan';
+ agentState={mode:'manual',provider:'tairan',status:'waiting'};
+ taskModeChanged();
+ const stages=$('taskStages');
+ assert.equal(stages.children.length,5);
+ assert.equal(stages.children[0]['aria-pressed'],'true');
+ assert.equal($('taskStart').disabled,true);
+
+ approved='previous preview';
+ $('recovery_confirmed').checked=true;
+ stages.children[1].onclick();
+ assert.equal(config().initial_stage,'harvest_1');
+ assert.equal(stages.children[1]['aria-pressed'],'true');
+ assert.equal($('recovery_confirmed').checked,false);
+ assert.equal(approved,null);
+ assert.deepEqual(calls,[]);
+
+ $('agentMode').value='auto';
+ await agentModeChanged();
+ assert.equal($('agentMode').value,'auto');
+ assert.equal($('agentMode').disabled,false);
+ assert.deepEqual(calls,[]);
+
+ agentState.status='ready';
+ const ready={run_id:'new',stage_version:0,task_profile:'tomato-in-hand119',
+              execution_state:'READY',requested_stage:'harvest_1'};
+ renderTask(ready);
+ await applyPendingAgentMode();
+ assert.equal($('taskStart').disabled,true);
+ assert.deepEqual(calls,[]);
+
+ executionActive=true;
+ renderTask({...ready,communication_error:'waiting'});
+ await applyPendingAgentMode();
+ assert.equal($('taskStart').disabled,true);
+ assert.deepEqual(calls,[]);
+
+ renderTask(ready);
+ assert.equal($('taskStart').disabled,false);
+ assert.equal(stages.children[1].disabled,true);
+ await applyPendingAgentMode();
+ await applyPendingAgentMode();
+ assert.equal(agentState.mode,'auto');
+ assert.deepEqual(calls,[['/api/agent-mode',{mode:'auto'}]]);
+
+ // A backend fallback after activation must stay manual.
+ renderAgent({...agentState,mode:'manual'});
+ await applyPendingAgentMode();
+ assert.equal($('agentMode').value,'manual');
+ assert.equal(calls.length,1);
+
+ executionActive=false;
+ renderTask({...ready,execution_state:'FAULT'});
+ assert.equal(stages.children[1]['aria-pressed'],'true');
+ assert.equal($('taskStart').disabled,true);
+ stages.children[0].onclick();
+ assert.equal(config().initial_stage,'pickup');
+
+ $('agentMode').value='auto';
+ await agentModeChanged();
+ $('agentMode').value='manual';
+ await agentModeChanged();
+ executionActive=true;
+ renderTask(ready);
+ await applyPendingAgentMode();
+ assert.equal(calls.length,1);
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result = subprocess.run([node, "-"], input=harness + script + scenario,
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
