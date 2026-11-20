@@ -241,6 +241,75 @@ Home 目标和从反馈生成的中间指令分别检查。双手每次发送前
 
 若反馈在限位附近，Home 中间指令只能在现有 `prepare_speed_rad_s × 1/30秒` 的单步预算及严格 SDK slew 范围内收敛至合法边界；浮点边界取可表示的区间内值。真实反馈、Home 目标和原驱动限位均不修改。不套用模型预测的0.05rad裁剪额度。若距离合法边界超过该单步预算，Home 在下发前拒绝并报告数值，应检查真实手指位置和标定，不能通过扩大限位强行启动。
 
+## Qwen 在线任务记忆与观察研究入口
+
+`qwen-deployment-assist` 分支提供独立的 Qwen 观察进程，保留现有 V-JEPA。
+当前输出是带证据的投放事件、计划进度和阶段建议，不接管自动切换、不发送运动命令。
+Qwen 的 API 请求每次显式设置 `enable_thinking=false`；支持选择 `qwen3.8-flash`、
+`qwen3.8-max`、`qwen3.6-flash`，模型切换不改变事件账本或任务计划。
+前两种已做短窗口真实请求，第三种仅完成配置与请求构造验证，需另测视觉效果。
+
+### 计划、记忆与提示词
+
+`--quotas 4` 表示拿起、成功放盘四颗、最终放回；`--quotas 2 2` 表示拿起、
+首次成功放盘两颗、手中调整、再次成功放盘两颗、最终放回。
+目标单位为成功送入左盘并释放的果实，不能与摘离数量、尝试次数或串上剩余数混用。
+这些计划目前由记忆模块表达；现有机器人执行端仍使用固定五阶段，尚未接入
+“跳过中间调整”的三阶段图，不能用 `--quotas 4` 宣称机器人已支持直接放回。
+
+提示词保存在 `qwen_online_prompt.txt`。每次请求使用一条 system 规则，加一条 user 消息；
+user 消息先带会话、步骤版本、计划、当前实际步骤、事件账本和疑点，再按源时间带编号图像。
+默认使用主相机 cam0 与摘果手腕 cam2；相机角色必须按实际装置核对，回放可用 `--cameras` 指定。
+没有自动累积聊天历史，也不让模型回写总计数。模型只报告 held/released/empty 三处画面证据；
+程序验证时间顺序、按投放周期去重，再计算本轮与全程数量。
+文字格式正确不证明画面理解正确，账本是模型观察记录，仍需独立视频复核。
+
+记忆存入输出目录 `memory.json`，同会话可恢复，新执行会话或新计划拒绝复用旧账本。
+真实执行回执才推进步骤；模型的建议不直接改变实际阶段。
+观测缺口、潜在漏计、事件冲突和超额会保留阻塞原因，不因后续回答正常而自动清除。
+需要人工核查后修正账本；当前未提供面向操作员的账本修正界面。
+旧步骤画面、乱序回答和变化前的执行版本不参与当前步骤判断。
+迟到结果可用于历史事件记录，但超过两秒的新鲜度预算不能建议当前切换。
+
+### 使用已有观测做在线观察
+
+先按原流程启动 V-JEPA 和 ROS 观察。以下命令在部署仓库根目录运行，
+参数替换为当前 Agent 的 `.deployment/sharpa-agent-*/` 历史目录、当前任务 socket 和真实 run_id。
+观察进程只读现有数据，不启动相机、模型动作服务或硬件，不续机器人控制心跳。
+
+```bash
+.venv/bin/python -m deploy.fr3_sharpa_control.qwen_observer \
+  --history-directory /absolute/path/to/current/sharpa-agent-session \
+  --task-socket /absolute/path/to/current/task.sock \
+  --run-id ACTUAL_EXECUTION_RUN_ID --quotas 2 2 --model qwen3.8-flash \
+  --output .deployment/qwen-observer-session
+```
+
+采集线程在请求期间持续缓存原始帧，推理线程使用最近六秒、约2Hz的两路图像。
+输出保留请求的画面、源时间、模型原始结果、延迟、token 用量、评估和记忆；不保存密钥。
+`status.json` 始终标明 `control_eligible=false`，尚未加入部署控制台 UI。
+密钥复用本机 `~/.config/qwen-recognition-test/token-plan.key`，工控机需自行安全配置。
+不自动重试失败请求、不切换计费端点、不自动开启思考。
+
+### 只看过去画面的回放
+
+```bash
+.venv/bin/python -m deploy.fr3_sharpa_control.qwen_replay \
+  --dataset /absolute/path/to/lerobot --episode 29 --start 16 --end 22 \
+  --quotas 2 2 --model qwen3.8-flash --output .deployment/qwen-replay
+```
+
+回放以首次采摘为测试步骤，只提供指定窗口内的原图，人工标签不进入请求。
+同一输出目录保留事件账本，可顺序输入重叠窗口检查重复计数；更换视频或计划须使用新目录。
+`--dry-run` 只准备请求元数据，不调用 API。
+输入窗口不保证覆盖整个采摘步骤，回放计数只用于窗口内事件测试，不是整轮完整计数。
+
+精确按颗数控制还需要执行端提供“本次投放结束后等待确认”的动作交接机制，
+否则几秒的 API 延迟内机器人可能已经开始下一次采摘。
+当前的六秒窗口也不保证覆盖长时间持果或遮挡后的完整事件，模型可能漏计或误报。
+自动执行接入须另外验证单次采摘交接、账本校正、不同计划的阶段图，以及延迟/漏计/误计；
+现有代码和短窗口试验不构成恰好采四颗或实机成功率验收。
+
 ## 手动配置模型
 
 选择checkpoint步骤目录后，直接选择模型类型：Full Absolute、Full Delta、LoRA Absolute、Paper Delta、Train RTC Absolute/Delta或Train Paper RTC。无需另行生成或复制部署契约；训练JSON为可选核对项，手动模式不自动采用旁边的旧训练记录。原有自动识别保留为兼容选项。
