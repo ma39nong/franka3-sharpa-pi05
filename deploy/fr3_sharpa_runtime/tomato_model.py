@@ -30,6 +30,8 @@ def identify(stats_sha, manifest_sha, metadata_sha):
         if metadata_sha != METADATA_SHA256 or manifest_sha not in IN_HAND_STEPS:
             raise ValueError("119条权重必须匹配已核对的10000/15000/20000参数与配套统计")
         return dict(name=f"in-hand119 四路五阶段 · {IN_HAND_STEPS[manifest_sha]}",
+                    task_name="手中调整 · 五阶段", input_name="四路 RGB（含局部图）",
+                    dataset_episodes=119, dataset_version="手中调整 v3/r1", checkpoint_step=IN_HAND_STEPS[manifest_sha],
                     training_date="2026-11-18", subtask_variant="in_hand_b_coarse", profile="full-delta",
                     action_dim=58, action_horizon=50, action_hz=30,
                     task_profile="tomato-in-hand119", stage_contract="tomato-in-hand-five-phases-v3",
@@ -40,6 +42,8 @@ def identify(stats_sha, manifest_sha, metadata_sha):
         if metadata_sha != METADATA_SHA256 or manifest_sha not in R11_STEPS:
             raise ValueError("Four-view r11 statistics require a verified matching 4000/8000/12000/16000 checkpoint")
         return dict(name=f"complete100 B RGB+crop r11 · {R11_STEPS[manifest_sha]}", training_date="2026-11-14",
+                    task_name="放回盘中调整 · 七阶段", input_name="四路 RGB（含局部图）",
+                    dataset_episodes=100, dataset_version="整串采摘 r11", checkpoint_step=R11_STEPS[manifest_sha],
                     subtask_variant="b_coarse", profile="full-delta", action_dim=58,
                     action_horizon=50, action_hz=30, stage_contract="tomato-coarse-four-prompts-en-v4",
                     image_keys=list(FOUR_IMAGE_KEYS), visual_tokens=1024,
@@ -49,6 +53,8 @@ def identify(stats_sha, manifest_sha, metadata_sha):
         return None
     return dict(
         name="normal93 B Coarse FullFT Delta · 7999",
+        task_name="放回盘中调整 · 七阶段", input_name="三路 RGB（全图）",
+        dataset_episodes=93, dataset_version="整串采摘 B", checkpoint_step=7999,
         training_date="2026-11-09",
         subtask_variant="b_coarse",
         profile="full-delta",
