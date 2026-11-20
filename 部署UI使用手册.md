@@ -27,7 +27,7 @@
 
 确认已具备以下内容：
 
-- 当前部署仓库，以及需要 Soft 模式时使用的 Soft 部署目录。
+- 当前部署仓库。
 - 完整 checkpoint 步骤目录，包括 `params/`、`assets/` 和对应统计文件。
 - 已配置的 OpenPI Python／GPU 环境、参考遥操仓库、Docker、ROS／SDK及消息 overlay。
 - 选择 Home 时需要的双臂、双手 Home 配置。
@@ -101,18 +101,18 @@ bash deploy/fr3_sharpa_control/ui.sh --port 8768
 
 | 权重 | 可选模式 | 说明 |
 | --- | --- | --- |
-| 全量 Absolute | 普通串行、RTC；Soft 目录可增加两种 Soft | 使用匹配的绝对动作统计 |
-| 全量普通 Delta | 普通串行、RTC；Soft 目录可增加两种 Soft | 双臂 Delta、双手 Absolute |
-| 全量 Train RTC（`train-rtc` 分支） | 普通串行、Train RTC | 需要匹配的 RTC 训练记录 |
-| 全量 Train Paper RTC（`train-rtc` 分支） | 普通串行、Train Paper RTC | 同时核对 RTC 训练记录和完整 Paper 资产 |
-| 全量 Paper Delta v1 | 普通串行、Paper RTC；已适配的 Soft 目录可增加两种 Soft | 普通 RTC 不适用于这套逐时间步统计 |
+| 全量 Absolute | 普通串行、RTC | 使用匹配的绝对动作统计 |
+| 全量普通 Delta | 普通串行、RTC | 双臂 Delta、双手 Absolute |
+| 全量 Train RTC | 普通串行、Train RTC | 需要匹配的 RTC 训练记录 |
+| 全量 Train Paper RTC | 普通串行、Train Paper RTC | 同时核对 RTC 训练记录和完整 Paper 资产 |
+| 全量 Paper Delta v1 | 普通串行、Paper RTC | 普通 RTC 不适用于这套逐时间步统计 |
 | 未合并 Absolute LoRA | 普通串行 | 当前配方为 VLM rank 16／Expert rank 32 |
 
 LoRA Delta、其他维度／频率和未知模型变体尚未接入。表中列出代码适配范围，不表示任意同类 checkpoint 都完成了实机验证。
 
-**Paper RTC** 是独立选项。需要所选目录包含该适配代码，并在本次启动时通过相应 GPU 预热；旧 Soft 目录若没有此选项，应先同步适配。历史普通 RTC 的预热结果不能代替 Paper RTC 的就绪状态。
+**Paper RTC** 是独立选项。需要所选目录包含该适配代码，并在本次启动时通过相应 GPU 预热。历史普通 RTC 的预热结果不能代替 Paper RTC 的就绪状态。
 
-推荐 main 与 Soft 各保留独立部署目录，通过 UI 选择对应目录。不要在运行期间切换代码分支。
+通过 UI 选择当前部署目录。不要在运行期间切换代码分支。
 
 ## 5. 配置任务并开始执行
 
@@ -141,10 +141,6 @@ Current 仍保留执行器的每段首帧低速衔接。Home 选项会在回位�
 | --- | --- | --- |
 | 普通串行 | 1～50，例如15、20 | 每轮预测50步，执行填写的前N步，再重新观测推理 |
 | RTC／Paper RTC | 1～24，例如15 | 推进到该源节点时触发后台重规划，不是固定只执行前N步 |
-| 串行 Soft | 源执行点固定26 | 50→取前30→26＋4；26尝试压缩成20，原cubic策略可能回退26 |
-| 异步 Soft | 源执行点固定26，执行目标20 | 50→取前30→26＋4→20，固定PCHIP压缩，后台预测并在段边界切换 |
-
-Soft中的后20个预测节点舍弃，保留的4个节点用于下一轮衔接参考，不是额外追加执行的4步。不要将20个压缩目标误填为源执行步数，也不要将该模式改成旧的15点触发方案。
 
 速度倍率会改变源动作节点推进时间。例如普通串行15步在Fast下名义上对应约0.5秒的模型时间，在Slow下会被放慢；它不是固定的推理调用频率。实际耗时还包括推理、衔接和执行调度。
 
@@ -233,7 +229,7 @@ bash deploy/fr3_sharpa_control/record_session.sh export \
 | 界面没有最新按钮或模式 | 核对所选仓库与分支，更新代码后退出旧UI后台、重新启动并刷新网页 |
 | 提示选择Absolute或Delta | 按训练配置在主界面明确选择，再识别权重；不要按目录名猜测 |
 | Paper权重归一化或资产报错 | 确认是本实验完整步骤目录，保留所有配套资产，并同步最新适配；普通Delta不应被强行当作Paper |
-| 模式不可选 | 所选代码目录或权重不支持；Soft需对应部署目录，Paper RTC需相应适配文件 |
+| 模式不可选 | 所选代码目录或权重不支持；Paper RTC需相应适配文件 |
 | 启动执行按钮不可用 | 推理未就绪、配置尚未核对或已变更、推理身份不匹配，或上一轮仍在清理 |
 | 推理启动失败 | 查推理日志：权重、统计、GPU环境、旧模型端口占用，以及当前模式的预热错误 |
 | Home报文件缺失 | 核对双臂和双手Home文件；如本轮希望从当前状态开始，选择Current后重新核对 |

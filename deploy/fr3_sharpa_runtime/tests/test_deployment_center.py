@@ -43,12 +43,10 @@ def repository(tmp_path):
     shared, full = root / "deploy/fr3_sharpa_runtime", root / "deploy/fr3_sharpa_full"
     shared.mkdir(parents=True)
     full.mkdir()
-    for file in (shared / "serve.sh", shared / "runtime.sh", full / "serve_soft.sh",
-                 full / "serve_async_soft.sh", full / "runtime_async_soft.sh"):
+    for file in (shared / "serve.sh", shared / "runtime.sh"):
         file.write_text("# Not an executable deployment; recipe tests only\n")
-    for file in (shared / "sdk_direct_motion_ros.py", shared / "async_soft_motion_ros.py"):
+    for file in (shared / "sdk_direct_motion_ros.py",):
         file.write_text("# RecordingGate integration marker\n")
-    (shared / "async_soft_stream.py").write_text("CAPABILITY = 'sharpa-async-soft-rolling-v3'\n")
     (shared / "camera_startup.py").write_text("# Camera startup gate fixture\n")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -106,20 +104,16 @@ def test_training_record_digest_and_model_must_match(checkpoint, tmp_path):
 
 
 @pytest.mark.parametrize("semantics", ["absolute", "delta"])
-@pytest.mark.parametrize("mode", ["serial", "rtc", "soft-serial", "soft-async"])
-def test_all_eight_recipes_preserve_mode_meaning(repository, checkpoint, semantics, mode):
-    steps = 26 if mode.startswith("soft-") else 20
+@pytest.mark.parametrize("mode", ["serial", "rtc"])
+def test_serial_and_rtc_recipes_preserve_mode_meaning(repository, checkpoint, semantics, mode):
+    steps = 20
     config = plans.DeploymentSettings(str(repository), str(checkpoint), semantics=semantics, mode=mode,
                                       speed="fast" if mode == "rtc" else "slow", steps=steps)
     plan = config.plan()
     assert plan["model"]["profile"] == ("full" if semantics == "absolute" else "full-delta")
     assert plan["execute"][plan["execute"].index("--execute-steps") + 1] == str(steps)
-    assert plan["port"] == (18765 if semantics == "absolute" else 18767) + (100 if mode == "soft-async" else 0)
+    assert plan["port"] == (18765 if semantics == "absolute" else 18767)
     assert "--enable-rtc" in plan["service"] if mode == "rtc" else "--enable-rtc" not in plan["service"]
-    if mode == "soft-serial":
-        assert "cubic" in plan["execute"] and "paper-rolling" in plan["execute"]
-    if mode == "soft-async":
-        assert "runtime_async_soft.sh" in plan["execute"][1] and "15" not in plan["execute"]
 
 
 @pytest.mark.parametrize("options", [{"mode": "serial", "steps": 51}, {"mode": "rtc", "speed": "slow"},
@@ -129,10 +123,10 @@ def test_incompatible_configuration_never_generates_execution(repository, checkp
         settings(repository, checkpoint, **options).plan()
 
 
-def test_old_async_fifteen_node_protocol_is_rejected(repository, checkpoint):
-    (repository / "deploy/fr3_sharpa_runtime/async_soft_stream.py").write_text("sharpa-async-soft-v1")
-    with pytest.raises(ValueError, match="rolling-v3"):
-        settings(repository, checkpoint, mode="soft-async", steps=26).plan()
+@pytest.mark.parametrize("mode", ["soft-serial", "soft-async"])
+def test_retired_soft_modes_are_rejected(repository, checkpoint, mode):
+    with pytest.raises(ValueError, match="不支持的模式"):
+        settings(repository, checkpoint, mode=mode, steps=26).plan()
 
 
 def test_atomic_minute_names_do_not_overwrite_runs(tmp_path):
@@ -603,4 +597,3 @@ def test_only_supported_home_plan_defers_video_gate(repository, checkpoint, monk
     plan = settings(repository, checkpoint, initialization="home").plan()
     assert "--defer-camera-check" in plan["hardware"]
     assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="current").plan()["hardware"]
-    assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="home", mode="soft-async", steps=26).plan()["hardware"]

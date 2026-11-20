@@ -64,7 +64,7 @@ def test_auto_detect_and_semantic_conflict(checkpoint):
     found = inspect_checkpoint(root)
     assert found["profile"] == "full-delta" and found["semantics"] == "delta"
     assert found["normalization"] == "timestamp_zscore_arms"
-    assert found["supported_modes"] == ["serial", "paper-rtc", "soft-serial", "soft-async"]
+    assert found["supported_modes"] == ["serial", "paper-rtc"]
     validate_stats(json.loads((assets / "norm_stats.json").read_text())["norm_stats"], paper_algorithm=found["paper_algorithm"])
     with pytest.raises(ValueError, match="冲突"):
         inspect_checkpoint(root, semantics="absolute")

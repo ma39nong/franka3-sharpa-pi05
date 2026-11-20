@@ -13,7 +13,7 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper"}
 
 
 def repository_info(path):
@@ -26,11 +26,6 @@ def repository_info(path):
         modes.append("train-paper-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/paper_rtc.py").is_file():
         modes.append("paper-rtc")
-    if (repo / "deploy/fr3_sharpa_full/serve_soft.sh").is_file():
-        modes.append("soft-serial")
-    stream = repo / "deploy/fr3_sharpa_runtime/async_soft_stream.py"
-    if stream.is_file() and "sharpa-async-soft-rolling-v3" in stream.read_text():
-        modes.append("soft-async")
     return {"branch": branch, "modes": modes}
 
 
@@ -167,7 +162,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
     supported_modes = ["serial"]
     if not lora:
-        supported_modes += ["paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"]
+        supported_modes += ["paper-rtc" if algorithm else "rtc"]
     if trained:
         supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
     if tomato and tomato.get("online_roi_required"):
@@ -225,8 +220,6 @@ class DeploymentSettings:
             raise ValueError("串行每轮执行动作数必须在1..50")
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
-        if self.mode.startswith("soft-") and self.steps != 26:
-            raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
         if type(self.train_rtc_max_delay) is not int or not 0 <= self.train_rtc_max_delay < 50:
             raise ValueError("训练RTC最大延迟必须为0..49整数，0表示自动识别")
         if type(self.rtc_initial_delay_steps) is not int or not 0 <= self.rtc_initial_delay_steps <= 25:
@@ -256,14 +249,11 @@ class DeploymentSettings:
                 raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:
             raise ValueError("该模型不支持所选推理模式；请按识别结果选择RTC、Paper RTC、Train RTC或Train Paper RTC；LoRA仅支持普通串行")
-        if self.mode.startswith("soft-") and model["finetune_mode"] != "full":
-            raise ValueError("Soft目前仅支持全量absolute/delta")
         if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
             raise ValueError("所选仓库尚未同步Paper权重适配，请更新该分支")
         shared = "deploy/fr3_sharpa_runtime/"
         if not (repo / shared / "camera_startup.py").is_file():
             raise ValueError("所选部署目录未接入启动前相机闸门；请同步该分支后再使用本控制台")
-        full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
         service_args, runtime_args = [], []
         port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
@@ -284,21 +274,10 @@ class DeploymentSettings:
                     raise ValueError("所选仓库尚未同步Paper RTC适配类")
                 runtime_args.append("--paper-rtc")
             description = f"50点时间线，{self.steps}源节点触发后台重规划（非固定执行前缀）"
-        elif self.mode == "soft-serial":
-            service = full + "serve_soft.sh"
-            runtime_args = ["--inference-preset", "paper-rolling", "--inpainting", "soft", "--compression", "cubic", "--broker-mode", "serial"]
-            description = "50→30→26+4；26→20 cubic（原串行实现可能回退26）"
-        elif self.mode == "soft-async":
-            service, runtime = full + "serve_async_soft.sh", full + "runtime_async_soft.sh"
-            port += 100
-            description = "50→30→26+4→20，固定PCHIP，后台预测，段边界切换"
-            stream = repo / shared / "async_soft_stream.py"
-            if not stream.is_file() or "sharpa-async-soft-rolling-v3" not in stream.read_text():
-                raise ValueError("需要Soft分支rolling-v3；拒绝旧50点/15触发异步入口")
         if not (repo / service).is_file() or not (repo / runtime).is_file():
             raise ValueError("所选仓库没有该模式入口，请选择对应分支的部署目录")
         if self.record:
-            worker = "async_soft_motion_ros.py" if self.mode == "soft-async" else "sdk_direct_motion_ros.py"
+            worker = "sdk_direct_motion_ros.py"
             if "RecordingGate" not in (repo / shared / worker).read_text():
                 raise ValueError("所选仓库尚未接入chunk录制钩子，请先同步UI/录制版本")
         profile = model["profile"]
@@ -326,7 +305,7 @@ class DeploymentSettings:
                 "hardware": ["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "up",
                              *(["--exclusive"] if self.camera_policy == "exclusive" else []),
                              *(["--defer-camera-check"] if self.initialization == "home"
-                               and self.mode != "soft-async" and (repo / shared / "startup_gate.py").is_file() else [])],
+                               and (repo / shared / "startup_gate.py").is_file() else [])],
                 "service": ["bash", service, *common, *service_args],
                 "check": ["bash", runtime, *options, "--check"],
                 "execute": ["bash", runtime, *options, "--execute", "--enable-hardware", "--sharpa-backend", "sdk_direct"]}
@@ -344,7 +323,7 @@ def plan_environment(plan):
     # Machine/SDK paths stay; inference identity and service port are per plan.
     env.update({profile.checkpoint_env: plan["model"]["checkpoint"],
                 profile.norm_stats_env: plan["model"]["norm_stats"],
-                profile.port_env: str(plan["port"] if plan["settings"]["mode"] != "soft-async" else plan["port"] - 100),
+                profile.port_env: str(plan["port"]),
                 "SHARPA_MODEL_PROFILE": profile.name,
                 "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
