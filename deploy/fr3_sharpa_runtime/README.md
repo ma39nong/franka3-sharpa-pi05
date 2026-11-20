@@ -16,7 +16,7 @@ python -m deploy.fr3_sharpa_runtime.run --fovea --check
 
 初始框为源图归一化xyxy `[0.25,0.22,0.83,0.86]`。checkpoint拥有 `assets/fovea_contract.json`、数据清单指纹及归一化指纹，服务校验15步偏移、相机顺序、坐标格式和初始框。训练框含固定篮子/盘子区域等弱监督先验；改变场景需要重新检查。配置示例在 `examples/foveavla-v1-client.json`。
 
-本次只有代码、离线网络测试及结构冒烟测试，没有新Fovea训练结果或实机成功率。`validation/fovea_v1_h8_architecture_smoke.json` 使用旧动作checkpoint验证完整尺寸结构兼容，该记录属于修改前的50/8结构测试，框分支未训练，不能用于判断当前50/15配置或框预测质量。
+2026-11-20已接入从main同步的部署UI：可通过Fovea快捷配置、阶段下拉框与启动推理/执行按钮操作，详见[控制台说明](../fr3_sharpa_control/README.md#fovea-联合动作与预测框)。最终20000步训练权重已经过GPU加载与真实图像回放；尚无本次实机成功率验收。`validation/fovea_v1_h8_architecture_smoke.json`仍只是旧50/8结构记录，不能当作当前训练权重的效果证据。
 
 统一UI、自动启动/停止、第一段chunk开始录制及自动视频导出见 [部署控制台](../fr3_sharpa_control/README.md)；完整三终端场景命令见 [部署启动指令](../../部署启动指令.md)。
 
@@ -257,3 +257,7 @@ source deploy/fr3_sharpa_runtime/env.sh
 ```
 
 旧 guarded 路径说明见 [LEGACY.md](LEGACY.md)。历史 `--preflight-only` 仍检查 guarded driver，不能用它代替 sdk_direct 的现场验收。
+
+
+119条五阶段四路手动部署已独立接入，操作、复制目录、精确Prompt和Agent限制见
+[119条部署说明](../fr3_sharpa_control/README.md#119条手中调整独立五阶段四路部署2026-11-18)。

@@ -138,3 +138,27 @@ def test_websocket_two_queries_with_real_crop_transforms():
         asyncio.run_coroutine_threadsafe(asyncio.sleep(0.05), loop).result(timeout=2)
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2)
+
+
+def test_fovea_handshake_rejects_wrong_checkpoint_even_with_matching_version():
+    client = FoveaRuntime('ws://localhost:8010')
+    client.expected_identity = 'selected-checkpoint'
+    metadata = {**policy().metadata, 'fovea_identity': 'different-checkpoint'}
+    with pytest.raises(ValueError, match='身份'):
+        client.validate_metadata(metadata)
+    metadata['fovea_identity'] = 'selected-checkpoint'
+    assert client.validate_metadata(metadata) == metadata
+
+
+def test_recording_returns_exact_model_crop_only_when_requested():
+    from deploy.fr3_sharpa_runtime.four_view_recording import pixel_sha
+    server = policy()
+    client = FoveaRuntime('ws://localhost:8010')
+    obs = observation()
+    obs['observation/image'][:] = np.arange(640, dtype=np.uint8)[None, :, None]
+    result = server.infer({**obs, '_fovea': {**context(client), 'record_roi': True, 'source_monotonic_ns': 123}})
+    payload = result['recording_roi']
+    np.testing.assert_array_equal(payload['pixels'], fovea.crop_rgb(obs['observation/image'], client.box))
+    assert payload['metadata']['roi_pixel_sha256'] == pixel_sha(payload['pixels'])
+    assert payload['metadata']['source_monotonic_ns'] == 123
+    assert 'recording_roi' not in server.infer({**obs, '_fovea': context(client)})

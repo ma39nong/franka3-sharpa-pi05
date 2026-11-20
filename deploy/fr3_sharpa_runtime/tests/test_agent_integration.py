@@ -43,6 +43,107 @@ def task(**kw):
     )
 
 
+def test_inhand_observer_displays_both_horizons_without_task(tmp_path):
+    from deploy.fr3_sharpa_control.agent_settings import TAIRAN_PROVIDER
+
+    agent = AgentSupervisor(SimpleNamespace(root=tmp_path))
+    agent.settings["provider"] = TAIRAN_PROVIDER
+    agent.state["control_eligible"] = True
+    result = packet()
+    result.update(
+        future_horizon_s=1.0, control_eligible=False, latency_ms=400.0, roi_fallback_frames=2,
+        future_probabilities=packet(label=3)["future_probabilities"],
+    )
+    agent._display_inhand(result, dict(timestamp=100.0, observation_id="100", source_age_s=0.1), "b0", agent.epoch)
+    state = agent.snapshot()
+    assert state["status"] == "ready" and state["mode"] == "manual"
+    assert state["current"]["harvest"] == 0.97 and state["future"]["adjust"] == 0.97
+    assert state["roi_fallback_frames"] == 2
+
+
+def test_inhand_auto_handoff_keeps_old_prompt_until_execution_ack(tmp_path, monkeypatch):
+    from deploy.fr3_sharpa_control.agent import InHandGate
+    from deploy.fr3_sharpa_control.agent_settings import TAIRAN_PROVIDER
+    from deploy.fr3_sharpa_runtime.task_stages import IN_HAND_AGENT_SOURCE, IN_HAND_PROFILE, IN_HAND_PROMPTS
+
+    c = TaskControl(initial_stage="pickup", profile=IN_HAND_PROFILE)
+    c.ready()
+    server = TaskServer(tmp_path / "task.sock", c)
+    owner = SimpleNamespace(root=tmp_path, task_endpoint=server.path, task_run_id=c.run_id,
+                            state={"running": True}, operation="execute")
+    agent = AgentSupervisor(owner)
+    agent.settings.update(provider=TAIRAN_PROVIDER, profile="workstation")
+    agent.gate = InHandGate()
+    agent.state.update(status="ready", control_eligible=True, received_unix=time.time())
+    try:
+        old_contact = c.last_contact
+        agent.set_mode("auto")
+        with pytest.raises(RuntimeError, match="稳定运行"):
+            task_rpc(server.path, c.run_id, "stage", request_id="premature", expected_version=0,
+                     target="harvest_1", source=IN_HAND_AGENT_SOURCE)
+        assert c.last_contact == old_contact
+        c.command("start", "start", expected_version=0)
+        first = c.ticket()
+        c.activate(first, "first")
+        stamp = c.snapshot()["active_applied_unix_s"]
+        monkeypatch.setattr(time, "time", lambda: stamp + 2)
+        old_contact = c.last_contact
+
+        def predict(offset, future=1, epoch=None):
+            timestamp = stamp + offset
+            result = packet(timestamp)
+            result.update(future_horizon_s=1.0, control_eligible=False, latency_ms=250, roi_fallback_frames=0,
+                          future_probabilities=packet(label=future)["future_probabilities"])
+            meta = dict(timestamp=timestamp, captured_unix=timestamp, ros_now=timestamp,
+                        observation_id=str(timestamp), source_age_s=0)
+            agent._display_inhand(result, meta, "b0", agent.epoch if epoch is None else epoch)
+
+        predict(0.1, epoch=agent.epoch - 1)
+        predict(0.2, future=2)
+        assert c.snapshot()["requested_stage"] == "pickup"
+        predict(0.7)
+        pending = c.snapshot()
+        assert pending["requested_stage"] == "harvest_1"
+        assert pending["active_stage"] == "pickup" and pending["active_prompt"] == IN_HAND_PROMPTS["pickup"]
+        assert c.last_contact == old_contact
+        c.transition("SWITCHING", "test execution owner")
+        c.activate(c.ticket(), "next")
+        assert c.snapshot()["active_prompt"] == IN_HAND_PROMPTS["harvest"]
+    finally:
+        server.close()
+
+
+def test_inhand_input_keeps_crop_state_canonical_and_reorders_head_state(tmp_path):
+    import numpy as np
+    from deploy.fr3_sharpa_control.inhand119_agent_service import model_inputs
+
+    stamps = np.arange(1, 17, dtype=np.int64) * 100_000_000
+    path = tmp_path / "history.npz"
+    joints = np.arange(16 * 58, dtype=np.float32).reshape(16, 58)
+    np.savez(path, rgb=np.zeros((3, 16, 256, 256, 3), np.uint8), joints=joints,
+             joint_names=JOINT_NAMES, native_cam0=np.zeros((16, 40, 40, 3), np.uint8), cam0_stamp_ns=stamps)
+
+    class Cropper:
+        def reset(self):
+            self.contexts = []
+
+        def apply(self, observation):
+            index = len(self.contexts)
+            np.testing.assert_array_equal(observation["observation/state"], joints[index])
+            self.contexts.append(observation["_crop_context"])
+            self.last = {"local_roi_valid": index != 0}
+            return {"observation/interaction_image": np.full((224, 224, 3), index, np.uint8)}
+
+    cropper = Cropper()
+    views, state, fallback = model_inputs(path, JOINT_NAMES[::-1], cropper, stamps[-1], "run")
+    assert views.shape == (1, 4, 16, 256, 256, 3)
+    assert views[0, 3, -1, 0, 0, 0] == 15 and fallback == 1
+    assert [c["source_monotonic_ns"] for c in cropper.contexts] == stamps.tolist()
+    np.testing.assert_array_equal(state, joints[None, :, ::-1])
+    with pytest.raises(ValueError, match="历史格式无效"):
+        model_inputs(path, JOINT_NAMES, cropper, stamps[-2], "run")
+
+
 def test_gate_current_k2_future_cannot_command():
     g = DecisionGate()
     a = packet()
@@ -125,6 +226,29 @@ def test_real_source_history_causality_and_missing_frames():
     history["cam1"] = [entry(anchor)]
     with pytest.raises(ValueError):
         select_history(history, anchor)
+
+
+def test_history_receiver_can_fill_buffer_while_processing_snapshot():
+    import threading
+    from deploy.fr3_sharpa_runtime.agent_history import HistoryBuffer
+
+    buffer = HistoryBuffer(1024)
+    first = object()
+    buffer.remember("cam0", first)
+    latest, histories = buffer.snapshot()
+
+    def receive():
+        for _ in range(100):
+            buffer.remember("cam0", object())
+
+    worker = threading.Thread(target=receive)
+    worker.start()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
+    current, rows = buffer.snapshot()
+    assert len(rows["cam0"]) == 101
+    assert histories["cam0"] == ((first, latest["cam0"][1]),)
+    assert latest["cam0"][0] is first and current["cam0"][0] is not first
     assert len(JOINT_NAMES) == len(set(JOINT_NAMES)) == 58
 
 

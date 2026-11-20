@@ -13,13 +13,13 @@ def main():
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--smoke-only", action="store_true")
     args = parser.parse_args()
-    from .fovea_policy import checkpoint_contract
-    from .fovea_policy import load_policy
+    from .fovea_contract import checkpoint_contract
 
     metadata = checkpoint_contract(args.checkpoint)
     if args.check_only:
         print(json.dumps(metadata, indent=2))
         return
+    from .fovea_policy import load_policy
     policy = load_policy(args.checkpoint)
     # Compile with dummy read-only inputs before accepting any executable query.
     import numpy as np
@@ -45,7 +45,10 @@ def main():
     if not args.smoke_only:
         from openpi.serving.websocket_policy_server import WebsocketPolicyServer
 
-        WebsocketPolicyServer(policy, host=args.host, port=args.port, metadata=metadata).serve_forever()
+        try:
+            WebsocketPolicyServer(policy, host=args.host, port=args.port, metadata=metadata).serve_forever()
+        except KeyboardInterrupt:
+            print("Fovea推理服务已停止", flush=True)
 
 
 if __name__ == "__main__":

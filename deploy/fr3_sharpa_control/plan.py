@@ -13,24 +13,21 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "soft-serial": "串行 Soft", "soft-async": "异步 Soft"}
+MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "fovea": "Fovea · 动作与预测框"}
 
 
 def repository_info(path):
     repo = Path(path).expanduser().resolve()
     branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True, stderr=subprocess.DEVNULL).strip()
     modes = ["serial", "rtc"]
+    if (repo / "deploy/fr3_sharpa_runtime/fovea_serve.sh").is_file():
+        modes.append("fovea")
     if (repo / "deploy/fr3_sharpa_runtime/train_rtc.py").is_file():
         modes.append("train-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/train_paper_rtc.py").is_file():
         modes.append("train-paper-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/paper_rtc.py").is_file():
         modes.append("paper-rtc")
-    if (repo / "deploy/fr3_sharpa_full/serve_soft.sh").is_file():
-        modes.append("soft-serial")
-    stream = repo / "deploy/fr3_sharpa_runtime/async_soft_stream.py"
-    if stream.is_file() and "sharpa-async-soft-rolling-v3" in stream.read_text():
-        modes.append("soft-async")
     return {"branch": branch, "modes": modes}
 
 
@@ -69,7 +66,7 @@ def allocate_run(root, *, now=None):
 def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto"):
     choices = {"auto": None, "full": "absolute", "full-delta": "delta", "lora": "absolute",
                "paper-delta": "delta", "train-rtc-absolute": "absolute", "train-rtc-delta": "delta",
-               "train-paper-rtc": "delta"}
+               "train-paper-rtc": "delta", "fovea": "delta"}
     if model_type not in choices:
         raise ValueError("不支持的模型类型")
     manual = model_type != "auto"
@@ -109,6 +106,26 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             projections["output"] = entry["value_metadata"]["write_shape"]
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
+    if (root / "assets/fovea_contract.json").is_file() or model_type == "fovea":
+        if model_type not in ("auto", "fovea") or semantics == "absolute" or lora or algorithm or train_rtc_max_delay:
+            raise ValueError("Fovea联合动作框权重必须使用Fovea类型，不能覆盖为普通动作模型或RTC")
+        from deploy.fr3_sharpa_runtime.fovea_contract import checkpoint_contract
+        contract = checkpoint_contract(root)
+        if training_record:
+            from deploy.fr3_sharpa_runtime.train_rtc_contract import load_training_record
+            record = load_training_record(Path(training_record).expanduser(), stats)
+            model_fields = record["config"]["fields"]["model"]["fields"]
+            data_fields = record["config"]["fields"]["data"]["fields"]
+            if (model_fields.get("execute_steps"), model_fields.get("action_dim"), model_fields.get("action_horizon"),
+                    data_fields.get("extra_delta_transform"), record["inputs"].get("norm_stats_sha256")) != (15, 58, 50, True, fingerprint(stats)):
+                raise ValueError("训练记录与Fovea 50/15 Delta契约不一致")
+        return {"tomato_model": None, "fovea": contract, "train_rtc": None, "paper_algorithm": None,
+                "supported_modes": ["fovea"], "normalization": "global_quantile",
+                "checkpoint": str(root), "norm_stats": str(stats), "identity": contract["fovea_identity"],
+                "manifest_sha256": fingerprint(manifest), "stats_sha256": fingerprint(stats),
+                "finetune_mode": "full", "semantics": "delta", "profile": "full-delta",
+                "evidence": "Fovea联合动作框契约、参数结构与归一化指纹已匹配",
+                "action_dim": 58, "action_horizon": 50, "action_hz": 30}
     from deploy.fr3_sharpa_runtime.train_rtc_contract import inspect_train_rtc
     trained = inspect_train_rtc(stats, root, training_record or None, paper_algorithm=algorithm,
                                 manual_delay=train_rtc_max_delay, manual_semantics=semantics, model_type=model_type)
@@ -167,7 +184,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
     supported_modes = ["serial"]
     if not lora:
-        supported_modes += ["paper-rtc" if algorithm else "rtc", "soft-serial", "soft-async"]
+        supported_modes += ["paper-rtc" if algorithm else "rtc"]
     if trained:
         supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
     if tomato and tomato.get("online_roi_required"):
@@ -204,27 +221,32 @@ class DeploymentSettings:
     recovery_confirmed: bool = False
     crop_locator: str = ""
     crop_device: str = "cuda"
+    fovea_stage: str = "pickup"
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
         from deploy.fr3_sharpa_runtime.task_stages import stage
-        stage(self.initial_stage)
-        if self.task_mode not in ("none", "tomato-b") or type(self.recovery_confirmed) is not bool:
+        task_profile = self.task_mode if self.task_mode != "none" else "tomato-b"
+        stage(self.initial_stage, task_profile)
+        first_stage = "pickup" if task_profile == "tomato-in-hand119" else "pickup_1"
+        if self.task_mode not in ("none", "tomato-b", "tomato-in-hand119") or type(self.recovery_confirmed) is not bool:
             raise ValueError("任务模式或人工恢复确认无效")
-        if self.initial_stage != "pickup_1" and (self.task_mode != "tomato-b" or not self.recovery_confirmed):
+        if self.initial_stage != first_stage and (self.task_mode == "none" or not self.recovery_confirmed):
             raise ValueError("非首次阶段启动需要明确人工恢复确认并重新核对配置")
         if self.camera_policy not in ("exclusive", "require_free"):
             raise ValueError("相机策略仅支持独占接管或要求设备空闲")
         if self.mode not in MODES or self.initialization not in ("home", "current") or self.speed not in ("slow", "medium", "fast"):
             raise ValueError("不支持的模式、启动姿态或速度")
+        if self.mode == "fovea":
+            stage(self.fovea_stage, "tomato-in-hand119")
+            if self.speed != "fast" or self.steps != 15 or self.task_mode != "none" or self.rtc_initial_delay_steps:
+                raise ValueError("Fovea要求原速30Hz、15步、独立阶段选择，不接入RTC/Agent任务状态机")
         if type(self.rounds) is not int or self.rounds < 0 or type(self.steps) is not int or type(self.record) is not bool:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
         if self.mode == "serial" and not 1 <= self.steps <= 50:
             raise ValueError("串行每轮执行动作数必须在1..50")
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") and (self.speed != "fast" or not 1 <= self.steps <= 24 or self.rounds == 1):
             raise ValueError("RTC需fast、1..24重规划触发节点，轮数0或至少2")
-        if self.mode.startswith("soft-") and self.steps != 26:
-            raise ValueError("Soft源执行点固定26；压缩目标20不是execute-steps")
         if type(self.train_rtc_max_delay) is not int or not 0 <= self.train_rtc_max_delay < 50:
             raise ValueError("训练RTC最大延迟必须为0..49整数，0表示自动识别")
         if type(self.rtc_initial_delay_steps) is not int or not 0 <= self.rtc_initial_delay_steps <= 25:
@@ -244,26 +266,32 @@ class DeploymentSettings:
             model["supported_modes"] = ["serial", "rtc"]
         if not model["profile"]:
             raise ValueError(model["evidence"])
-        if self.task_mode == "tomato-b":
+        if self.task_mode != "none":
             if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
                     or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
                 raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
+            if model["tomato_model"].get("task_profile", "tomato-b") != self.task_mode:
+                raise ValueError("权重与任务流程不匹配：100条用七阶段，119条用五阶段")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:
             raise ValueError("该模型不支持所选推理模式；请按识别结果选择RTC、Paper RTC、Train RTC或Train Paper RTC；LoRA仅支持普通串行")
-        if self.mode.startswith("soft-") and model["finetune_mode"] != "full":
-            raise ValueError("Soft目前仅支持全量absolute/delta")
         if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
             raise ValueError("所选仓库尚未同步Paper权重适配，请更新该分支")
         shared = "deploy/fr3_sharpa_runtime/"
         if not (repo / shared / "camera_startup.py").is_file():
             raise ValueError("所选部署目录未接入启动前相机闸门；请同步该分支后再使用本控制台")
-        full = "deploy/fr3_sharpa_full/"
         service, runtime = shared + "serve.sh", shared + "runtime.sh"
         service_args, runtime_args = [], []
         port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
         description = f"预测50，执行前{self.steps}，再观测推理"
+        if self.mode == "fovea":
+            service = shared + "fovea_serve.sh"
+            port = 8010
+            service_args = ["--checkpoint", model["checkpoint"], "--port", str(port)]
+            runtime_args = ["--fovea", "--policy-url", f"ws://127.0.0.1:{port}",
+                            "--prompt", stage(self.fovea_stage, "tomato-in-hand119").prompt]
+            description = f"Fovea · {stage(self.fovea_stage, 'tomato-in-hand119').label}：预测50、执行15后更新框；停止后选择下一阶段"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]
@@ -280,21 +308,10 @@ class DeploymentSettings:
                     raise ValueError("所选仓库尚未同步Paper RTC适配类")
                 runtime_args.append("--paper-rtc")
             description = f"50点时间线，{self.steps}源节点触发后台重规划（非固定执行前缀）"
-        elif self.mode == "soft-serial":
-            service = full + "serve_soft.sh"
-            runtime_args = ["--inference-preset", "paper-rolling", "--inpainting", "soft", "--compression", "cubic", "--broker-mode", "serial"]
-            description = "50→30→26+4；26→20 cubic（原串行实现可能回退26）"
-        elif self.mode == "soft-async":
-            service, runtime = full + "serve_async_soft.sh", full + "runtime_async_soft.sh"
-            port += 100
-            description = "50→30→26+4→20，固定PCHIP，后台预测，段边界切换"
-            stream = repo / shared / "async_soft_stream.py"
-            if not stream.is_file() or "sharpa-async-soft-rolling-v3" not in stream.read_text():
-                raise ValueError("需要Soft分支rolling-v3；拒绝旧50点/15触发异步入口")
         if not (repo / service).is_file() or not (repo / runtime).is_file():
             raise ValueError("所选仓库没有该模式入口，请选择对应分支的部署目录")
         if self.record:
-            worker = "async_soft_motion_ros.py" if self.mode == "soft-async" else "sdk_direct_motion_ros.py"
+            worker = "sdk_direct_motion_ros.py"
             if "RecordingGate" not in (repo / shared / worker).read_text():
                 raise ValueError("所选仓库尚未接入chunk录制钩子，请先同步UI/录制版本")
         profile = model["profile"]
@@ -322,8 +339,8 @@ class DeploymentSettings:
                 "hardware": ["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "up",
                              *(["--exclusive"] if self.camera_policy == "exclusive" else []),
                              *(["--defer-camera-check"] if self.initialization == "home"
-                               and self.mode != "soft-async" and (repo / shared / "startup_gate.py").is_file() else [])],
-                "service": ["bash", service, *common, *service_args],
+                               and (repo / shared / "startup_gate.py").is_file() else [])],
+                "service": ["bash", service, *([] if self.mode == "fovea" else common), *service_args],
                 "check": ["bash", runtime, *options, "--check"],
                 "execute": ["bash", runtime, *options, "--execute", "--enable-hardware", "--sharpa-backend", "sdk_direct"]}
         result["approval"] = hashlib.sha256(json.dumps({"settings": result["settings"], "identity": model["identity"],
@@ -340,11 +357,14 @@ def plan_environment(plan):
     # Machine/SDK paths stay; inference identity and service port are per plan.
     env.update({profile.checkpoint_env: plan["model"]["checkpoint"],
                 profile.norm_stats_env: plan["model"]["norm_stats"],
-                profile.port_env: str(plan["port"] if plan["settings"]["mode"] != "soft-async" else plan["port"] - 100),
+                profile.port_env: str(plan["port"]),
                 "SHARPA_MODEL_PROFILE": profile.name,
                 "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
     root = plan["settings"]["repository"]
-    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR"):
+    env.pop("SHARPA_FOVEA_CHECKPOINT", None)
+    if plan["model"].get("fovea"):
+        env["SHARPA_FOVEA_CHECKPOINT"] = plan["model"]["checkpoint"]
+    for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR", "SHARPA_FOUR_VIEW_RECORD_DIR"):
         env.pop(key, None)
     if plan["model"].get("crop_locator"):
         env.update(SHARPA_CROP_LOCATOR=plan["model"]["crop_locator"],

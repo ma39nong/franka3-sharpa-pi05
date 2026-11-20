@@ -60,6 +60,9 @@ def port_listening(port):
 
 
 def probe(mode, port):
+    if mode == "fovea":
+        from deploy.fr3_sharpa_runtime.fovea_runtime import FoveaRuntime
+        return FoveaRuntime(f"ws://127.0.0.1:{port}", expected_checkpoint=os.environ["SHARPA_FULL_DELTA_CHECKPOINT"]).inspect_metadata()
     from deploy.fr3_sharpa_runtime.runtime import SharpaRuntime
     metadata = SharpaRuntime(f"ws://127.0.0.1:{port}", **({"train_rtc": True, "paper_rtc": mode == "train-paper-rtc"} if mode in ("train-rtc", "train-paper-rtc") else {})).inspect_metadata(require_rtc=mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"))
     if mode == "paper-rtc":
@@ -162,16 +165,14 @@ class DeploymentController:
         return state
 
     def task_status(self):
-        """Small UI/lease poll without reading logs, exports or process state."""
+        """Read task state without coupling execution to browser polling."""
         with self.lock:
             endpoint, run_id, task_last = self.task_endpoint, self.task_run_id, self.task_last
             executing = self.state.get("running") and self.operation == "execute"
         if endpoint and endpoint.exists():
             try:
                 from deploy.fr3_sharpa_runtime.task_control import task_rpc
-                # UI polling renews the execution-side five-second lease. No
-                # browser polling means no silent indefinite robot execution.
-                task_last = task_rpc(endpoint, run_id)
+                task_last = task_rpc(endpoint, run_id, renew_contact=False)
                 self.task_last = task_last
             except (OSError, RuntimeError, ValueError) as error:
                 task_last = {**(task_last or {}), "communication_error": str(error), "safe_to_resume": False}
@@ -217,7 +218,7 @@ class DeploymentController:
         original_values = dict(values)
         mode = values.get("mode", "serial")
         values = {**values, "initialization": "current", "record": False, "rounds": 0,
-                  "speed": "fast" if mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+                  "speed": "fast" if mode in ("fovea", "rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
         return self.start(values, operation="model", persisted_values=original_values)
 
     def _require_model(self, plan, env):
@@ -256,7 +257,7 @@ class DeploymentController:
             self.task_endpoint = None
             self.task_run_id = None
             self.task_last = None
-            if operation == "execute" and plan["settings"].get("task_mode") == "tomato-b":
+            if operation == "execute" and plan["settings"].get("task_mode") in ("tomato-b", "tomato-in-hand119"):
                 self.task_endpoint = Path(tempfile.mkdtemp(prefix="sharpa-task-")) / "task.sock"
                 self.task_run_id = uuid.uuid4().hex
             self.state = {"phase": "validating", "message": "正在检查模型契约和参数", "running": True,
@@ -489,6 +490,8 @@ class DeploymentController:
             env["SHARPA_TASK_RUN_ID"] = self.task_run_id
         if self.plan["settings"]["record"]:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
+            if self.plan['model'].get('crop_locator') or self.plan['model'].get('fovea'):
+                env['SHARPA_FOUR_VIEW_RECORD_DIR'] = str(directory/'policy_views')
         try:
             self._require_model(self.plan, env)
             self._command(self.plan["check"], "parameter_check", env)
@@ -528,6 +531,7 @@ class DeploymentController:
                 self.runtime = self._spawn(self.plan["execute"] + ["--execution-trace-dir", str(trace)], "runtime", env)
                 runtime_started = True
             self.update("running", "执行端已启动；停止按钮等效执行端Ctrl-C")
+            next_heartbeat = 0.0
             while self.runtime.poll() is None:
                 if self.cancel.is_set():
                     # stop() forwards exactly once. Never kill a cleanup in progress.
@@ -537,6 +541,13 @@ class DeploymentController:
                     if report.get("status") not in ("COMPLETE", "NOT_STARTED") and not self.cancel.is_set():
                         failure = "录制器异常退出，已停止执行；原始数据和日志保留"
                         self.stop()
+                if self.task_endpoint and not self.cancel.is_set() and time.monotonic() >= next_heartbeat:
+                    from deploy.fr3_sharpa_runtime.task_control import task_rpc
+                    next_heartbeat = time.monotonic() + 1.0
+                    # Renew from the local controller even if every browser tab
+                    # is suspended. Loss of the controller still expires it.
+                    with suppress(OSError, RuntimeError, ValueError):
+                        task_rpc(self.task_endpoint, self.task_run_id)
                 time.sleep(0.2)
             if self.runtime.returncode not in (0, 130):
                 raise RuntimeError(f"执行/清理失败，退出码{self.runtime.returncode}；查看runtime.log和独立失能报告")

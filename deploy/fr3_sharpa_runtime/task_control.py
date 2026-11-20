@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-from .task_stages import PHASES, catalog, stage
+from .task_stages import phase_ids, catalog, stage, TASK_CONTRACTS, IN_HAND_PROFILE, IN_HAND_AGENT_SOURCE
 
 TRANSITIONS = {
     "IDLE": {"READY", "STOPPING", "FAULT"},
@@ -36,8 +36,11 @@ TRANSITIONS = {
 
 
 class TaskControl:
-    def __init__(self, run_id=None, initial_stage="pickup_1", *, version=0, emit=None):
-        stage(initial_stage)
+    def __init__(self, run_id=None, initial_stage="pickup_1", *, version=0, emit=None, profile="tomato-b"):
+        stage(initial_stage, profile)
+        self.profile = profile
+        self.phases = phase_ids(profile)
+        self.stage = lambda value: stage(value, profile)
         self.lock = threading.RLock()
         self.wakeup = threading.Event()
         self.run_id = run_id or uuid.uuid4().hex
@@ -68,7 +71,7 @@ class TaskControl:
 
     def snapshot(self):
         with self.lock:
-            return json.loads(json.dumps({**self.data, "stages": catalog()}))
+            return json.loads(json.dumps({**self.data, "stages": catalog(self.profile), "task_profile": self.profile, "stage_contract": TASK_CONTRACTS[self.profile]}))
 
     def event(self, event, **fields):
         try:
@@ -114,7 +117,7 @@ class TaskControl:
 
     def command(self, command, request_id, *, expected_version, target=None, confirmed=False, client_clicked_unix_ms=None, http_received_monotonic_ns=None, source="operator"):
         received_ns = time.monotonic_ns()
-        if source not in ("operator", "agent") or (source == "agent" and command != "stage"):
+        if source not in ("operator", "agent", IN_HAND_AGENT_SOURCE) or (source != "operator" and command != "stage"):
             raise ValueError("Agent 仅可请求下一阶段")
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             raise ValueError("有效 request_id 必填")
@@ -128,6 +131,13 @@ class TaskControl:
                 return self.snapshot()
             d = self.data
             state = d["execution_state"]
+            if source == "agent" and self.profile != "tomato-b":
+                raise ValueError("旧Agent 不支持 119 条五阶段，请选择四路 Agent 或手动切换")
+            if source == IN_HAND_AGENT_SOURCE and (
+                self.profile != IN_HAND_PROFILE or state != "RUNNING"
+                or d["active_stage"] != d["requested_stage"]
+            ):
+                raise ValueError("四路 Agent 只可推进稳定运行中的 119 条任务")
             if command != "stop" and (type(expected_version) is not int or expected_version != d["stage_version"]):
                 raise ValueError("阶段版本已改变，请刷新状态后操作")
             if state in ("STOPPING", "STOPPED", "COMPLETED"):
@@ -135,18 +145,18 @@ class TaskControl:
             if command in ("next", "stage", "recover"):
                 if state not in ("READY", "RUNNING", "SWITCH_REQUESTED", "SWITCHING", "PAUSED", "RESUMING"):
                     raise ValueError("当前状态不允许切换阶段")
-                index = PHASES.index(d["requested_stage"])
+                index = self.phases.index(d["requested_stage"])
                 if command == "next":
-                    if index == len(PHASES) - 1:
+                    if index == len(self.phases) - 1:
                         raise ValueError("已经是最后阶段，需人工完成任务")
-                    target = PHASES[index + 1]
-                stage(target)
+                    target = self.phases[index + 1]
+                self.stage(target)
                 if command == "recover":
                     if confirmed is not True:
                         raise ValueError("人工恢复需要明确确认停止和重新观测")
                     if state not in ("READY", "PAUSED"):
                         raise ValueError("跳转或回退必须先独立暂停；在线切换只允许向前推进")
-                elif index == len(PHASES) - 1 or target != PHASES[index + 1]:
+                elif index == len(self.phases) - 1 or target != self.phases[index + 1]:
                     raise ValueError("普通切换仅允许下一阶段；跳转或回退请使用人工恢复")
                 previous, old_version = d["requested_stage"], d["stage_version"]
                 self.event("request_superseded", request_id=d["pending_request_id"], reason="newer operator intent")
@@ -227,7 +237,7 @@ class TaskControl:
                 request_id=request_id,
                 stage_id=d["requested_stage"],
                 stage_version=d["stage_version"],
-                prompt=stage(d["requested_stage"]).prompt,
+                prompt=self.stage(d["requested_stage"]).prompt,
             )
 
     def valid(self, ticket):

@@ -4,7 +4,7 @@
 
 ## 工作机启动
 
-推荐在已配置工作机环境、包含所需模式的部署仓库根目录运行，再在UI中选择 main 或 Soft 的部署目录：
+推荐在已配置工作机环境、包含所需模式的部署仓库根目录运行，再在UI中选择当前部署目录：
 
 ```bash
 bash deploy/fr3_sharpa_control/ui.sh
@@ -12,7 +12,7 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 沿用现场部署前提：先结束其他遥操和旧执行端，避免设备占用。打开 `http://127.0.0.1:8766`。可用 `--port 其他端口` 更改UI端口；仅监听回环，不对局域网开放。打开页面不连接设备。三终端命令集中在仓库根目录 [部署启动指令.md](../../部署启动指令.md)。
 
-1. 选择本机部署仓库和checkpoint目录，优先自动识别动作类型；没有训练证据时按训练配置选择Absolute或双臂Delta／双手Absolute。点击识别权重，按可用范围选择串行／RTC／Paper RTC／Train RTC／Train Paper RTC／Soft模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
+1. 选择本机部署仓库和checkpoint目录，优先自动识别动作类型；没有训练证据时按训练配置选择Absolute或双臂Delta／双手Absolute。点击识别权重，按可用范围选择串行／RTC／Paper RTC／Train RTC／Train Paper RTC模式。全量／LoRA结构仍自动核对，可选训练JSON交叉验证，Paper资产检查必须匹配。
 2. 点击**启动推理**。只检查权重并加载GPU、预热、核对服务身份，不启动硬件、相机、录制或机器人执行；即使选择了Home或录制，也不需要此时提供Home配置或ROS环境。推理端预热期间可以点**停止推理**取消。
 3. 等推理端显示就绪，选择Current/Home、速度、步数、轮数、录制和输出位置，点击**核对执行配置**。
 4. 点击**启动执行**。必须已有与当前仓库、提交、权重和模式匹配的已预热推理端；执行入口只检查/复用该服务，不会隐式加载或切换模型。每次执行都自动运行硬件 `up`，然后按配置开始执行。
@@ -41,20 +41,40 @@ bash deploy/fr3_sharpa_control/ui.sh
 
 ## 当前覆盖范围
 
-| 权重（均为30Hz、原生58D、50步） | main | soft-inpainting-test |
-| --- | --- | --- |
-| 全量 Absolute | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
-| 全量普通 Delta（双臂delta／双手absolute） | 普通串行、RTC | 普通串行、RTC、串行Soft、异步Soft |
-| 全量 Paper Delta v1（包括本次7999／T3） | 普通串行、Paper RTC | 同步本次适配后：普通串行、Paper RTC、串行Soft、异步Soft |
-| 未合并 Absolute LoRA（VLM16／Expert32配方） | 普通串行 | 普通串行 |
+### Fovea 联合动作与预测框
+
+`tomato-foveavla-v1` 分支已合入 main 的控制台。点击 **Fovea · 预测框 · 20000步** 快捷配置，或选择完整 checkpoint 步骤目录和 **Fovea · 动作与预测框** 模型类型。权重必须带训练生成的 `assets/fovea_contract.json`；界面核对参数、统计、50/15偏移和框坐标契约，不能将 Fovea 权重选为普通 Full Delta。
+
+快捷配置优先使用本机 `.deployment/checkpoints/tomato-foveavla-v1/20000`，本机没有该目录且服务器归档可读时使用归档最终20000步权重；否则请用“选择目录”定位已复制的完整权重。Git 不携带权重。
+
+在 **Fovea 当前阶段指令** 下拉框选择拿起、首次采摘、手中调整、再次采摘或最终放回；界面自动传入对应训练英文指令，无需手动输入命令。依次点击启动推理、核对执行配置、启动执行。Fovea固定原速30Hz、预测50步并执行前15步，确认执行成功后才使用预测框。切换阶段前停止执行，等待既有失能和硬件清理完成，选下一阶段后重新核对并启动；推理端可以保持运行，每次新执行重置固定初始框。
+
+Fovea使用独立8010端口，服务握手核对所选checkpoint的内容身份及预热状态。不支持RTC、Memory或Agent在线切换，下面的Agent阶段按钮不控制Fovea。勾选录制时沿用ROSbag和四路视频导出，第四路保存本次模型实际裁剪像素，不另跑定位器。
+
+2026-11-20 已完成软件测试及服务器最终权重GPU加载/回放；本次UI接入不代表实机采摘成功率验收。
+
+### 任务流程、图像输入与训练版本
+
+界面按任务语义命名：`放回盘中调整 · 七阶段` 和 `手中调整 · 五阶段`。数据条数不是任务类型；例如手中调整从119条扩充到204条，仍使用同一五阶段顺序及英文指令。
+
+模型还须分别核对三路全图或四路RGB（包含局部图）。同一任务的三路对照不需要第四路ROI输入，不能套用四路模型的加载配置。归一化统计也不单独证明图像路数：204条三路和四路使用相同的状态／动作统计。界面识别权重后分别显示任务、输入、数据规模／版本和checkpoint；只对已有完整指纹的模型显示已核验信息。
+
+快捷配置是已有基线的路径预设，按钮按“任务＋输入”命名；选择“手中调整 · 四路基线”仍填入原119条20000步权重。新训练结果需独立核验后再接入，不能仅改按钮名称或按目录里的数据条数推断兼容。Agent权重与动作模型的训练版本、输入及控制验收单独核对。
+
+| 权重（均为30Hz、原生58D、50步） | 支持模式 |
+| --- | --- |
+| 全量 Absolute | 普通串行、RTC |
+| 全量普通 Delta（双臂delta／双手absolute） | 普通串行、RTC |
+| 全量 Paper Delta v1 | 普通串行、Paper RTC |
+| 未合并 Absolute LoRA（VLM16／Expert32配方） | 普通串行 |
 
 这不是通用权重加载器：LoRA Delta、其他动作顺序/维度/频率、未知模型变体、其他论文资产版本尚未接入。模式列表同时受所选仓库和模型限制；旧分支没有Paper适配时会阻止启动。现场硬件验证与离线模型验证分开记录。
 
 Paper通过checkpoint自己的 `delta_paper.json`、`delta_paper.npz`、`norm_metadata.json` 和参数中的噪声状态自动识别；不能用手动选择Delta绕过缺失或冲突的资产。验证资产摘要、30Hz/50×58、双臂Delta掩码、统计范围、噪声矩阵与beta一致性。支持v1的global_quantile、global_zscore_arms、timestamp_zscore_arms，beta范围[0,1)。Paper T3对应的7999为timestamp_zscore_arms、beta0.5；7999只是训练步数，普通Delta的同名目录不能当作Paper权重。
 
-Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Soft的旧26..29参考点会按**新chunk的0..3索引**归一化；Paper RTC允许1..50步参考：先补齐50步走完整的绝对值→双臂delta→分位数归一化→Paper变换，再裁回真实参考长度；参考按**新chunk的0..K−1索引**编码。补齐部分不参与RTC引导，输出仍是50步。普通RTC仅用于非Paper权重。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
+Paper仍使用 `full-delta` 启动入口和端口；服务自动切换至Paper模型与逐时间步变换。普通Delta保留原变换。Paper RTC允许1..50步参考：先补齐50步走完整的绝对值→双臂delta→分位数归一化→Paper变换，再裁回真实参考长度；参考按**新chunk的0..K−1索引**编码。补齐部分不参与RTC引导，输出仍是50步。普通RTC仅用于非Paper权重。默认噪声按训练的Cholesky矩阵生成，显式传入的噪声视为已在目标分布，不重复相关化。推理输出仍为绝对关节位置。
 
-2026-10-30离线验证：本次7999在RTX5090上通过真实加载、普通推理、RTC引导、串行Soft四点参考、异步Soft四点参考smoke；输出均为有限50×58。异步Soft仍为50→30→26＋4→20，Soft施加6次；未连接机器人，不能替代工作机实机验证。合并LTT录制修复后的回归：main292项；Soft431项（16条既有JAX/Flax弃用警告）。模型smoke报告保存在各工作目录忽略Git的 `.deployment/paper_7999_audit/`。
+2026-10-30离线验证：7999在RTX5090上通过真实加载、普通推理和RTC引导；输出为有限50×58。未连接机器人，不能替代工作机实机验证。
 
 ### Paper RTC 启动
 
@@ -86,22 +106,20 @@ bash deploy/fr3_sharpa_runtime/runtime.sh --model full-delta --check \
 | --- | --- | --- |
 | 普通串行 | 可填1..50，如15或20 | 每轮执行对应模型动作前缀后重新推理 |
 | RTC／Paper RTC | 可填1..24，fast固定 | 后台重规划触发源节点；不是固定执行前缀；轮数0或至少2 |
-| 串行Soft | 源执行点26，压缩目标20 | 50→30→26+4，原cubic策略允许条件不满足时回退26 |
-| 异步Soft | 固定26→20 | rolling-v3、PCHIP、固定4参考，段边界切换；拒绝旧15点异步协议 |
 
-Main提供普通串行、RTC和Paper RTC；Soft分支增加串行Soft和异步Soft。UI读取所选代码目录，只启用其中实际支持的模式。推荐两个分支各保留一个部署目录，在UI选择对应目录，不在运行中git switch。独立目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
+当前部署目录提供普通串行、RTC、Paper RTC和训练RTC模式。部署目录复用启动UI所用的OpenPI Python；Home文件优先选择目标仓库自己的配置，缺少时使用启动UI仓库的工作机配置，ROS overlay也可复用。选择Home时会在启动硬件前解析配置，缺失即报错。
 
 ## 启动前部署独占相机
 
-主界面新增“启动前相机策略”，默认是“部署独占接管”，也可选“要求相机空闲”。核对配置会显示并冻结该选项；改动后需重新核对。点击启动执行即授权按此策略处理相机：独占模式会中断使用旧相机服务的遥操预览或录制，模型预热阶段不会接管相机。
+控制台默认采用部署独占接管，局部图定位器使用 GPU。启动执行时，独占接管会中断使用旧相机服务的遥操预览或录制。模型预热阶段不会接管相机。
 
 接管只针对 Docker 中标签为 teleop-cameras／openpi-cameras、命令为 triple_camera.launch.py、且挂载配置的三台序列号及头部/左右语义与本机部署配置完全一致的服务。使用不可变容器 ID 停止，检查容器 Running=false、PID=0，并等待可见USB/网络/驱动占用消失；不按容器名通配停止，不执行remove-orphans、USB reset或杀未知进程。部分相机重叠、无法核对配置或未知进程占用均拒绝启动，并记录容器名、命令、可见PID或设备句柄。操作系统权限可能限制占用诊断，不能将未列出PID当作设备一定空闲。
 
 释放后只启动一个部署相机服务。只读ROS闸门查询驱动 GetDeviceInfo 返回的实际序列号，校验头部cam0／左腕cam2／右腕cam1映射；要求三路有效RGB/BGR、唯一发布者、连续3秒稳定出图（头部至少18Hz、双腕至少25Hz、连续帧间隔不超过150ms），并复用runtime的200ms新鲜度及100ms时间对齐限制。Current模式仍在通过后启动机械臂/网关依赖，并在执行端连接SDK前再次验证。固定Home模式在支持并行启动的部署目录中改用下面的汇合流程。
 
-固定Home并行启动顺序：完成独占接管及设备释放 → 启动唯一部署相机及机械臂/网关 → 执行会话同时启动只读视频验证与SDK连接/关节反馈校验/Home → 两边均成功后，重新获取Home之后的七路新鲜观测 → 推理及任务执行。Home目标不再通过带图像的完整观测获取，而使用原四路关节反馈及命名Home配置；原运动范围、速度、反馈新鲜度和失能确认不变。普通串行、RTC、Paper RTC、Train RTC和Train Paper RTC共用此路径；独立Soft目录只有同步支持代码后才启用，异步Soft保持原启动顺序。
+固定Home并行启动顺序：完成独占接管及设备释放 → 启动唯一部署相机及机械臂/网关 → 执行会话同时启动只读视频验证与SDK连接/关节反馈校验/Home → 两边均成功后，重新获取Home之后的七路新鲜观测 → 推理及任务执行。Home目标不再通过带图像的完整观测获取，而使用原四路关节反馈及命名Home配置；原运动范围、速度、反馈新鲜度和失能确认不变。普通串行、RTC、Paper RTC、Train RTC和Train Paper RTC共用此路径。
 
-固定Home的初始手部边界恢复：仅固定Home请求携带 `home_recovery=True`，在普通Home前调用独立恢复模块。初始反馈合法时直接跳过；小幅越界时，确认两手SDK支持原生插值及速度系数读回，临时把速度系数降到 `min(原值, 0.05)`，将合法目标放在最近边界内侧0.005 rad（窄关节范围按比例缩小）。恢复目标与实测值的差须小于现有SDK 0.10 rad跳变上限；不允许更大越界自动恢复。所有下发命令仍通过原上下限校验，不发送机械臂目标，不开启录制，不修改真实反馈。反馈到合法范围且距恢复目标不超过0.003 rad并连续稳定0.3秒后，读回并恢复原速度系数，再进入原Home。SDK降速设置完成后、尚未发送恢复动作前，最多等5秒，要求四路关节反馈的本地接收时刻均晚于设置完成，且通过原200ms新鲜度和同步检查；再按新实测值重算目标及跳变范围。动作阶段最多10秒，期间不重试失效反馈；无进展2秒、反馈失效、30Hz超时、停止或速度还原失败均阻止任务并走原失能退出。还原速度后，同样在不发送动作的情况下最多等5秒真实新反馈，再进入普通Home。日志新增 `home_recovery_feedback_wait/ready`、反馈源/接收年龄和限频的 `sharpa_feedback_read_error`，不延长200ms阈值。速度系数为无量纲，不代表已验证的rad/s；实际恢复速度和边界需现场验收。Current、策略prepare、串行任务及RTC任务不调用该模块；推理、裁剪、任务安全阈值和SDK配置对象保持原路径。独立Soft目录需同步对应代码后才支持此恢复。
+固定Home的初始手部边界恢复：仅固定Home请求携带 `home_recovery=True`，在普通Home前调用独立恢复模块。初始反馈合法时直接跳过；小幅越界时，确认两手SDK支持原生插值及速度系数读回，临时把速度系数降到 `min(原值, 0.05)`，将合法目标放在最近边界内侧0.005 rad（窄关节范围按比例缩小）。恢复目标与实测值的差须小于现有SDK 0.10 rad跳变上限；不允许更大越界自动恢复。所有下发命令仍通过原上下限校验，不发送机械臂目标，不开启录制，不修改真实反馈。反馈到合法范围且距恢复目标不超过0.003 rad并连续稳定0.3秒后，读回并恢复原速度系数，再进入原Home。SDK降速设置完成后、尚未发送恢复动作前，最多等5秒，要求四路关节反馈的本地接收时刻均晚于设置完成，且通过原200ms新鲜度和同步检查；再按新实测值重算目标及跳变范围。动作阶段最多10秒，期间不重试失效反馈；无进展2秒、反馈失效、30Hz超时、停止或速度还原失败均阻止任务并走原失能退出。还原速度后，同样在不发送动作的情况下最多等5秒真实新反馈，再进入普通Home。日志新增 `home_recovery_feedback_wait/ready`、反馈源/接收年龄和限频的 `sharpa_feedback_read_error`，不延长200ms阈值。速度系数为无量纲，不代表已验证的rad/s；实际恢复速度和边界需现场验收。Current、策略prepare、串行任务及RTC任务不调用该模块；推理、裁剪、任务安全阈值和SDK配置对象保持原路径。
 
 **行为变化：选择Home并启动执行后，即使视频尚未通过稳定性/序列号检查，臂手也可能已经开始固定Home运动。** 视频失败或超时会通知执行端中止Home，并等待原失能及退出确认；Home失败则取消视频等待，GUI停止同时取消两条流程。只有视频PASS和Home完成汇合后才允许任务推理，视频失败不重启相机或继续使用旧图像。
 
@@ -113,7 +131,7 @@ GUI对已支持的固定Home自动使用 `hardware.sh up --exclusive --defer-cam
 
 等待期间只向stderr记录 `camera_alignment_wait` 及各路时间戳、年龄和历史范围，不发送PASS、不更新健康心跳、不向推理提供无效观测；恢复时记录 `camera_alignment_recovered`。实际模型观测仍须通过原来的100ms对齐与200ms新鲜度限制。时间戳过旧/未来、图像无效、发布者缺失/重复或身份变化仍按原规则立即报错，SDK及机械臂反馈watchdog保持不变。这里没有照搬数采的90秒启动等待或将150ms单路帧间隔当作跨相机对齐阈值。
 
-已知服务正常停止并不保证设备本身没有固件/USB问题；实际序列号或出图闸门不通过时仍会阻止Home。相关信息见hardware.log与runtime.log。所有在GUI中选择的main/Soft部署目录都必须同步相机闸门代码，旧目录会在配置阶段明确拒绝。
+已知服务正常停止并不保证设备本身没有固件/USB问题；实际序列号或出图闸门不通过时仍会阻止Home。相关信息见hardware.log与runtime.log。所有在GUI中选择的部署目录都必须同步相机闸门代码，旧目录会在配置阶段明确拒绝。
 
 首次更新后编译新增的相机身份查询消息（只编译消息，不启动设备）：
 
@@ -137,7 +155,7 @@ bash deploy/fr3_sharpa_runtime/hardware.sh up --exclusive
 
 ## 自动录制和归档
 
-勾选录制后，UI在执行前检查ROS bag和视频依赖，提前建立独立录制进程和订阅，但此时不创建bag写入器。Home和初始首帧接近期间不写包。运动worker完成接近后，先取得录制就绪应答，再开始发送第一段任务chunk；RTC/异步Soft在首次stream播放前打开同一个门。
+勾选录制后，UI在执行前检查ROS bag和视频依赖，提前建立独立录制进程和订阅，但此时不创建bag写入器。Home和初始首帧接近期间不写包。运动worker完成接近后，先取得录制就绪应答，再开始发送第一段任务chunk；RTC在首次stream播放前打开同一个门。
 
 录制从第一段任务开始持续到执行结束或Ctrl-C，不在段间暂停。按停止后立即结束写包；worker正常结束/异常退出也在双手失能确认之前关闭录制，避免把最长120秒的失能等待录进视频。录制收尾错误不能绕过双手失能逻辑。UI等待执行、失能与硬件清理完成后才能再次启动。手失能后是否还能握住物体由实际设备状态决定。
 
@@ -197,7 +215,7 @@ bash deploy/fr3_sharpa_control/record_session.sh check
 选择 Train RTC 后重新启动推理服务；命令对应 `--enable-train-rtc`，执行端对应 `--broker-mode rtc --train-rtc --speed fast`。界面设置承诺前缀预算为 `min(25, rtc_max_delay)`，沿用 current/Home、录制、停止和旧块播放机制。实际推理/安装超过预算则停止。服务必须完成全部静态前缀长度的预热才能连接执行流程。工作机 GPU 与实机验证仍待完成；命令及数据坐标约束见根 README 的 Train RTC 部署模式。
 
 
-## Train RTC 与 Train Paper RTC（train-rtc 分支）
+## Train RTC 与 Train Paper RTC
 
 | 选项 | 训练权重 | 推理机制 |
 | --- | --- | --- |
@@ -243,15 +261,17 @@ Train RTC需填写实际训练的最大延迟（1..49），可设置初始延迟
 
 ### Agent 实时接入与手动／自动选择（2026-11-12）
 
-番茄任务面板提供“手动切换／Agent 自动状态机”、“启动 Agent（先观察）”、“停止 Agent”和“切回手动接管”。默认始终为手动；刷新页面显示服务器当前模式，新执行会话不会继承自动授权。先按上文启动 π₀.₅ 推理与任务执行端，再启动 Agent，等待真实观测就绪后选择自动，最后开始当前阶段。也可以在已有相机和关节反馈时单独启动 Agent，只观察概率。
+启动推理前，可以点击番茄任务面板的阶段按钮选择初始阶段。选中的按钮会显示“初始阶段”。从后续阶段启动时，需要勾选“人工恢复”并核对执行配置。
 
-部署界面固定使用工作机实时模式，不再提供开发机／离线NPZ入口。默认手动切换；需要自动切换时先等执行端就绪，选择Agent、启动观察，再等“实时就绪”后启用自动。展开“首次配置／修改工作机上的 Agent 路径”可修改仓库、Python、checkpoint、编码器、Gello和ROS overlay。mengxiang默认仓库为`~/vjepa2_training`，权重为`runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt`。相对模型路径以Agent仓库为基准；overlay以部署仓库为基准。Python保留虚拟环境调用路径，不解引用解释器软链接。模型运行于该仓库 `.venv-tomato` 独立进程，编码器只加载一次。ROS 采集运行于现有 Pixi ros2 环境，并复用现有 domain、CycloneDDS 配置和消息 overlay。Agent 不启动相机、硬件、Home 或 SDK，不创建动作发布者。
+阶段切换默认手动，也可以提前选择“Agent 自动切换”。预选在当前页面等待，直到指定 Agent 的实时预测和任务执行端都就绪，才向控制台申请启用自动切换。执行端就绪后，仍由操作员点击“开始当前阶段”。已结束的执行会话不会把自动授权带到下一次执行。已有相机和关节反馈时，也可以单独启动 Agent 观察概率。
+
+部署界面使用工作机实时模式。展开“首次配置／修改工作机上的 Agent 路径”可修改仓库、Python、checkpoint、编码器、Gello和ROS overlay。mengxiang默认仓库为`~/vjepa2_training`，权重为`runs/tomato/optimization_20261108/bundles/independent_h15_s42.pt`。相对模型路径以Agent仓库为基准；overlay以部署仓库为基准。Python保留虚拟环境调用路径，不解引用解释器软链接。模型运行于该仓库 `.venv-tomato` 独立进程，编码器只加载一次。ROS 采集运行于现有 Pixi ros2 环境，并复用现有 domain、CycloneDDS 配置和消息 overlay。Agent 不启动相机、硬件、Home 或 SDK，不创建动作发布者。
 
 只读采集保留约3秒历史；每0.5秒按源时间选三路相机各16帧、10Hz，以及58维实测关节位置。相机固定 cam0/cam1/cam2，RGB、256×256、INTER_AREA 与训练一致；关节带完整 `.position` 名称，由模型按名称重排。历史各采样点仅取目标时间之前的原始样本，最大偏差40ms；缺帧、时钟域不一致和过期数据不会伪造补齐。必须预热至少1.5秒且各流持续有效。
 
 Current 的下一合法类概率≥0.8、两次新鲜2Hz观测确认后，协调器通过现有版本化任务 socket 请求切换。Future1.5s 概率只显示，不授权动作。模型SHA、观测ID、会话ID、概率/logits、输入/结果时间都要验证；请求后清空确认，等 active_stage 与 requested_stage 一致且 RUNNING 才再次积累证据。没有另写 RTC 桥接或硬件控制算法。
 
-“切回手动接管”撤销后续自动请求并清空旧证据；已经提交执行端的切换仍按原交接流程完成，接管本身不停止当前运动。需要停止请使用暂停或停止执行。暂停、恢复、人工跳转和新执行会话均回到手动；恢复后须重新选择自动。自动模式下禁止手动推进阶段；停止 Agent、模型/观测异常或任务通信异常会调用原执行停止路径。Agent 状态轮询和自动命令不续租页面的五秒操作员心跳，关闭页面仍会触发原失联停止。最终 return_stem 绝不自动宣告成功，保留人工完成。
+“切回手动接管”撤销后续自动请求并清空旧证据；已经提交执行端的切换仍按原交接流程完成，接管本身不停止当前运动。需要停止请使用暂停或停止执行。暂停、恢复、人工跳转和新执行会话均回到手动；恢复后须重新选择自动。自动模式下禁止手动推进阶段；停止 Agent、模型/观测异常或任务通信异常会调用原执行停止路径。本机控制服务负责执行通信心跳。页面刷新、关闭或休眠不会停止任务。请使用“停止执行”结束任务。本机控制服务失联时仍会停止。最终 return_stem 绝不自动宣告成功，保留人工完成。
 
 面板显示 Current/Future 概率、确认次数、源观测年龄、模型推理耗时、请求和实际阶段。完整 Agent 日志写在 `.deployment/sharpa-agent-*/`（events.jsonl、model.log、observation.log）；短期NPZ历史只保留最近约10秒。推理耗时不等于完整 ROS→Agent→VLA→执行闭环延迟。B0 已知的 adjust→pickup 提前判断仍存在，本接入不改变分类权重和判定阈值。
 
@@ -285,14 +305,16 @@ sudo bash /home/user/gello_upper_body_teleop/ops/setup/install_dds_buffers.sh
 
 该命令会在所选Agent Python的独立短进程中导入模型依赖并核对CUDA/BF16；不会安装依赖或下载权重。检查通过不等于真实ROS流或实机动作已验收。
 
-### mengxiang / tairan 双 Agent（2026-11-15）
+### mengxiang / tairan 双 Agent（2026-11-15，历史配置）
+
+当前 UI 的 `tairan` 使用 119 条四路模型。下文的三路权重、握手配置与旧入口仅供查阅。当前的启动方式见 119 条任务一节。
 
 工作机同步部署代码（先处理工作机自己的未提交修改，避免覆盖现场配置）：
 
 ```bash
 git fetch origin
-git switch tomato-subtasks-manual-deploy
-git pull --ff-only origin tomato-subtasks-manual-deploy
+git switch main
+git pull --ff-only origin main
 bash deploy/fr3_sharpa_control/ui.sh --port 8787
 ```
 
@@ -317,7 +339,7 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ## complete100 四路 r11：手动阶段＋实时局部 RGB
 
-本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。代码分支 `tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发。
+本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。历史开发分支为 `tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发；现已包含在 `main`，旧分支已删除。
 
 训练权重固定为 `pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11 / tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000 / 16000`。服务按checkpoint自带统计、Orbax manifest和参数元数据的SHA256识别该权重，启用四路及1024视觉token。同次4000/8000/12000也登记四路身份，GPU推理本次只验收16000；未知r11组合会报错，避免误按三路加载。模型输入顺序与训练一致：`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, interaction_0_rgb`；文本上限256，58D实测state，50步、30Hz；双臂Delta在输出端还原绝对目标，手部保持Absolute。
 
@@ -333,8 +355,8 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ```bash
 git fetch origin
-git switch --track origin/tomato-four-view-live-crop  # 首次；已有本地分支则直接switch
-git pull --ff-only origin tomato-four-view-live-crop
+git switch main
+git pull --ff-only origin main
 ```
 
 权重和定位器不进入Git。工作机权重应放本地SSD：网络挂载盘逐次文件身份检查实测增加约50–80ms，可能耗尽200ms观测新鲜度余量；不能仅挂载服务器目录代替本地复制。权重从28复制 `16000/params`、`16000/assets`，也可保留原完整checkpoint。28源目录：
@@ -429,3 +451,112 @@ Agent服务握手声明`requires_local_roi`与`control_eligible`。旧B0不要�
 Agent仓库`tools.serve_tomato_agent`可自动识别B0或新Memory checkpoint；后者需要四路RGB历史、ROI116元数据、命名58D关节和版本匹配的编码器。r11未来辅助坐标训练的Memory checkpoint仅允许显式离线回放，不能直接当作已验收的实时模型。
 
 离线验证入口为`python -m deploy.fr3_sharpa_runtime.shared_roi_replay_check --dataset DATASET --episode 0 --out NEW_OUTPUT --norm-stats CHECKPOINT_OWNED_NORM`，并设置`SHARPA_CROP_LOCATOR`。读取旧录像和实测状态，调用真实定位器，核对两个并发消费者的像素与时间戳；不包含动作/Memory模型计算，不启动ROS或机器人，不证明端到端并发延迟。
+
+## 119条手中调整：独立五阶段四路部署（2026-11-18）
+
+当前部署分支为 `main`。119条部署最初在 `codex/tomato-in-hand119-deploy` 开发，基于 `tomato-four-view-live-crop/9d5d4d2`；2026-11-20将这条部署线设为 `main`，原分支名已删除。
+旧100条七阶段、原英文Prompt及ROI保持原契约。119条使用独立任务模式 `tomato-in-hand119`：
+
+| 阶段ID | 操作员看到的阶段 | 训练英文Prompt |
+| --- | --- | --- |
+| pickup | 拿起番茄串 | Right hand grasps and lifts the truss to the center |
+| harvest_1 | 首次采摘 | Left hand picks tomatoes into left basket while right hand holds truss |
+| adjust_in_hand | 手中调整 | Right hand adjusts tomato truss position and orientation at the center |
+| harvest_2 | 再次采摘 | Left hand picks tomatoes into left basket while right hand holds truss |
+| return_stem | 最终放回 | Right hand returns the held object to the right plate |
+
+“无放回”是中途不放回整串、在手中调整，最终仍有放回动作。内部ID `return_stem` 为兼容保留，
+不要求已经摘光或持有物一定是裸杆。两段采摘共用英文Prompt，但拥有不同进度位置。
+只更换任务阶段图及Prompt目录，复用现有执行状态机、单一硬件所有者、普通RTC、
+在线有时限轨迹交接、版本失效、暂停／停止／清理机制。手动点击不会立即伪报新阶段已生效；
+新观测和新Prompt首块经执行端接入才更新实际阶段。最后阶段不自动完成，仍需人工确认。
+
+### 工控机复制与操作
+
+1. 更新并切到上述分支，保持工控机原有 Python／ROS／Gello 环境。
+2. 复制一个完整步骤目录的 `params/` 和 `assets/`。本轮已登记新权重10000／15000／20000，
+   真实GPU和通信验收使用20000；25000／30000尚未取得，不按名称自动登记。
+   默认位置为部署仓库 `.deployment/checkpoints/tomato-in-hand119/20000/`。
+   也可以在UI选择工控机的实际位置，不能选只包含多个步骤的父目录。
+3. 复制整个 `.deployment/crop_locator/`，包括 `model.pt`、`receipt.json` 和 `primary/`；
+   Git不会传输这些模型文件。与100条共用定位器权重，但选框及窗口规则按模型分别选择。
+4. 启动 `bash deploy/fr3_sharpa_control/ui.sh --port 8788`，打开 `http://127.0.0.1:8788/`。
+5. 点击 **手中调整 · 四路基线**（119条已核对权重），核对仓库、checkpoint及定位器路径。预设为Full Delta、
+   普通RTC、Fast、15步触发、连续轮数0、Current、五阶段手动、初始“拿起番茄串”。
+   录制勾选保留操作员当前选择。误配100条／119条任务会在启动设备前拒绝。
+6. 点击“启动推理”，预热就绪后“核对执行配置”。实际机器人启动由操作员现场点击“启动执行”；
+   READY后点击“开始当前阶段”。按实物动作完成情况点击“切换到下一阶段”，最终放回后人工完成任务。
+   非首次阶段启动需要明确恢复确认；运行中不能直接跳段或回退。
+
+手动切换不会让上一阶段自动停在完成姿态。右手拿稳果串并到达中央、左手刚准备靠近时，
+即可切到“首次采摘”，不必等左手到达中央。运行时可按 **N** 请求下一阶段，避免寻找按钮；
+输入框、弹窗、自动模式、长按以及尚未完成的阶段切换不会响应快捷键。按键只发送一次人工
+请求，实际生效仍以执行端回执为准。 119 条任务收到切换请求后会发完当前已接纳的动作块，随后短暂保持最后一条已发送的命令，从新的观测推理下一阶段，并沿用逐帧限速。停止指令在等待期间仍有效。需要从固定 Home 开始时，另将启动姿态设为 Home，重新核对配置。
+
+在线任务将模型目标限制在 FR3 网关和 Sharpa 驱动的原有关节范围内，并在每一帧从上一条已发送命令
+限速接近目标。限速使用网关实际配置和部署已有的手部逐帧变化约束。原始预测仍保存在推理日志中，
+执行日志记录目标投影及逐帧调整。生成的命令仍须通过下发前检查，执行故障和停止沿用原失能流程。
+
+本分支的固定 Home 到位容差为 `0.025 rad`，Sharpa 部署层逐帧变化要求小于 `0.25 rad`。
+两项设置分别用于判断实测姿态是否到位和约束相邻手部命令，设备关节角度范围由原驱动和网关提供。
+
+仅加载模型、不连接机器人可执行：
+
+```bash
+export SHARPA_FULL_DELTA_CHECKPOINT=/工控机实际路径/20000
+export SHARPA_CROP_LOCATOR=/工控机部署仓库/.deployment/crop_locator
+bash deploy/fr3_sharpa_runtime/serve.sh --model full-delta --smoke-only --enable-rtc \
+  --report .deployment/inhand119-20000-smoke.json
+```
+
+### 局部图与Agent边界
+
+119条局部图采用训练 `full-block-right-truss-180-v1` 的当前帧目标规则：
+右手及附近番茄串为锚，左手移动到篮子不会把局部图带走；640×400参考尺寸下窗口180～300像素、
+上下文比例1.12。当前RGB检测与有限过去跟踪可复用已有恢复机制；不调用离线未来插值、
+不输入人工阶段真值。缺少可验证右手或目标超过局部窗口时，回退当前时刻全图并明确记录原因。
+这是离线未来辅助坐标的因果部署对应方案，不能声称像素与离线局部视频完全一致或定位已获独立验收。
+
+本任务在 UI 选择 `tairan · 四路`，默认使用 `.deployment/agents/inhand119_four`
+下的 `head/best_head.pt` 与 `encoder/`。默认手动，可在「阶段切换方式」提前选择「Agent 自动切换」。
+启动 Agent 并等实时预测与任务就绪后，预选的自动切换才会生效。tairan 采用 K1，单次观测的当前和 +1 秒预测对下一阶段的概率均达到 80% 时请求切换。当前生效的英文 Prompt 显示在阶段按钮下方。
+
+本轮证据见 `deploy/fr3_sharpa_runtime/validation/in-hand119-20000-online.json`：
+真实20000权重恢复、四路输入、四种训练原文Prompt、50×58有限动作、普通RTC预热均通过；
+新录制三路RGB＋具名实测关节经真实定位器与GPU模型完成30次本机普通／RTC通信，
+这批样本均为当前检测局部图，往返中位数约116ms、P95约131ms。
+五阶段真实Unix IPC与生产TaskRTC配合模拟硬件所有者验证，全套运行时回归705项通过，
+浏览器核对权重识别、五阶段按钮及执行配置预检通过；未运行ROS、SDK或机器人。
+以上耗时不包含工控机真实相机／ROS传输，不是新数据泛化、动作可执行性或采摘成功率。
+
+### 四路模型的录制与四联回放（2026-11-18）
+
+勾选“录制ROSbag及视频”后，三路模型继续原录制流程；已识别的100条／119条四路模型会额外保存
+**每次推理实际使用的三路原图、第四路ROI原像素及时间戳**，不是导出时重新定位。
+模型服务通过本机响应回传ROI，执行客户端用有界后台队列写无损NPZ，不阻塞等待磁盘写入。
+源时间戳、ROI像素SHA、裁剪模式／回退原因、Prompt和任务请求版本保留在各NPZ metadata中。
+队列丢帧、像素校验失败或写盘失败会记录为INCOMPLETE／FAILED；不会把缺失ROI当成成功录制。
+
+日志目录新增：
+
+```text
+policy_views/                 # 实际四路输入NPZ、写入状态
+video/four_view/head.mp4
+video/four_view/left_wrist.mp4
+video/four_view/right_wrist.mp4
+video/four_view/interaction.mp4
+video/four_view/four_cameras.mp4   # 头部／左腕；右腕／局部，2×2布局
+```
+
+原始ROSbag、`video/head.mp4`、左右腕MP4和`video/three_cameras.mp4`仍保留完整相机流。
+第四路是派生的策略输入，按真实推理请求产生，不是独立30Hz相机，也没有新增一个常驻ROS图像话题。
+四联与对应四份单路视频采用录制gate的单调时钟，从同一推理样本同步显示四个面板；
+30fps只用于播放，在下一份实际输入到来前保持上一帧，画面标注`policy input HELD`及保持时长。
+开始gate之前最后一份输入可作为首块的初始画面并单独记数；结束后样本排除。
+推理输入记录不等于动作已执行，过时／取消请求可能仍有记录，应按metadata中的任务版本与执行日志核对。
+正常停止后等待后台视频导出完成；ROI样本缺失或不完整时导出明确失败，原bag及NPZ保留。
+
+本次用119条20000真实GPU模型和新录制RGB／实测关节完成30次普通／RTC请求，
+录下30份四路输入、丢帧0；真实MP4导出得到五个视频，四联1280×720。
+采集gate为离线模拟，未运行真实ROS录制或机器人；不宣称全硬件链路已验收。
+开启四路记录的本机往返P95约132ms，工控机磁盘、ROS与GPU竞争仍需现场实测。

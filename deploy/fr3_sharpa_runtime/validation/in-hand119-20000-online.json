@@ -1,0 +1,97 @@
+{
+  "scope": "Actual in-hand119 recorded three-camera RGB and named measured joints; actual locator + GPU20000 policy + loopback transport + ordinary/RTC receipt; recorded timestamps, no ROS/SDK/robot, not task accuracy or real-time camera delay validation",
+  "queries": 30,
+  "passed": true,
+  "roundtrip_ms": {
+    "first": 113.45659894868731,
+    "warm_p50": 115.79786892980337,
+    "warm_p95": 130.7811476057395
+  },
+  "checkpoint_manifest_sha256": "d43cc4708b3019e99f5162a3fde6cf92c866835e42470fc1a7028f1b877accd0",
+  "normalization_sha256": "8b06358841e0570ff842883ab8a49a0fd3c9be7b68b59820d93741cd8a06ccde",
+  "tomato_model": {
+    "name": "in-hand119 四路五阶段 · 20000",
+    "training_date": "2026-11-18",
+    "subtask_variant": "in_hand_b_coarse",
+    "profile": "full-delta",
+    "action_dim": 58,
+    "action_horizon": 50,
+    "action_hz": 30,
+    "task_profile": "tomato-in-hand119",
+    "stage_contract": "tomato-in-hand-five-phases-v3",
+    "image_keys": [
+      "base_0_rgb",
+      "left_wrist_0_rgb",
+      "right_wrist_0_rgb",
+      "interaction_0_rgb"
+    ],
+    "visual_tokens": 1024,
+    "roi_profile": "in_hand119_right_truss_v1",
+    "offline_training_roi_uses_future": true,
+    "online_roi_required": true,
+    "evidence": "verified checkpoint-owned statistics and Orbax fingerprints"
+  },
+  "interaction_crop": {
+    "enabled": true,
+    "locator_sha256": "8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89fb",
+    "image_keys": [
+      "base_0_rgb",
+      "left_wrist_0_rgb",
+      "right_wrist_0_rgb",
+      "interaction_0_rgb"
+    ],
+    "uses_future_frames": false,
+    "roi_profile": "in_hand119_right_truss_v1",
+    "roi_revision": "in_hand119_right_truss_causal_v1"
+  },
+  "prompt_checks": {
+    "pickup": {
+      "prompt": "Right hand grasps and lifts the truss to the center",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 56.177509017288685
+    },
+    "harvest": {
+      "prompt": "Left hand picks tomatoes into left basket while right hand holds truss",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 53.590427967719734
+    },
+    "adjust": {
+      "prompt": "Right hand adjusts tomato truss position and orientation at the center",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 53.60187997575849
+    },
+    "return": {
+      "prompt": "Right hand returns the held object to the right plate",
+      "shape": [
+        50,
+        58
+      ],
+      "finite": true,
+      "infer_ms": 54.75553695578128
+    }
+  },
+  "rtc_warmed_up": true,
+  "roi_modes": {
+    "detected_local": 30
+  },
+  "task_simulation": "Five-stage actual Unix IPC and production TaskRTC with fake hardware owner; complete only after final stage and explicit operator command",
+  "regression_tests_passed": 705,
+  "regression_scope": "Full deploy/fr3_sharpa_runtime/tests suite",
+  "browser_verified": true,
+  "javascript_syntax_check": true,
+  "branch": "codex/tomato-in-hand119-deploy",
+  "base_commit": "9d5d4d2",
+  "hardware_started": false
+}

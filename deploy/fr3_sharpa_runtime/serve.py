@@ -60,9 +60,8 @@ def main() -> None:
         import os
         from .interaction_crop import InteractionCropper, locator_identity
         _, locator_sha = locator_identity(os.environ.get("SHARPA_CROP_LOCATOR", ""))
-        metadata["interaction_crop"] = {"enabled": True, "locator_sha256": locator_sha,
-            "image_keys": metadata["tomato_model"]["image_keys"], "uses_future_frames": False,
-            "roi_revision": InteractionCropper.revision}
+        from .interaction_crop import crop_capabilities
+        metadata["interaction_crop"] = crop_capabilities(metadata["tomato_model"], locator_sha)
     if args.check_only:
         print(json.dumps(metadata, indent=2))
         if args.report:
@@ -91,7 +90,9 @@ def main() -> None:
     elif args.enable_paper_rtc:
         from .paper_rtc import PaperRTCPolicy
         policy_options["policy_class"] = PaperRTCPolicy
-    from .task_stages import ACTION_PROMPTS
+    from .task_stages import ACTION_PROMPTS, IN_HAND_PROMPTS
+    if (metadata.get("tomato_model") or {}).get("task_profile") == "tomato-in-hand119":
+        ACTION_PROMPTS = IN_HAND_PROMPTS
     default_prompt = ACTION_PROMPTS["pickup"] if metadata.get("tomato_model") else config.DEFAULT_PROMPT
     policy = policy_config.create_trained_policy(
         training, config.CHECKPOINT, norm_stats=stats, default_prompt=default_prompt,
@@ -106,8 +107,7 @@ def main() -> None:
         from .interaction_crop import InteractionCropper, attach_cropper
         cropper = InteractionCropper.from_environment(config.NORM_STATS)
         attach_cropper(policy, cropper)
-        metadata["interaction_crop"] = {"enabled": True, "locator_sha256": cropper.locator_sha256,
-                                        "image_keys": list(training.model.image_keys), "uses_future_frames": False}
+        metadata["interaction_crop"] = crop_capabilities(metadata["tomato_model"], cropper.locator_sha256)
     result = policy.infer(observation)
     from .protocol import as_finite_action_chunk
     actions = as_finite_action_chunk(result["actions"])

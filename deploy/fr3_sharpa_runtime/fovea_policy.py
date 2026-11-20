@@ -1,7 +1,5 @@
 """Stateless current-frame cropping; the client commits predicted boxes after execution."""
 
-import hashlib
-import json
 from pathlib import Path
 import threading
 import time
@@ -20,53 +18,7 @@ from openpi.shared import nnx_utils
 from openpi.shared import normalize
 from openpi.subtasks import fovea
 
-
-def checkpoint_contract(checkpoint):
-    checkpoint = Path(checkpoint).expanduser().resolve(strict=True)
-    record = json.loads((checkpoint / "assets/fovea_contract.json").read_text())
-    contract = record["contract"]
-    expected = {
-        "version": fovea.VERSION,
-        "image_keys": list(fovea.IMAGE_KEYS),
-        "source_size": [640, 400],
-        "action_dim": 58,
-        "action_horizon": 50,
-        "action_hz": 30,
-        "execute_steps": fovea.EXECUTE_STEPS,
-        "box_loss_weight": 0.1,
-        "location_start": 256000,
-        "bins": 1024,
-        "initial_box": list(fovea.INITIAL_BOX),
-        "memory_enabled": False,
-        "crop_expansion": 1.5,
-        "coordinate_order": "ymin_xmin_ymax_xmax",
-        "source_coordinates": "normalized_xyxy",
-        "token_coordinates": "padded_full224",
-        "target_priors": {"left_basket": list(fovea.LEFT_BASKET), "right_plate": list(fovea.RIGHT_PLATE)},
-    }
-    if (
-        contract != expected
-        or not record.get("training_checkpoint")
-        or record["action_semantics"] != "delta_arm_joint_target_absolute_hand"
-    ):
-        raise ValueError("Matching trained Fovea v1 checkpoint contract required")
-    asset = record["norm_asset_id"]
-    if not isinstance(asset, str) or Path(asset).name != asset or asset in (".", ".."):
-        raise ValueError("Invalid checkpoint normalization asset")
-    stats = checkpoint / "assets" / asset / "norm_stats.json"
-    if hashlib.sha256(stats.read_bytes()).hexdigest() != record["norm_stats_sha256"]:
-        raise ValueError("Checkpoint normalization identity changed")
-    if not (checkpoint / "params/_METADATA").is_file():
-        raise ValueError("Complete Orbax parameter checkpoint required")
-    return {
-        "foveation": contract,
-        "checkpoint": str(checkpoint),
-        "norm_stats": str(stats),
-        "labels_manifest_sha256": record["labels_manifest_sha256"],
-        "action_representation": "absolute_joint_position",
-        "rtc_supported": False,
-        "memory_enabled": False,
-    }
+from .fovea_contract import checkpoint_contract
 
 
 class FoveaPolicy:
@@ -138,7 +90,7 @@ class FoveaPolicy:
         except ValueError:
             next_box = box
             valid = False
-        return {
+        response = {
             "actions": actions,
             "policy_timing": {"infer_ms": elapsed},
             "foveation_tokens": result["foveation_tokens"],
@@ -152,6 +104,15 @@ class FoveaPolicy:
                 "source_size": [w, h],
             },
         }
+        if context.get("record_roi") is True:
+            from .four_view_recording import pixel_sha
+            response["recording_roi"] = {"pixels": crop, "metadata": {
+                "mode": "fovea-predicted-box", "roi_pixel_sha256": pixel_sha(crop),
+                "source_monotonic_ns": context.get("source_monotonic_ns"),
+                "used_box": box.tolist(), "next_box": next_box.tolist(),
+                "prediction_valid": valid,
+            }}
+        return response
 
 
 def load_policy(checkpoint):

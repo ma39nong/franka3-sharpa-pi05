@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from openpi_client import rtc
 
-from deploy.fr3_sharpa_runtime.stage_handoff import StageTimeline, BRIDGE_STEPS, DT, validate_command_step
+from deploy.fr3_sharpa_runtime.stage_handoff import StageTimeline, BRIDGE_STEPS, DT, prepare_rtc_entry, validate_command_step
 
 
 def actions(offset=0.0):
@@ -33,6 +33,100 @@ def test_switch_revokes_receipt_and_forbids_old_prefix():
         t.install(actions(), rtc.make_receipt(ctx), 1.6, task_epoch=1)
     with pytest.raises(ValueError, match="prefix"):
         t.snapshot(1.6, delay_steps=5, schedule="exp", weight=5)
+
+
+def test_queued_switch_finishes_old_chunk_and_holds_last_dispatched_target():
+    t = timeline()
+    original = t.actions.copy()
+    boundary = t.begin_switch(1, "next", 1.15, finish_chunk=True)
+    end = boundary["finish_chunk_at"]
+    assert end == pytest.approx(1 + 49 * DT)
+    assert boundary["deadline"] - end == pytest.approx(0.75)
+    assert not t.status(end - DT)["handoff"]["tail_finished"]
+    np.testing.assert_allclose(t.sample(end - DT), original[48], atol=1e-8)
+    np.testing.assert_allclose(t.sample(end + DT), original[49], atol=1e-8)
+    assert not t.status(end + DT)["handoff"]["tail_finished"]
+    actual = t.sample(end + DT) - np.float32(0.00001)
+    t.mark_dispatched(end + DT, actual)
+    assert t.status(end + 2 * DT)["handoff"]["tail_finished"]
+    np.testing.assert_array_equal(t.sample(end + 2 * DT), actual)
+    result = t.prepare_handoff(actions(0.2), {**boundary, "captured_monotonic_s": end + DT},
+                               end + 2 * DT, end + 2 * DT, actual, 0.7, lambda window: None,
+                               limit_step=lambda previous, target: previous + np.clip(target - previous, -.02, .02))
+    assert result["accepted"] and t.applied_token is None
+    t.sample(result["bridge_end"])
+    assert t.applied_token == boundary["token"]
+
+
+def test_rejected_rtc_entry_keeps_original_timeline_and_allows_fresh_inference():
+    t = timeline()
+    old_status = t.status(1.5)
+    context = t.snapshot(1.3, delay_steps=5, schedule="exp", weight=5)
+    bad = actions()
+    bad[6, 4] = -3
+
+    def prepare(candidate, skipped):
+        if candidate[skipped, 4] < -2.87630335:
+            raise ValueError("native joint limits reject")
+        return candidate, 0
+
+    result = t.install(bad, rtc.make_receipt(context), 1.5, task_epoch=0, prepare_entry=prepare)
+    assert result["rejected"] is True
+    assert t.status(1.5) == old_status
+    assert t.pending is None
+    retry = t.snapshot(1.51, delay_steps=5, schedule="exp", weight=5)
+    assert t.install(actions(), rtc.make_receipt(retry), 1.65,
+                     task_epoch=0, prepare_entry=prepare)["generation"] == old_status["generation"] + 1
+
+
+def test_rtc_entry_smooths_hand_jump_without_moving_endpoint_or_future():
+    candidate = actions(0.01)
+    last = candidate[5].copy()
+    last[36] += 0.44
+
+    def validate(window):
+        for previous, command in zip(window, window[1:]):
+            validate_command_step(previous, command, 0.7)
+
+    blended, steps = prepare_rtc_entry(candidate, 5, last, 0.7, lambda window: None, validate)
+    assert steps >= 3
+    np.testing.assert_array_equal(blended[5], last)
+    np.testing.assert_array_equal(blended[5 + steps:], candidate[5 + steps:])
+    validate(blended[5:6 + steps])
+
+
+def test_rtc_install_accepts_worker_using_previous_admission_keyword():
+    t = timeline()
+    context = t.snapshot(1.3, delay_steps=5, schedule="exp", weight=5)
+    admitted = []
+    result = t.install(actions(), rtc.make_receipt(context), 1.5, task_epoch=0,
+                       admit_entry=lambda command: admitted.append(command.copy()))
+    np.testing.assert_array_equal(admitted[0], actions()[result["skipped"]])
+
+
+def test_rtc_dispatch_projects_native_boundary_and_rate_limits_every_tick(monkeypatch):
+    from deploy.fr3_sharpa_runtime import sdk_direct
+    from deploy.fr3_sharpa_runtime.ros_transport import RTCCommandLimiter
+
+    core = SimpleNamespace(safety=SimpleNamespace(
+        LOWER_LIMITS=np.full(14, -2.87630335), UPPER_LIMITS=np.full(14, 2.87630335)))
+    monkeypatch.setitem(sys.modules, "teleop_core", core)
+    monkeypatch.setitem(sys.modules, "teleop_core.safety", core.safety)
+    monkeypatch.setattr(sdk_direct, "hand_joint_limits", lambda: np.tile([-1.0, 1.0], (22, 1)))
+    limiter = RTCCommandLimiter(0.7)
+    original = actions()
+    original[12:, 4] = -2.887339
+    original[12:, 36] = 0.7
+    projected = limiter.project(original)
+    assert original[12, 4] < -2.87630335 <= float(projected[12, 4])
+    previous = original[11].copy()
+    previous[4] = -2.85
+    for _ in range(15):
+        command = limiter.step_toward(previous, original[12])
+        validate_command_step(previous, command, 0.7)
+        assert -2.87630335 <= float(command[4]) <= float(previous[4])
+        previous = command
+    np.testing.assert_array_equal(previous, projected[12])
 
 
 def test_bridge_both_boundaries_and_clock_do_not_restart():
@@ -71,6 +165,58 @@ def test_quintic_blend_matches_endpoint_velocities():
     vtarget = (candidate.sample(end) - candidate.sample(end - h)) / h
     np.testing.assert_allclose(v0, vsource, atol=3e-5)
     np.testing.assert_allclose(vend, vtarget, atol=3e-5)
+
+
+def test_bridge_extends_within_deadline_when_six_ticks_are_too_fast():
+    t = timeline()
+    boundary = t.begin_switch(1, "next", 1.5)
+    result = arm(t, offset=0.11)
+    assert result["bridge_steps"] > BRIDGE_STEPS
+    assert result["bridge_end"] + DT < boundary["deadline"]
+    previous = t.sample(result["bridge_start"])
+    for i in range(1, result["bridge_steps"] + 1):
+        command = t.sample(result["bridge_start"] + i * DT)
+        validate_command_step(previous, command, 0.7)
+        previous = command
+    assert t.applied_token == boundary["token"]
+
+
+@pytest.mark.parametrize("node", [8, 31])
+def test_online_range_check_rejects_bridge_but_defers_unplayed_tail(node):
+    t = timeline()
+    ticket = dict(t.begin_switch(1, "next", 1.5), captured_monotonic_s=1.5)
+    prediction = actions(0.002)
+    prediction[node, 4] = 0.020
+    last = t.sample(1.56 - DT)
+
+    def validate(window):
+        if np.any(window[:, 4] > 0.010):
+            raise ValueError("native joint limits reject")
+
+    def handoff():
+        return t.prepare_handoff(prediction, ticket, 1.55, 1.56, last, 0.7, validate,
+                                 validate_continuation=False)
+
+    if node == 8:
+        with pytest.raises(ValueError, match="native joint limits"):
+            handoff()
+        assert t.bridge is None
+    else:
+        assert handoff()["accepted"]
+        np.testing.assert_array_equal(t.bridge["candidate"].actions, prediction)
+
+
+def test_online_bridge_defers_hand_jump_in_future_rtc_suffix():
+    t = timeline()
+    ticket = dict(t.begin_switch(1, "next", 1.5), captured_monotonic_s=1.5)
+    prediction = actions(0.002)
+    prediction[31, 36] += 0.44
+    last = t.sample(1.56 - DT)
+    result = t.prepare_handoff(prediction, ticket, 1.55, 1.56, last, 0.7,
+                               lambda window: None, validate_continuation=False)
+    assert result["accepted"]
+    with pytest.raises(ValueError, match="Sharpa slew limit"):
+        validate_command_step(prediction[30], prediction[31], 0.7)
 
 
 def test_future_arm_speed_does_not_reject_valid_bridge_but_actual_step_is_checked():

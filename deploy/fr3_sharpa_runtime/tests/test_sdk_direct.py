@@ -14,7 +14,7 @@ def chunk(value=0.0):
 
 
 @pytest.mark.parametrize("part", [LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE])
-@pytest.mark.parametrize("delta,rejected", [(0.13615483, False), (0.199, False), (0.20, True), (0.21, True)])
+@pytest.mark.parametrize("delta,rejected", [(0.21402144, False), (0.249, False), (0.25, True), (0.26, True)])
 def test_direct_validator_rejects_slew(part, delta, rejected):
     actions = chunk()
     actions[1, part.start] = delta

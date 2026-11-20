@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-20",
+  "branch": "tomato-foveavla-v1",
+  "base_main_commit": "ada11bc",
+  "validation": {
+    "full_runtime_suite": {
+      "passed": 727,
+      "skipped": 5
+    },
+    "final_targeted_suite": {
+      "passed": 54
+    },
+    "ui_actual_browser": [
+      "Fovea preset selected archived 20000 checkpoint",
+      "checkpoint inspected with matching identity",
+      "start inference warmed real GPU model and UI showed ready",
+      "selected adjust_in_hand and preview enabled start execution without model restart",
+      "stop inference released GPU0"
+    ],
+    "real_model_replay": "fovea_v1_h15_ui_real_model_replay_20261120.json",
+    "hardware_started": false,
+    "hardware_executed": false
+  },
+  "limitations": [
+    "Hardware and ROS camera/execution acceptance remains outstanding",
+    "Fovea stage changes require stop, cleanup, select stage and restart execution",
+    "No RTC, Memory or Agent online switching",
+    "Workstation must have a local complete Fovea checkpoint; Git does not ship weights"
+  ]
+}

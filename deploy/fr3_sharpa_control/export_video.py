@@ -1,5 +1,6 @@
 """Export timestamp-aligned camera videos after the recording writer is closed."""
 import argparse
+import json
 from pathlib import Path
 
 from .recording import write_json
@@ -99,6 +100,12 @@ def export(directory, *, fps=30, width=640, height=360):
             report["frames"] += 1
         if seen != set(CAMERAS.values()) or not report["frames"]:
             raise RuntimeError(f"缺少相机数据：{sorted(set(CAMERAS.values())-seen)}")
+        run_path = directory/'run.json'
+        run = json.loads(run_path.read_text()) if run_path.exists() else {}
+        four_required = bool((run.get('model',{}).get('tomato_model') or {}).get('online_roi_required'))
+        if four_required or (directory/'policy_views').is_dir():
+            from .export_four_view import export_four_views
+            report['four_view'] = export_four_views(directory,fps=fps,width=width,height=height)
         report["status"] = "COMPLETE"
     except Exception as error:
         report.update(status="FAILED", error=str(error))

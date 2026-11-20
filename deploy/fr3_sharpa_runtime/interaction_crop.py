@@ -19,6 +19,16 @@ LOCATOR_SHA256 = '8b06ab9aa07e513e73d305b7c2f3ca5d060ee0a05ed5ab08a822df144a1d89
 PRIMARY_SHA256 = '19069cbd6fb9f1763798585685e3606bbe57e05f2a99ffdecd015e31bc04c305'
 
 
+def crop_capabilities(tomato_model, locator_sha):
+    in_hand = tomato_model.get('task_profile') == 'tomato-in-hand119'
+    result = dict(enabled=True, locator_sha256=locator_sha,
+                  image_keys=tomato_model['image_keys'], uses_future_frames=False,
+                  roi_revision='in_hand119_right_truss_causal_v1' if in_hand else InteractionCropper.revision)
+    if in_hand:
+        result['roi_profile'] = 'in_hand119_right_truss_v1'
+    return result
+
+
 def locator_identity(root):
     path = Path(root).expanduser().resolve()
     weight = path / 'model.pt'
@@ -35,11 +45,20 @@ def locator_identity(root):
 class InteractionCropper:
     revision = 'causal_hand_recovery_v2'
 
-    def __init__(self, locator, state_scale, *, status_dir=None):
+    def __init__(self, locator, state_scale, *, status_dir=None, roi_profile="old100_r11"):
+        if roi_profile not in ("old100_r11", "in_hand119_right_truss_v1"):
+            raise ValueError("Unknown online ROI profile")
+        self.roi_profile = roi_profile
         from .crop_selector import CurrentInteractionSelector
         self.locator = locator
         self.state_scale = state_scale
         self.selector_type = CurrentInteractionSelector
+        self.window_type = CausalCropWindow
+        if roi_profile == "in_hand119_right_truss_v1":
+            from .in_hand_crop import InHandInteractionSelector, InHandCropWindow
+            self.selector_type = InHandInteractionSelector
+            self.window_type = InHandCropWindow
+            self.revision = "in_hand119_right_truss_causal_v1"
         self.status_dir = Path(status_dir) if status_dir else None
         self.counts = Counter()
         self.last = {}
@@ -49,7 +68,7 @@ class InteractionCropper:
     def reset(self):
         self.selector = self.selector_type(self.state_scale)
         self.recovery = CausalHandRecovery()
-        self.window = CausalCropWindow()
+        self.window = self.window_type()
         self.previous_stamp = None
         self.previous_shape = None
         self.previous_session = None
@@ -64,9 +83,11 @@ class InteractionCropper:
         torch.set_num_threads(4)
         cv2.setNumThreads(1)
         locator = RgbLocator(root, device=os.environ.get('SHARPA_CROP_DEVICE', 'cuda'))
+        from .tomato_model import IN_HAND_STATS_SHA256
+        roi_profile = 'in_hand119_right_truss_v1' if hashlib.sha256(Path(norm_stats).read_bytes()).hexdigest() == IN_HAND_STATS_SHA256 else 'old100_r11'
         stats = json.loads(Path(norm_stats).read_text())['norm_stats']['state']
         instance = cls(locator, np.asarray(stats['q99'])-np.asarray(stats['q01']),
-                       status_dir=os.environ.get('SHARPA_CROP_STATUS_DIR'))
+                       status_dir=os.environ.get('SHARPA_CROP_STATUS_DIR'), roi_profile=roi_profile)
         instance.locator_sha256 = sha
         if os.environ.get("SHARPA_SHARED_ROI_DIR"):
             from .shared_roi import SharedROIWriter
@@ -103,14 +124,15 @@ class InteractionCropper:
             image, gray, detections, stamp, self.frame, self.locator,
             sorted({1, *self.selector.roles}))
         recovery_ms = (time.perf_counter()-detector_start)*1000-detector_ms
-        roi = self.selector.select(hands, state, width, height, rgb=image)
+        roi_detections = hands + ([d for d in detections if d.get('label') == 3] if self.roi_profile != 'old100_r11' else [])
+        roi = self.selector.select(roi_detections, state, width, height, rgb=image)
         mode = 'current_full_fallback'
         if roi['valid']:
             selected_sources = [sources[role] for role in roi['roles']]
             mode = ('tracked_local' if 'tracked' in selected_sources else
                     'reacquired_local' if 'reacquired' in selected_sources else 'detected_local')
             evidence = [roi['interaction_box']]
-            if any(source != 'detected' for source in selected_sources):
+            if self.roi_profile == 'old100_r11' and any(source != 'detected' for source in selected_sources):
                 # During recovery retain other visible hands as context. Offline
                 # r11 exception repair also restored omitted hand context.
                 evidence += [hand['box'] for hand in hands if sources[hand['label']] != 'tracked']
@@ -118,10 +140,13 @@ class InteractionCropper:
             window_evidence = np.r_[boxes[:,:2].min(0), boxes[:,2:].max(0)].tolist()
             box = self.window.select(window_evidence, width, height, stamp,
                                      uncertain=any(source != 'detected' for source in selected_sources))
+            if box is None:
+                mode = 'current_full_fallback'
+                roi['reason'] = 'interaction_exceeds_local_window_limit'
         else:
             box = None
             window_evidence = None
-            self.window = CausalCropWindow()
+            self.window = self.window_type()
         pixels = native_crop(image, box) if box is not None else image
         if box is not None:
             crop = cv2.resize(pixels, (224, 224), interpolation=cv2.INTER_AREA)
@@ -132,6 +157,7 @@ class InteractionCropper:
             crop = np.zeros((224,224,3),np.uint8)
             x,y = (224-rw)//2,(224-rh)//2
             crop[y:y+rh,x:x+rw] = cv2.resize(image,(rw,rh),interpolation=cv2.INTER_AREA)
+        self.record_pixels = crop.copy() if context.get('record_roi') else None
         self.counts[mode] += 1
         self.last = dict(mode=mode, local_roi_valid=box is not None, image_available=True,
                          source_camera='cam0', source_size=[width,height], crop_box=box,
@@ -145,7 +171,7 @@ class InteractionCropper:
                          crop_total_ms=(time.perf_counter()-start)*1000,
                          counts=dict(self.counts), updated_wall_time=time.time(),
                          locator_sha256=getattr(self, 'locator_sha256', None),
-                         training_roi='offline_bidirectional_r11', independent_semantic_accuracy_measured=False)
+                         roi_profile=self.roi_profile, training_roi=('full-block-right-truss-180-v1' if self.roi_profile != 'old100_r11' else 'offline_bidirectional_r11'), independent_semantic_accuracy_measured=False)
         if self.status_dir:
             self.status_dir.mkdir(parents=True, exist_ok=True)
             preview = cv2.resize(image, (448, 252))

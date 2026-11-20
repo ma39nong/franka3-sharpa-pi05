@@ -90,7 +90,7 @@ class TaskRTC:
             observation = self.capture(ticket, timeout)
         if not self.control.valid(ticket):
             raise InterruptedError("superseded after observation; no policy request sent")
-        observation = dict(observation, prompt=ticket["prompt"])
+        observation = dict(observation, prompt=ticket["prompt"], _task_record={k:ticket[k] for k in ("run_id", "request_id", "stage_id", "stage_version")})
         age = time.monotonic_ns() - observation["_captured_monotonic_ns"]
         if not 0 <= age <= 200_000_000:
             raise ValueError("Task observation stale before inference")
@@ -216,6 +216,11 @@ class TaskRTC:
             if self.streaming:
                 status = self.backend.status()
                 c.data["chunk_progress"] = status
+                if (self.boundary and "finish_chunk_at" in self.boundary
+                        and not (status.get("handoff") or {}).get("tail_finished")
+                        and self.bridge_ticket is None):
+                    c.data["inference_status"] = "finishing_chunk"
+                    return True
                 if self.bridge_ticket is not None:
                     if status.get("applied_token") == self.boundary["token"]:
                         with c.installation(self.bridge_ticket) as valid:
@@ -278,6 +283,11 @@ class TaskRTC:
                     if context is not None:
                         raise ValueError("Cross-stage first chunk cannot use old RTC guidance")
                     installed = self.backend.handoff(actions, self.boundary, captured)
+                    if installed.get("rejected") is True and installed.get("token") == self.boundary["token"]:
+                        c.data["inference_status"] = "discarded"
+                        self.record("online_switch_rejected", inference_request_id=ticket["request_id"],
+                                    installation=installed, reason=installed["reason"])
+                        return True
                     if (
                         installed.get("accepted") is not True
                         or installed.get("applied") is not False
@@ -296,6 +306,11 @@ class TaskRTC:
                     return True
                 if context is not None:
                     installed = self.backend.install(actions, receipt, ticket)
+                    if installed.get("rejected") is True:
+                        c.data["inference_status"] = "discarded"
+                        self.record("inference_rejected", inference_request_id=ticket["request_id"],
+                                    installation=installed, reason=installed["reason"])
+                        return True
                     self.delays.append(installed["skipped"])
                 self.chunk_count += 1
                 c.activate(ticket, f"{ticket['stage_version']}:{installed['generation']}")
@@ -522,8 +537,11 @@ class SDKTaskBackend:
         )
 
     def begin_switch(self, epoch, request_id):
+        request = dict(operation="stream_switch", task_epoch=epoch, request_id=request_id)
+        if getattr(self.args, "task_mode", None) == "tomato-in-hand119":
+            request["finish_chunk"] = True
         return self.worker.request(
-            dict(operation="stream_switch", task_epoch=epoch, request_id=request_id), timeout=0.5
+            request, timeout=0.5
         )["boundary"]
 
     def handoff(self, actions, boundary, captured):

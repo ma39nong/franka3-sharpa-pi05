@@ -1,0 +1,42 @@
+{
+  "status": "PASS",
+  "hardware_executed": false,
+  "warmed_up": true,
+  "identity": "90eb63269d2da6245fc1b71ad3620e5f051f0c5745e17c6b366e29f807a7a5ed",
+  "action_shape": [
+    50,
+    58
+  ],
+  "foveation": {
+    "session_id": "1c3ce5adaa0f4fdca9121430348f0fac",
+    "query_index": 0,
+    "used_box": [
+      0.25,
+      0.22,
+      0.83,
+      0.86
+    ],
+    "next_box": [
+      0.6001955034213099,
+      0.4147605083088954,
+      0.7996089931573802,
+      0.829227761485826
+    ],
+    "prediction_valid": true,
+    "execute_steps": 15,
+    "source_size": [
+      640,
+      400
+    ]
+  },
+  "four_view_recording": {
+    "status": "COMPLETE",
+    "accepted": 1,
+    "written": 1,
+    "dropped": 0,
+    "error": null,
+    "stream": "actual_policy_inputs",
+    "cadence": "one_per_inference_response",
+    "pixel_encoding": "lossless_uint8_rgb_npz"
+  }
+}

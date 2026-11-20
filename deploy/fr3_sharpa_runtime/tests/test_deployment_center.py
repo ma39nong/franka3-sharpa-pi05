@@ -43,12 +43,10 @@ def repository(tmp_path):
     shared, full = root / "deploy/fr3_sharpa_runtime", root / "deploy/fr3_sharpa_full"
     shared.mkdir(parents=True)
     full.mkdir()
-    for file in (shared / "serve.sh", shared / "runtime.sh", full / "serve_soft.sh",
-                 full / "serve_async_soft.sh", full / "runtime_async_soft.sh"):
+    for file in (shared / "serve.sh", shared / "runtime.sh"):
         file.write_text("# Not an executable deployment; recipe tests only\n")
-    for file in (shared / "sdk_direct_motion_ros.py", shared / "async_soft_motion_ros.py"):
+    for file in (shared / "sdk_direct_motion_ros.py",):
         file.write_text("# RecordingGate integration marker\n")
-    (shared / "async_soft_stream.py").write_text("CAPABILITY = 'sharpa-async-soft-rolling-v3'\n")
     (shared / "camera_startup.py").write_text("# Camera startup gate fixture\n")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
@@ -106,20 +104,16 @@ def test_training_record_digest_and_model_must_match(checkpoint, tmp_path):
 
 
 @pytest.mark.parametrize("semantics", ["absolute", "delta"])
-@pytest.mark.parametrize("mode", ["serial", "rtc", "soft-serial", "soft-async"])
-def test_all_eight_recipes_preserve_mode_meaning(repository, checkpoint, semantics, mode):
-    steps = 26 if mode.startswith("soft-") else 20
+@pytest.mark.parametrize("mode", ["serial", "rtc"])
+def test_serial_and_rtc_recipes_preserve_mode_meaning(repository, checkpoint, semantics, mode):
+    steps = 20
     config = plans.DeploymentSettings(str(repository), str(checkpoint), semantics=semantics, mode=mode,
                                       speed="fast" if mode == "rtc" else "slow", steps=steps)
     plan = config.plan()
     assert plan["model"]["profile"] == ("full" if semantics == "absolute" else "full-delta")
     assert plan["execute"][plan["execute"].index("--execute-steps") + 1] == str(steps)
-    assert plan["port"] == (18765 if semantics == "absolute" else 18767) + (100 if mode == "soft-async" else 0)
+    assert plan["port"] == (18765 if semantics == "absolute" else 18767)
     assert "--enable-rtc" in plan["service"] if mode == "rtc" else "--enable-rtc" not in plan["service"]
-    if mode == "soft-serial":
-        assert "cubic" in plan["execute"] and "paper-rolling" in plan["execute"]
-    if mode == "soft-async":
-        assert "runtime_async_soft.sh" in plan["execute"][1] and "15" not in plan["execute"]
 
 
 @pytest.mark.parametrize("options", [{"mode": "serial", "steps": 51}, {"mode": "rtc", "speed": "slow"},
@@ -129,10 +123,10 @@ def test_incompatible_configuration_never_generates_execution(repository, checkp
         settings(repository, checkpoint, **options).plan()
 
 
-def test_old_async_fifteen_node_protocol_is_rejected(repository, checkpoint):
-    (repository / "deploy/fr3_sharpa_runtime/async_soft_stream.py").write_text("sharpa-async-soft-v1")
-    with pytest.raises(ValueError, match="rolling-v3"):
-        settings(repository, checkpoint, mode="soft-async", steps=26).plan()
+@pytest.mark.parametrize("mode", ["soft-serial", "soft-async"])
+def test_retired_soft_modes_are_rejected(repository, checkpoint, mode):
+    with pytest.raises(ValueError, match="不支持的模式"):
+        settings(repository, checkpoint, mode=mode, steps=26).plan()
 
 
 def test_atomic_minute_names_do_not_overwrite_runs(tmp_path):
@@ -603,4 +597,80 @@ def test_only_supported_home_plan_defers_video_gate(repository, checkpoint, monk
     plan = settings(repository, checkpoint, initialization="home").plan()
     assert "--defer-camera-check" in plan["hardware"]
     assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="current").plan()["hardware"]
-    assert "--defer-camera-check" not in settings(repository, checkpoint, initialization="home", mode="soft-async", steps=26).plan()["hardware"]
+
+
+@pytest.fixture
+def fovea_checkpoint(checkpoint):
+    from deploy.fr3_sharpa_runtime.fovea_contract import checkpoint_contract
+    from openpi.subtasks import fovea
+    contract = {"version": fovea.VERSION, "image_keys": list(fovea.IMAGE_KEYS), "source_size": [640, 400],
+                "action_dim": 58, "action_horizon": 50, "action_hz": 30, "execute_steps": 15,
+                "box_loss_weight": 0.1, "location_start": 256000, "bins": 1024,
+                "initial_box": list(fovea.INITIAL_BOX), "memory_enabled": False, "crop_expansion": 1.5,
+                "coordinate_order": "ymin_xmin_ymax_xmax", "source_coordinates": "normalized_xyxy",
+                "token_coordinates": "padded_full224",
+                "target_priors": {"left_basket": list(fovea.LEFT_BASKET), "right_plate": list(fovea.RIGHT_PLATE)}}
+    record = {"contract": contract, "training_checkpoint": True, "norm_asset_id": "stats",
+              "norm_stats_sha256": plans.fingerprint(checkpoint / "assets/stats/norm_stats.json"),
+              "labels_manifest_sha256": "test-labels", "action_semantics": "delta_arm_joint_target_absolute_hand"}
+    (checkpoint / "assets/fovea_contract.json").write_text(json.dumps(record))
+    checkpoint_contract(checkpoint)
+    return checkpoint
+
+
+def test_fovea_identity_requires_matching_type_and_tracks_contract(fovea_checkpoint):
+    found = plans.inspect_checkpoint(fovea_checkpoint)
+    assert found['supported_modes'] == ['fovea']
+    assert found['semantics'] == 'delta' and found['fovea']['foveation']['execute_steps'] == 15
+    for model_type in ('full', 'full-delta', 'paper-delta'):
+        with pytest.raises(ValueError):
+            plans.inspect_checkpoint(fovea_checkpoint, model_type=model_type)
+    path = fovea_checkpoint / 'assets/fovea_contract.json'
+    record = json.loads(path.read_text())
+    record['labels_manifest_sha256'] = 'different-labels'
+    path.write_text(json.dumps(record))
+    assert plans.inspect_checkpoint(fovea_checkpoint)['identity'] != found['identity']
+    record['contract']['execute_steps'] = 8
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match='contract'):
+        plans.inspect_checkpoint(fovea_checkpoint)
+
+
+def test_fovea_plan_binds_ui_stage_and_preserves_model_across_stages(repository, fovea_checkpoint):
+    runtime = repository / 'deploy/fr3_sharpa_runtime'
+    (runtime / 'fovea_serve.sh').write_text('# fixture')
+    from deploy.fr3_sharpa_runtime.task_stages import IN_HAND_PROMPTS
+    first = plans.DeploymentSettings(str(repository), str(fovea_checkpoint), mode='fovea', speed='fast', model_type='fovea').plan()
+    second = plans.DeploymentSettings(str(repository), str(fovea_checkpoint), mode='fovea', speed='fast', model_type='fovea', fovea_stage='harvest_1').plan()
+    assert first['port'] == 8010
+    assert first['service'][1].endswith('fovea_serve.sh')
+    assert '--fovea' in first['execute'] and '--broker-mode' not in first['execute']
+    assert IN_HAND_PROMPTS['harvest'] in second['execute']
+    assert first['approval'] != second['approval']
+    assert control.DeploymentController._model_identity(first) == control.DeploymentController._model_identity(second)
+    env = plans.plan_environment(first)
+    assert env['SHARPA_FULL_DELTA_CHECKPOINT'] == str(fovea_checkpoint)
+    assert 'fovea' in plans.repository_info(repository)['modes']
+    for changes in ({'speed': 'slow'}, {'steps': 8}, {'task_mode': 'tomato-b'}, {'fovea_stage': 'unknown'}, {'mode': 'rtc'}):
+        with pytest.raises(ValueError):
+            plans.DeploymentSettings(str(repository), str(fovea_checkpoint), **({'mode': 'fovea', 'speed': 'fast', 'model_type': 'fovea'} | changes)).plan()
+
+
+def test_fovea_ui_preset_has_no_implicit_launch(tmp_path):
+    from deploy.fr3_sharpa_control.ui import server_for
+    server = server_for(tmp_path, port=0)
+    try:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        info = json.load(urllib.request.urlopen(base + '/api/info'))
+        assert info['fovea_preset']['mode'] == 'fovea'
+        assert info['fovea_preset']['task_mode'] == 'none'
+        assert info['fovea_preset']['speed'] == 'fast'
+        assert not server.controller.snapshot()['model_running']
+        html = urllib.request.urlopen(base).read().decode()
+        assert 'Fovea · 预测框 · 20000步' in html and 'id="fovea_stage"' in html
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

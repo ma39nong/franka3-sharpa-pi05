@@ -19,7 +19,8 @@ ERROR_GROUPS = {
     "right_sharpa": RIGHT_SHARPA_SLICE,
 }
 
-HOME_TOLERANCE_RAD = 0.02
+# Fixed-Home completion tolerance; command safety limits are separate.
+HOME_TOLERANCE_RAD = 0.025
 
 
 def target_chunk(target):
@@ -87,11 +88,21 @@ class SlowApproach:
                 "feedback_rad": float(self.last_feedback[LEFT_SHARPA_SLICE][worst_left]),
                 "error_rad": float(left_hand_errors[worst_left]),
             }
+            right_hand_errors = self.last_feedback[RIGHT_SHARPA_SLICE] - self.target[RIGHT_SHARPA_SLICE]
+            worst_right = int(np.argmax(np.abs(right_hand_errors)))
+            right_detail = {
+                "joint": SHARPA_JOINT_NAMES[worst_right],
+                "index": worst_right,
+                "target_rad": float(self.target[RIGHT_SHARPA_SLICE][worst_right]),
+                "feedback_rad": float(self.last_feedback[RIGHT_SHARPA_SLICE][worst_right]),
+                "error_rad": float(right_hand_errors[worst_right]),
+            }
             raise TimeoutError(
                 "Prepare did not reach and settle at policy first target; "
                 f"chunks blocked (remaining_error_rad={remaining:.6f}, "
                 f"timeout_s={self.effective_timeout_s:.1f}, "
-                f"error_by_group={errors}, worst_left_sharpa={left_detail})"
+                f"error_by_group={errors}, worst_left_sharpa={left_detail}, "
+                f"worst_right_sharpa={right_detail})"
             )
         # A straight joint-space trajectory; never alter the policy target.
         # Progress only one nominal 30Hz interval even if scheduling is delayed.

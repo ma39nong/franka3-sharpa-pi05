@@ -14,11 +14,11 @@ import time
 import uuid
 
 from deploy.fr3_sharpa_runtime.task_control import task_rpc
-from deploy.fr3_sharpa_runtime.task_stages import PHASES
+from deploy.fr3_sharpa_runtime.task_stages import IN_HAND_AGENT_SOURCE, IN_HAND_PROFILE, IN_HAND_STAGES, PHASES
 
 LABELS = ("pickup", "harvest", "return", "adjust")
 CLASSES = (0, 1, 2, 3, 0, 1, 2)
-from .agent_settings import AgentSettings
+from .agent_settings import AgentSettings, IN_HAND_NORM, TAIRAN_PROVIDER
 from dataclasses import asdict
 
 
@@ -38,6 +38,9 @@ class DecisionGate:
         import math
 
         try:
+            if task.get("task_profile", "tomato-b") != "tomato-b":
+                self.reset()
+                return None
             t = packet["input_timestamp"]
             if (
                 packet["protocol"] != "tomato-stage-prediction-v1"
@@ -102,6 +105,43 @@ class DecisionGate:
             raise
 
 
+class InHandGate:
+    """Confirm the next action against the actually applied five-stage prompt."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.key = None
+        self.count = 0
+        self.last = None
+
+    def update(self, task, heads, meta, now):
+        if (not task or task["execution_state"] != "RUNNING" or task.get("communication_error")
+                or task.get("task_profile") != IN_HAND_PROFILE or task["active_stage"] != task["requested_stage"]):
+            self.reset()
+            return None
+        stamp = meta["timestamp"]
+        applied = task.get("active_applied_unix_s")
+        if (applied is None or stamp < applied or not 0 <= now - meta["captured_unix"] <= 2
+                or abs(meta["captured_unix"] - meta["ros_now"]) > 0.25):
+            self.reset()
+            return None
+        key = (task["run_id"], task["stage_version"], task["active_stage"])
+        if key != self.key or self.last is not None and not 0 < stamp - self.last <= 1.5:
+            self.reset()
+            self.key = key
+        self.last = stamp
+        following = next((after for before, after in zip(IN_HAND_STAGES, IN_HAND_STAGES[1:])
+                          if before.id == task["active_stage"]), None)
+        if following is None:
+            self.count = 0
+            return None
+        qualifies = all(head[following.action] >= 0.8 for head in heads.values())
+        self.count = self.count + 1 if qualifies else 0
+        return following.id if self.count >= 1 else None
+
+
 class AgentSupervisor:
     def __init__(self, controller):
         self.controller = controller
@@ -149,6 +189,9 @@ class AgentSupervisor:
                 if self.state["status"] != "ready" or time.time() - self.state.get("received_unix", 0) > 2:
                     raise ValueError("Agent 和实时观测尚未就绪")
                 task = self._task()
+                profile = IN_HAND_PROFILE if self.settings["provider"] == TAIRAN_PROVIDER else "tomato-b"
+                if task and task.get("task_profile", "tomato-b") != profile:
+                    raise ValueError("119条五阶段使用 tairan；100 条七阶段使用 mengxiang")
                 if (
                     not task
                     or task["execution_state"] not in ("READY", "RUNNING")
@@ -160,8 +203,6 @@ class AgentSupervisor:
             self.epoch += 1
             self.gate.reset()
             self.state.update(confirmations=0)
-            if hasattr(self.gate, "describe"):
-                self.state.update(self.gate.describe())
             if self.state["status"] == "ready":
                 self.state["message"] = "手动控制" if mode == "manual" else "自动切换已启用；等待新鲜连续证据"
             self.event("mode_changed", epoch=self.epoch)
@@ -176,7 +217,7 @@ class AgentSupervisor:
 
     def start(self, settings):
         options = AgentSettings.parse(settings, self.controller.root)
-        report = options.check()
+        report = options.check(self.controller.root)
         if not report["ready"]:
             raise ValueError(
                 "环境检查未通过：" + "；".join(c["name"] + "：" + c["detail"] for c in report["checks"] if not c["ok"])
@@ -184,12 +225,7 @@ class AgentSupervisor:
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError("Agent 已在运行或正在停止")
-            if options.provider == "tairan":
-                from .tairan_gate import TairanGate
-
-                self.gate = TairanGate(options.repository, options.handshake_config)
-            else:
-                self.gate = DecisionGate()
+            self.gate = InHandGate() if options.provider == TAIRAN_PROVIDER else DecisionGate()
             self.settings = asdict(options)
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             temp = self.settings_path.with_suffix(".tmp")
@@ -208,7 +244,7 @@ class AgentSupervisor:
                 mode="manual",
                 message=f"加载 {options.provider} Agent",
                 provider=options.provider,
-                future_horizon_s=1.0 if options.provider == "tairan" else 1.5,
+                future_horizon_s=1.0 if options.provider == TAIRAN_PROVIDER else 1.5,
                 profile=options.profile,
                 confirmations=0,
                 directory=str(self.directory),
@@ -220,7 +256,7 @@ class AgentSupervisor:
         return self.snapshot()
 
     def check_environment(self, values):
-        return AgentSettings.parse(values, self.controller.root).check()
+        return AgentSettings.parse(values, self.controller.root).check(self.controller.root)
 
     def _development_check(self, replies, options, expected):
         """Actual model smoke test using a recorded NPZ; never calls task_rpc."""
@@ -279,33 +315,33 @@ class AgentSupervisor:
             self.gate.reset()
             self.closed.set()
             self.state.update(status="stopping", message="正在停止 Agent", confirmations=0)
-        if was_auto:
+            if self.settings.get("provider") == TAIRAN_PROVIDER:
+                self.state.update(current=None, future=None, roi_fallback_frames=None)
+        if was_auto and self.settings.get("provider") != TAIRAN_PROVIDER:
             self.controller.stop()
         return self.snapshot()
 
     def _fail(self, error):
         with self.lock:
-            with suppress(Exception):
-                self._policy_state()
             was_auto = self.mode == "auto"
             self.mode = "manual"
             self.epoch += 1
             self.gate.reset()
             self.state.update(status="failed", message=str(error), confirmations=0)
+            if self.settings.get("provider") == TAIRAN_PROVIDER:
+                self.state.update(current=None, future=None, roi_fallback_frames=None)
             with suppress(Exception):
                 self.event("fault", error=str(error))
-        if was_auto:
+        if was_auto and self.settings.get("provider") != TAIRAN_PROVIDER:
             self.controller.stop()
-
-    def _policy_state(self):
-        if hasattr(self.gate, "take_events"):
-            for event in self.gate.take_events():
-                self.event("tairan_policy", detail=event)
-            self.state.update(self.gate.describe())
 
     def _submit_target(self, target, task):
         if self.mode != "auto" or not target:
             return
+        inhand = self.settings.get("provider") == TAIRAN_PROVIDER
+        profile = IN_HAND_PROFILE if inhand else "tomato-b"
+        if task.get("task_profile", "tomato-b") != profile:
+            raise ValueError("Agent 与当前任务不匹配")
         result = task_rpc(
             self.controller.task_endpoint,
             self.controller.task_run_id,
@@ -313,12 +349,9 @@ class AgentSupervisor:
             request_id="agent-" + uuid.uuid4().hex,
             expected_version=task["stage_version"],
             target=target,
-            source="agent",
+            source=IN_HAND_AGENT_SOURCE if inhand else "agent",
         )
-        if hasattr(self.gate, "submitted"):
-            self.gate.submitted(result)
-        else:
-            self.gate.reset()
+        self.gate.reset()
         self.state.update(
             message="已请求 " + target + "，等待执行端实际接入",
             requested_stage=result["requested_stage"],
@@ -326,27 +359,12 @@ class AgentSupervisor:
         )
         self.event("stage_requested", target=target, stage_version=result["stage_version"])
 
-    def _poll_strategy(self):
-        with self.lock:
-            if self.mode != "auto" or not hasattr(self.gate, "poll"):
-                return
-            task = self._task()
-            if not task:
-                raise RuntimeError("tairan 任务执行端失联")
-            if task["execution_state"] in ("STOPPING", "STOPPED", "COMPLETED", "FAULT", "PAUSING", "PAUSED"):
-                self.set_mode("manual")
-                return
-            target = self.gate.poll(task, now=time.time())
-            self._submit_target(target, task)
-            self._policy_state()
-
     def _read(self, replies, timeout):
         deadline = time.monotonic() + timeout
         while not self.closed.is_set():
             try:
                 line = replies.get(timeout=min(0.1, max(0.001, deadline - time.monotonic())))
             except queue.Empty:
-                self._poll_strategy()
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Agent 模型响应超时")
                 continue
@@ -355,8 +373,51 @@ class AgentSupervisor:
             return json.loads(line)
         raise InterruptedError("Agent stopped")
 
+    def _display_inhand(self, packet, meta, expected, epoch):
+        if (packet.get("protocol") != "tomato-stage-prediction-v1"
+                or packet.get("model_version") != expected or packet.get("control_eligible") is not False
+                or packet.get("labels") != list(LABELS) or packet.get("future_horizon_s") != 1.0
+                or packet.get("input_timestamp") != meta["timestamp"]):
+            raise ValueError("119 条观察结果身份不符")
+        with self.lock:
+            if self.closed.is_set():
+                return
+            if not packet.get("valid"):
+                self.gate.reset()
+                self.state.update(status="waiting", message=packet.get("error", "观测无效"),
+                                  current=None, future=None, roi_fallback_frames=None, confirmations=0)
+                return
+            heads = {}
+            for name in ("current", "future"):
+                values = packet[name + "_probabilities"]
+                if (len(values) != len(LABELS) or any(not 0 <= value <= 1 for value in values)
+                        or abs(sum(values) - 1) > 1e-5):
+                    raise ValueError("119 条四类概率格式无效")
+                heads[name] = dict(zip(LABELS, values))
+            self.state.update(status="ready", message="已收到观察结果",
+                              received_unix=time.time(), latency_ms=packet["latency_ms"],
+                              observation_id=meta["observation_id"],
+                              source_age_s=meta["source_age_s"],
+                              roi_fallback_frames=packet["roi_fallback_frames"], **heads)
+            self.event("prediction", packet=packet)
+            if self.mode != "auto" or epoch != self.epoch:
+                return
+            try:
+                task = self._task()
+                if not task or task["execution_state"] in ("STOPPING", "STOPPED", "COMPLETED", "FAULT", "PAUSING", "PAUSED"):
+                    self.set_mode("manual")
+                    return
+                target = self.gate.update(task, heads, meta, time.time())
+                self.state.update(confirmations=self.gate.count)
+                self._submit_target(target, task)
+            except (OSError, RuntimeError, ValueError) as error:
+                self.set_mode("manual")
+                self.state["message"] = f"自动切换已退出：{error}"
+                self.event("auto_exit", error=str(error))
+
     def _run(self, root, python, checkpoint, pretrained, options=None):
         logs = []
+        inhand = options is not None and options.provider == TAIRAN_PROVIDER
         try:
             import hashlib
 
@@ -375,18 +436,14 @@ class AgentSupervisor:
                 "--pretrained-dir",
                 str(pretrained),
             ]
-            if options and options.provider == "tairan":
-                env["PYTHONPATH"] = str(self.controller.root)
+            if inhand:
+                deploy = self.controller.root
+                env.update(PYTHONPATH=str(deploy), PYTHONDONTWRITEBYTECODE="1")
                 command = [
-                    str(python),
-                    "-m",
-                    "deploy.fr3_sharpa_control.tairan_service",
-                    "--repository",
-                    str(root),
-                    "--checkpoint",
-                    str(checkpoint),
-                    "--pretrained-dir",
-                    str(pretrained),
+                    str(python), "-m", "deploy.fr3_sharpa_control.inhand119_agent_service",
+                    "--repository", str(root), "--checkpoint", str(checkpoint),
+                    "--pretrained-dir", str(pretrained), "--locator", str(deploy / ".deployment/crop_locator"),
+                    "--norm-stats", str(deploy / IN_HAND_NORM),
                 ]
             self.process = subprocess.Popen(
                 command,
@@ -431,7 +488,10 @@ class AgentSupervisor:
             setup = overlay / "setup.bash"
             if not setup.is_file():
                 raise FileNotFoundError(setup)
-            roi_args = (' --shared-roi-directory '+shlex.quote(str(self.controller.root / '.deployment/shared_roi'))) if ready.get('requires_local_roi') else ''
+            if inhand:
+                roi_args = " --native-agent-roi"
+            else:
+                roi_args = (' --shared-roi-directory '+shlex.quote(str(self.controller.root / '.deployment/shared_roi'))) if ready.get('requires_local_roi') else ''
             inner = f'source {shlex.quote(str(setup))}; export PYTHONPATH={shlex.quote(str(self.controller.root))}:"${{PYTHONPATH:-}}"; exec python -m deploy.fr3_sharpa_runtime.agent_history --directory {shlex.quote(str(self.directory))}{roi_args}'
             log = (self.directory / "observation.log").open("w")
             logs.append(log)
@@ -462,11 +522,10 @@ class AgentSupervisor:
             )
             with self.lock:
                 self.state.update(
-                    status="waiting", model_version=expected, control_eligible=ready.get("control_eligible",True), requires_local_roi=ready.get("requires_local_roi",False), message="模型已加载；等待匹配的相机、关节及所需ROI历史"
+                    status="waiting", model_version=expected, control_eligible=inhand or ready.get("control_eligible",True), requires_local_roi=ready.get("requires_local_roi",False), message="模型已加载；等待匹配的相机、关节及所需ROI历史"
                 )
             last = None
             while not self.closed.wait(0.025):
-                self._poll_strategy()
                 if self.process.poll() is not None or self.collector.poll() is not None:
                     raise RuntimeError("Agent 或观测进程退出，请查看日志")
                 path = self.directory / "latest.json"
@@ -478,13 +537,15 @@ class AgentSupervisor:
                         auto = self.mode == "auto"
                         self.gate.reset()
                         self.state.update(status="waiting", message=meta.get("error", "观测已过期"), confirmations=0)
-                    if auto:
+                        if inhand:
+                            self.state.update(current=None, future=None, roi_fallback_frames=None)
+                    if auto and not inhand:
                         raise RuntimeError("自动模式实时观测丢失：" + self.state["message"])
                     continue
                 if meta["observation_id"] == last:
                     continue
                 last = meta["observation_id"]
-                if abs(meta["captured_unix"] - meta["ros_now"]) > 0.25:
+                if not inhand and abs(meta["captured_unix"] - meta["ros_now"]) > 0.25:
                     raise ValueError("ROS 与 Unix 时钟域不一致，拒绝改写源时间")
                 with self.lock:
                     epoch = self.epoch
@@ -497,9 +558,12 @@ class AgentSupervisor:
                 )
                 self.process.stdin.write(json.dumps(request) + "\n")
                 self.process.stdin.flush()
-                packet = self._read(replies, 3)
+                packet = self._read(replies, 15 if inhand else 3)
                 if packet.get("observation_id") != last or packet.get("session_id") != self.directory.name:
                     raise ValueError("Agent 响应与观测身份不符")
+                if inhand:
+                    self._display_inhand(packet, meta, expected, epoch)
+                    continue
                 with self.lock:
                     task = self._task()
                     if self.mode == "auto" and (
@@ -517,8 +581,8 @@ class AgentSupervisor:
                     if epoch != self.epoch:
                         continue
                     observed_task = display_task
-                    if self.settings.get("provider") == "tairan" and self.mode != "auto":
-                        observed_task = {**display_task, "execution_state": "READY"}
+                    if display_task.get("task_profile", "tomato-b") != "tomato-b":
+                        observed_task = dict(run_id="observe119", stage_version=0, active_stage="pickup_1", requested_stage="pickup_1", execution_state="READY")
                     target = self.gate.update(packet, observed_task, now=time.time(), model_version=expected)
                     self.state.update(
                         status="ready",
@@ -536,7 +600,6 @@ class AgentSupervisor:
                     )
                     self.event("prediction", packet=packet, task=display_task, target=target, epoch=epoch)
                     self._submit_target(target, task)
-                    self._policy_state()
         except InterruptedError:
             pass
         except Exception as error:

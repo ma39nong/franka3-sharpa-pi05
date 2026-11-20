@@ -5,11 +5,19 @@ source "$ROOT/deploy/fr3_sharpa_runtime/model_env.sh" "$@"
 set -- "${SHARPA_MODEL_ARGS[@]}"
 # Explicit alternate-model validation must happen before any hardware session is entered.
 if [[ "$SHARPA_MODEL_PROFILE" != full ]]; then
+  fovea=false
+  for argument in "$@"; do
+    [[ "$argument" != --fovea ]] || fovea=true
+  done
   previous=""
   for argument in "$@"; do
     if [[ "$argument" == --execute || "$argument" == --mode=execute || ( "$previous" == --mode && "$argument" == execute ) ]]; then
       interpreter="${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}"
-      "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only > /dev/null
+      if $fovea; then
+        "$interpreter" -m deploy.fr3_sharpa_runtime.fovea_serve --checkpoint "$SHARPA_FULL_DELTA_CHECKPOINT" --check-only > /dev/null
+      else
+        "$interpreter" -m deploy.fr3_sharpa_runtime.serve --check-only > /dev/null
+      fi
       break
     fi
     previous="$argument"
