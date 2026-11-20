@@ -293,8 +293,8 @@ sudo bash /home/user/gello_upper_body_teleop/ops/setup/install_dds_buffers.sh
 
 ```bash
 git fetch origin
-git switch codex/tomato-in-hand119-deploy
-git pull --ff-only origin codex/tomato-in-hand119-deploy
+git switch main
+git pull --ff-only origin main
 bash deploy/fr3_sharpa_control/ui.sh --port 8787
 ```
 
@@ -319,7 +319,7 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ## complete100 四路 r11：手动阶段＋实时局部 RGB
 
-本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。历史开发分支为 `tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发；现已包含在 `codex/tomato-in-hand119-deploy`，旧分支已删除。
+本次目标是让旧100条训练的四路策略在推理时持续收到第四路图，阶段仍由操作员手动切换，无需启动Agent。历史开发分支为 `tomato-four-view-live-crop`，从已接入双Agent的 `197ffca` 开发；现已包含在 `main`，旧分支已删除。
 
 训练权重固定为 `pi05_sharpa_tomato_complete100_b_crop_fullft_delta_r1_offline_r11 / tomato_complete100_b_crop_delta_r1_offline_r11_s42_b256_s16000_c4000 / 16000`。服务按checkpoint自带统计、Orbax manifest和参数元数据的SHA256识别该权重，启用四路及1024视觉token。同次4000/8000/12000也登记四路身份，GPU推理本次只验收16000；未知r11组合会报错，避免误按三路加载。模型输入顺序与训练一致：`base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb, interaction_0_rgb`；文本上限256，58D实测state，50步、30Hz；双臂Delta在输出端还原绝对目标，手部保持Absolute。
 
@@ -335,8 +335,8 @@ Tairan 启动先用原 `tools.verify_tairan_deployment` 校验9文件、训练�
 
 ```bash
 git fetch origin
-git switch codex/tomato-in-hand119-deploy
-git pull --ff-only origin codex/tomato-in-hand119-deploy
+git switch main
+git pull --ff-only origin main
 ```
 
 权重和定位器不进入Git。工作机权重应放本地SSD：网络挂载盘逐次文件身份检查实测增加约50–80ms，可能耗尽200ms观测新鲜度余量；不能仅挂载服务器目录代替本地复制。权重从28复制 `16000/params`、`16000/assets`，也可保留原完整checkpoint。28源目录：
@@ -434,7 +434,7 @@ Agent仓库`tools.serve_tomato_agent`可自动识别B0或新Memory checkpoint；
 
 ## 119条手中调整：独立五阶段四路部署（2026-11-18）
 
-部署分支为 `codex/tomato-in-hand119-deploy`，从 `tomato-four-view-live-crop/9d5d4d2` 开发。
+当前部署分支为 `main`。119条部署最初在 `codex/tomato-in-hand119-deploy` 开发，基于 `tomato-four-view-live-crop/9d5d4d2`；2026-11-20将这条部署线设为 `main`，原分支名已删除。
 旧100条七阶段、原英文Prompt及ROI保持原契约。119条使用独立任务模式 `tomato-in-hand119`：
 
 | 阶段ID | 操作员看到的阶段 | 训练英文Prompt |
