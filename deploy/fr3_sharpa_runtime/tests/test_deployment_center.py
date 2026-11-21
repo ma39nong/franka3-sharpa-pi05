@@ -59,6 +59,38 @@ def settings(repository, checkpoint, **kwargs):
     return plans.DeploymentSettings(str(repository), str(checkpoint), semantics="absolute", **kwargs)
 
 
+@pytest.mark.parametrize('mode', ['serial','rtc'])
+def test_unified_prompt_reaches_runtime_without_stage_or_agent(repository, checkpoint, mode):
+    prompt='Pick one tomato into the basket; keep the rest of the truss still'
+    p=settings(repository,checkpoint,task_mode='none',prompt=prompt,image_input='three',
+               mode=mode,speed='fast').plan()
+    for name in ['check','execute']:
+        args=p[name]
+        assert args[args.index('--prompt')+1]==prompt
+        assert '--task-mode' not in args and '--initial-stage' not in args
+    assert p['settings']['prompt']==prompt
+    assert p['model']['input_views']==3
+    changed=settings(repository,checkpoint,task_mode='none',prompt='Harvest the whole truss',
+                     image_input='three',mode=mode,speed='fast').plan()
+    assert p['approval']!=changed['approval']
+
+
+def test_unified_prompt_required_and_four_view_never_inferred_from_name(repository,checkpoint):
+    with pytest.raises(ValueError,match='统一 Prompt'):
+        settings(repository,checkpoint,prompt='  ').plan()
+    with pytest.raises(ValueError,match='图像输入'):
+        plans.inspect_checkpoint(checkpoint,image_input='four')
+    assert plans.inspect_checkpoint(checkpoint,image_input='three')['input_views']==3
+
+
+def test_verified_four_view_route_cannot_be_selected_as_three(checkpoint,monkeypatch):
+    from deploy.fr3_sharpa_runtime import tomato_model
+    monkeypatch.setattr(tomato_model,'identify',lambda *args:dict(online_roi_required=True))
+    assert plans.inspect_checkpoint(checkpoint,image_input='four')['input_views']==4
+    with pytest.raises(ValueError,match='图像输入'):
+        plans.inspect_checkpoint(checkpoint,image_input='three')
+
+
 def test_camera_policy_is_explicit_and_frozen_in_approval(repository, checkpoint):
     exclusive = settings(repository, checkpoint, camera_policy="exclusive").plan()
     free = settings(repository, checkpoint, camera_policy="require_free").plan()
@@ -646,6 +678,11 @@ def test_fovea_plan_binds_ui_stage_and_preserves_model_across_stages(repository,
     assert first['service'][1].endswith('fovea_serve.sh')
     assert '--fovea' in first['execute'] and '--broker-mode' not in first['execute']
     assert IN_HAND_PROMPTS['harvest'] in second['execute']
+    assert second['execute'].count('--prompt') == 1
+    assert first['model']['input_views'] == 4
+    assert plans.inspect_checkpoint(fovea_checkpoint, image_input='four')['input_views'] == 4
+    with pytest.raises(ValueError, match='四路'):
+        plans.inspect_checkpoint(fovea_checkpoint, image_input='three')
     assert first['approval'] != second['approval']
     assert control.DeploymentController._model_identity(first) == control.DeploymentController._model_identity(second)
     env = plans.plan_environment(first)

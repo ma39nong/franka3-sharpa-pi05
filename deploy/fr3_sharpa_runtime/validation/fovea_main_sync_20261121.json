@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-21",
+  "base_main_commit": "5473050fa96158c3d88ccab39af31d2a0183b844",
+  "branch": "tomato-foveavla-v1",
+  "runtime_tests": {
+    "passed": 731,
+    "skipped": 5
+  },
+  "browser_verified": [
+    "Latest main layout and folded historical presets retained",
+    "Fovea selects and locks four image inputs",
+    "Fovea hides unified prompt, locator and Agent stage panels",
+    "Ordinary staged mode remains selectable after leaving Fovea"
+  ],
+  "regressions_checked": [
+    "Fovea action CLI has exactly one --prompt bound to selected stage",
+    "Fovea rejects explicit three-view input"
+  ],
+  "hardware_started": false,
+  "new_gpu_run": false
+}

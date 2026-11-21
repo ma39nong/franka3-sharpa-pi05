@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from deploy.fr3_sharpa_runtime.config import DEFAULT_PROMPT
 
 
 KNOWN_STATS = {
@@ -63,7 +64,9 @@ def allocate_run(root, *, now=None):
             attempt += 1
 
 
-def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto"):
+def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto", image_input="auto"):
+    if image_input not in ("auto", "three", "four"):
+        raise ValueError("图像输入请选择自动核对、三路或四路")
     choices = {"auto": None, "full": "absolute", "full-delta": "delta", "lora": "absolute",
                "paper-delta": "delta", "train-rtc-absolute": "absolute", "train-rtc-delta": "delta",
                "train-paper-rtc": "delta", "fovea": "delta"}
@@ -119,7 +122,9 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             if (model_fields.get("execute_steps"), model_fields.get("action_dim"), model_fields.get("action_horizon"),
                     data_fields.get("extra_delta_transform"), record["inputs"].get("norm_stats_sha256")) != (15, 58, 50, True, fingerprint(stats)):
                 raise ValueError("训练记录与Fovea 50/15 Delta契约不一致")
-        return {"tomato_model": None, "fovea": contract, "train_rtc": None, "paper_algorithm": None,
+        if image_input == "three":
+            raise ValueError("Fovea需要四路图像输入，不能选择三路")
+        return {"tomato_model": None, "input_views": 4, "fovea": contract, "train_rtc": None, "paper_algorithm": None,
                 "supported_modes": ["fovea"], "normalization": "global_quantile",
                 "checkpoint": str(root), "norm_stats": str(stats), "identity": contract["fovea_identity"],
                 "manifest_sha256": fingerprint(manifest), "stats_sha256": fingerprint(stats),
@@ -134,6 +139,11 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
     from deploy.fr3_sharpa_runtime.tomato_model import identify
     tomato = identify(stats_sha, manifest_sha, fingerprint(metadata))
+    # These are the input routes implemented by the loader. A path name or
+    # normalization shared by two experiments cannot activate a fourth camera.
+    input_views = 4 if tomato and tomato.get("online_roi_required") else 3
+    if image_input != "auto" and {"three": 3, "four": 4}[image_input] != input_views:
+        raise ValueError("所选图像输入与已接入的权重加载配置不匹配；四路模型需核验局部图配置，不能按数据条数推断")
     if tomato and (trained or algorithm or (manual and model_type != "full-delta") or semantics == "absolute"):
         raise ValueError("已识别的 B Coarse 必须使用普通 Full Delta，不能覆盖为 Absolute 或训练 RTC")
     identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm) + (trained["record_sha256"] if trained else "")).encode()).hexdigest()
@@ -189,7 +199,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
     if tomato and tomato.get("online_roi_required"):
         supported_modes = ["serial", "rtc"]
-    return {"tomato_model": tomato, "train_rtc": trained, "supported_modes": supported_modes,
+    return {"tomato_model": tomato, "input_views": input_views, "train_rtc": trained, "supported_modes": supported_modes,
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
@@ -222,6 +232,8 @@ class DeploymentSettings:
     crop_locator: str = ""
     crop_device: str = "cuda"
     fovea_stage: str = "pickup"
+    prompt: str = DEFAULT_PROMPT
+    image_input: str = "auto"
 
     def plan(self, *, cache=None, machine_root=None):
         repo = Path(self.repository).expanduser().resolve()
@@ -231,6 +243,8 @@ class DeploymentSettings:
         first_stage = "pickup" if task_profile == "tomato-in-hand119" else "pickup_1"
         if self.task_mode not in ("none", "tomato-b", "tomato-in-hand119") or type(self.recovery_confirmed) is not bool:
             raise ValueError("任务模式或人工恢复确认无效")
+        if not isinstance(self.prompt, str) or (self.task_mode == "none" and self.mode != "fovea" and not self.prompt.strip()):
+            raise ValueError("统一 Prompt 部署需要填写训练时使用的英文指令")
         if self.initial_stage != first_stage and (self.task_mode == "none" or not self.recovery_confirmed):
             raise ValueError("非首次阶段启动需要明确人工恢复确认并重新核对配置")
         if self.camera_policy not in ("exclusive", "require_free"):
@@ -254,7 +268,8 @@ class DeploymentSettings:
         if self.rtc_initial_delay_steps and self.mode not in ("train-rtc", "train-paper-rtc"):
             raise ValueError("RTC初始延迟仅适用于Train RTC执行模式")
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
-                                   cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type)
+                                   cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type,
+                                   image_input=self.image_input)
         if self.crop_device not in ("cuda", "cpu"):
             raise ValueError("局部图设备仅支持cuda/cpu")
         if model.get("tomato_model") and model["tomato_model"].get("online_roi_required"):
@@ -271,7 +286,7 @@ class DeploymentSettings:
                     or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
                 raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
             if model["tomato_model"].get("task_profile", "tomato-b") != self.task_mode:
-                raise ValueError("权重与任务流程不匹配：100条用七阶段，119条用五阶段")
+                raise ValueError("权重与任务流程不匹配：放回盘中调整使用七阶段，手中调整使用五阶段")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:
@@ -328,6 +343,8 @@ class DeploymentSettings:
                    "--execute-steps", str(self.steps), "--num-chunks", str(self.rounds)]
         if self.task_mode != "none":
             options += ["--task-mode", self.task_mode, "--initial-stage", self.initial_stage]
+        elif self.mode != "fovea":
+            options += ["--prompt", self.prompt]
         for argument, path in home_files.items():
             options += [argument, path]
         branch = subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True).strip()
