@@ -118,9 +118,14 @@ class RTCTimeline:
             "source_sha256": self.digest,
         }
 
-    def snapshot(self, now, *, delay_steps, schedule, weight, hard_prefix=False):
+    def snapshot(self, now, *, delay_steps, schedule, weight, hard_prefix=False, observed_at=None):
         if self.pending is not None:
             raise ValueError("Only one RTC prediction may be outstanding")
+        if observed_at is not None:
+            if not np.isfinite(observed_at) or not 0 <= now - observed_at <= 0.2:
+                raise ValueError("RTC observation clock must be recent and causal")
+            self.sample(now)  # Do not revive a plan exhausted at IPC receipt.
+            now = observed_at
         phase = self.phase(now)
         self.sample_phase(phase)
         length = math.ceil(50 - phase)

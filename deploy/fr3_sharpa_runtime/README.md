@@ -2,7 +2,7 @@
 
 ## FoveaVLA v1 独立入口（`tomato-foveavla-v1` 分支）
 
-本任务保留四路RGB和58D动作；第一轮使用固定主相机框，随后模型联合输出动作与下一轮框。没有历史帧Memory。当前契约版本为 `tomato-foveavla-rgb-v1-h15`，旧50/8 checkpoint与回执不能混用。主相机必须提供640×400原分辨率；全图/局部图共用训练侧的裁剪和location坐标实现。模型输出50步，串行执行前15步后才提交下一框并采集新图；重试不会推进框，无效预测沿用上一有效框。服务端不缓存历史画面，客户端只保留待执行/已执行框。
+本任务保留四路RGB和58D动作；第一轮使用固定主相机框，随后模型联合输出动作与下一轮框。没有历史帧Memory。当前契约版本为 `tomato-foveavla-rgb-v1-h15`，旧50/8 checkpoint与回执不能混用。主相机必须提供640×400原分辨率；全图/局部图共用训练侧的裁剪和location坐标实现。模型输出50步。以下独立入口为串行对照，执行前15步后才提交下一框并采集新图；重试不会推进框，无效预测沿用上一有效框。服务端不缓存历史画面，客户端只保留待执行/已执行框。
 
 ```bash
 # 新训练checkpoint才包含此契约；旧纯动作权重会被入口拒绝。
@@ -12,11 +12,13 @@ python -m deploy.fr3_sharpa_runtime.fovea_serve --checkpoint <新Fovea-step目�
 python -m deploy.fr3_sharpa_runtime.run --fovea --check
 ```
 
-现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 15 --speed fast --num-chunks 0`。这是独立指令模式，按阶段手动停机更换指令。UI另支持五阶段任务与tairan Agent自动推进：串行执行确认15步后换阶段，重置初始框；不接入七阶段任务，不支持时间拉伸或RTC。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
+现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 15 --speed fast --num-chunks 0`。这是串行对照的独立指令模式，按阶段手动停机更换指令。UI默认另提供Fovea异步五阶段与tairan Agent可选自动推进：同阶段持续执行与RTC前缀引导并行，未来框绑定源图像后15步的观测时刻；阶段交接沿用main有限轨迹桥并重置初始框。不接入七阶段任务，不支持时间拉伸。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
 
 初始框为源图归一化xyxy `[0.25,0.22,0.83,0.86]`。checkpoint拥有 `assets/fovea_contract.json`、数据清单指纹及归一化指纹，服务校验15步偏移、相机顺序、坐标格式和初始框。训练框含固定篮子/盘子区域等弱监督先验；改变场景需要重新检查。配置示例在 `examples/foveavla-v1-client.json`。
 
 2026-11-20已接入从main同步的部署UI：可通过Fovea快捷配置、阶段下拉框与启动推理/执行按钮操作，详见[控制台说明](../fr3_sharpa_control/README.md#fovea-联合动作与预测框)。最终20000步训练权重已经过GPU加载与真实图像回放；尚无本次实机成功率验收。`validation/fovea_v1_h8_architecture_smoke.json`仍只是旧50/8结构记录，不能当作当前训练权重的效果证据。
+
+异步模式由UI的 `fovea-async` 配方启动：服务增加 `--enable-async`，任务执行增加 `--fovea-async`（五阶段、连续轮数0）。协调器在 `fovea_async.py`，复用既有SDKTaskBackend/TaskRTC，独立管理相机源时间和未来框。仅当动作安装被接受后允许使用对应框，阶段或桥接变轨后重新获取固定框观测。服务必须完成普通与引导采样预热；没有新增训练参数或改变原checkpoint契约。具体时效阈值、UI步骤与验证边界见控制台Fovea章节。
 
 统一UI、自动启动/停止、第一段chunk开始录制及自动视频导出见 [部署控制台](../fr3_sharpa_control/README.md)；完整三终端场景命令见 [部署启动指令](../../部署启动指令.md)。
 

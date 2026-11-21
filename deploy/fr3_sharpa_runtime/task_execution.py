@@ -37,12 +37,16 @@ def execute_task(args):
     worker = backend = engine = None
     try:
         fovea_task = getattr(args, "fovea", False)
+        fovea_async = getattr(args, "fovea_async", False)
         if fovea_task:
             from .fovea_runtime import FoveaRuntime
             from .fovea_task import FoveaTask, FoveaTaskBackend
             if profile != "tomato-in-hand119":
                 raise ValueError("Fovea Agent task requires the five-stage profile")
-            runtime = FoveaRuntime(args.policy_url, expected_checkpoint=os.environ.get("SHARPA_FOVEA_CHECKPOINT"))
+            if fovea_async:
+                from .fovea_async import FoveaAsyncRuntime, FoveaAsyncTask
+            runtime_class = FoveaAsyncRuntime if fovea_async else FoveaRuntime
+            runtime = runtime_class(args.policy_url, expected_checkpoint=os.environ.get("SHARPA_FOVEA_CHECKPOINT"))
             runtime.inspect_metadata()
         else:
             runtime = SharpaRuntime(args.policy_url)
@@ -67,12 +71,12 @@ def execute_task(args):
             f"export PYTHONPATH={shlex.quote(str(root))}:{shlex.quote(str(run.GELLO_REPO))}:"
             f'{shlex.quote(str(core))}:"${{PYTHONPATH:-}}"; '
             "exec python -m deploy.fr3_sharpa_runtime.sdk_direct_motion_ros --enable-hardware"
-            + ("" if fovea_task else " --online-task-handoff")
+            + ("" if fovea_task and not fovea_async else " --online-task-handoff")
         )
         worker = MotionWorker(
             ["pixi", "run", "-e", "ros2", "bash", "-lc", inner], cwd=run.ROS_PROJECT, protocol_fd=True
         )
-        backend = FoveaTaskBackend(worker, args) if fovea_task else SDKTaskBackend(worker, args)
+        backend = FoveaTaskBackend(worker, args) if fovea_task and not fovea_async else SDKTaskBackend(worker, args)
         worker.request({"operation": "ready"}, timeout=20)
         run._start_observation_worker(args.ros_overlay)
         if args.initialization == "home":
@@ -105,7 +109,7 @@ def execute_task(args):
         wait_for_cameras()
         observe()  # Use the observation worker's bounded first-snapshot budget.
 
-        engine_class = FoveaTask if fovea_task else TaskRTC
+        engine_class = FoveaAsyncTask if fovea_async else FoveaTask if fovea_task else TaskRTC
         engine = engine_class(task, runtime, backend, observe, args, directory)
         if task.data["execution_state"] != "IDLE":
             raise RuntimeError("任务在初始化期间已停止")

@@ -14,7 +14,7 @@ KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
     "4f760f029a44ea0c0e25d4001ccd74d7aeb0a925403d0a60e48bb03ed3a78551": "delta",
 }
-MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "fovea": "Fovea · 动作与预测框"}
+MODES = {"serial": "普通串行", "rtc": "RTC", "paper-rtc": "Paper RTC", "train-rtc": "Train RTC · 训练前缀条件", "train-paper-rtc": "Train Paper RTC · 训练前缀＋Paper", "fovea": "Fovea · 串行对照", "fovea-async": "Fovea · 异步动作与预测框"}
 
 
 def repository_info(path):
@@ -23,6 +23,8 @@ def repository_info(path):
     modes = ["serial", "rtc"]
     if (repo / "deploy/fr3_sharpa_runtime/fovea_serve.sh").is_file():
         modes.append("fovea")
+        if (repo / "deploy/fr3_sharpa_runtime/fovea_async.py").is_file():
+            modes.append("fovea-async")
     if (repo / "deploy/fr3_sharpa_runtime/train_rtc.py").is_file():
         modes.append("train-rtc")
     if (repo / "deploy/fr3_sharpa_runtime/train_paper_rtc.py").is_file():
@@ -125,7 +127,7 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
         if image_input == "three":
             raise ValueError("Fovea需要四路图像输入，不能选择三路")
         return {"tomato_model": None, "input_views": 4, "fovea": contract, "train_rtc": None, "paper_algorithm": None,
-                "supported_modes": ["fovea"], "normalization": "global_quantile",
+                "supported_modes": ["fovea", "fovea-async"], "normalization": "global_quantile",
                 "checkpoint": str(root), "norm_stats": str(stats), "identity": contract["fovea_identity"],
                 "manifest_sha256": fingerprint(manifest), "stats_sha256": fingerprint(stats),
                 "finetune_mode": "full", "semantics": "delta", "profile": "full-delta",
@@ -243,7 +245,7 @@ class DeploymentSettings:
         first_stage = "pickup" if task_profile == "tomato-in-hand119" else "pickup_1"
         if self.task_mode not in ("none", "tomato-b", "tomato-in-hand119") or type(self.recovery_confirmed) is not bool:
             raise ValueError("任务模式或人工恢复确认无效")
-        if not isinstance(self.prompt, str) or (self.task_mode == "none" and self.mode != "fovea" and not self.prompt.strip()):
+        if not isinstance(self.prompt, str) or (self.task_mode == "none" and self.mode not in ("fovea", "fovea-async") and not self.prompt.strip()):
             raise ValueError("统一 Prompt 部署需要填写训练时使用的英文指令")
         if self.initial_stage != first_stage and (self.task_mode == "none" or not self.recovery_confirmed):
             raise ValueError("非首次阶段启动需要明确人工恢复确认并重新核对配置")
@@ -251,10 +253,15 @@ class DeploymentSettings:
             raise ValueError("相机策略仅支持独占接管或要求设备空闲")
         if self.mode not in MODES or self.initialization not in ("home", "current") or self.speed not in ("slow", "medium", "fast"):
             raise ValueError("不支持的模式、启动姿态或速度")
-        if self.mode == "fovea":
+        if self.mode in ("fovea", "fovea-async"):
             stage(self.fovea_stage, "tomato-in-hand119")
             if self.speed != "fast" or self.steps != 15 or self.task_mode not in ("none", "tomato-in-hand119") or self.rtc_initial_delay_steps:
-                raise ValueError("Fovea要求原速30Hz、15步；仅支持独立指令或五阶段Agent任务，不支持RTC")
+                raise ValueError("Fovea要求原速30Hz、15步；串行支持独立指令，异步仅支持五阶段；请使用Fovea专用模式")
+        if self.mode == "fovea-async":
+            if self.task_mode != "tomato-in-hand119":
+                raise ValueError("Fovea异步需要五阶段任务，独立指令请选择串行对照")
+            if not (repo / "deploy/fr3_sharpa_runtime/fovea_async.py").is_file():
+                raise ValueError("所选仓库缺少Fovea异步适配")
         if type(self.rounds) is not int or self.rounds < 0 or type(self.steps) is not int or type(self.record) is not bool:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
         if self.mode == "serial" and not 1 <= self.steps <= 50:
@@ -281,7 +288,7 @@ class DeploymentSettings:
             model["supported_modes"] = ["serial", "rtc"]
         if not model["profile"]:
             raise ValueError(model["evidence"])
-        if self.task_mode != "none" and self.mode != "fovea":
+        if self.task_mode != "none" and self.mode not in ("fovea", "fovea-async"):
             if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
                     or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
                 raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
@@ -289,7 +296,7 @@ class DeploymentSettings:
                 raise ValueError("权重与任务流程不匹配：放回盘中调整使用七阶段，手中调整使用五阶段")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
-        if self.mode == "fovea" and self.task_mode != "none":
+        if self.mode in ("fovea", "fovea-async") and self.task_mode != "none":
             if not model.get("fovea") or self.rounds != 0:
                 raise ValueError("Fovea五阶段任务要求Fovea权重和连续轮数0")
             if not (repo / "deploy/fr3_sharpa_runtime/fovea_task.py").is_file():
@@ -305,15 +312,19 @@ class DeploymentSettings:
         service_args, runtime_args = [], []
         port = {"full": 18765, "lora": 18766, "full-delta": 18767}[model["profile"]]
         description = f"预测50，执行前{self.steps}，再观测推理"
-        if self.mode == "fovea":
+        if self.mode in ("fovea", "fovea-async"):
             service = shared + "fovea_serve.sh"
             port = 8010
             service_args = ["--checkpoint", model["checkpoint"], "--port", str(port)]
             runtime_args = ["--fovea", "--policy-url", f"ws://127.0.0.1:{port}",
                             "--prompt", stage(self.fovea_stage, "tomato-in-hand119").prompt]
             description = f"Fovea · {stage(self.fovea_stage, 'tomato-in-hand119').label}：预测50、执行15后更新框；停止后选择下一阶段"
-        if self.mode == "fovea" and self.task_mode != "none":
+        if self.mode in ("fovea", "fovea-async") and self.task_mode != "none":
             description = "Fovea五阶段：完成15步后切换；可选Agent自动推进，不使用RTC"
+        if self.mode == "fovea-async":
+            service_args += ["--enable-async"]
+            runtime_args += ["--fovea-async"]
+            description = "Fovea异步：持续动作流、RTC前缀接续、按观测时刻调度15步未来框；五阶段Agent可选"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]
@@ -350,7 +361,7 @@ class DeploymentSettings:
                    "--execute-steps", str(self.steps), "--num-chunks", str(self.rounds)]
         if self.task_mode != "none":
             options += ["--task-mode", self.task_mode, "--initial-stage", self.initial_stage]
-        elif self.mode != "fovea":
+        elif self.mode not in ("fovea", "fovea-async"):
             options += ["--prompt", self.prompt]
         for argument, path in home_files.items():
             options += [argument, path]
@@ -364,7 +375,7 @@ class DeploymentSettings:
                              *(["--exclusive"] if self.camera_policy == "exclusive" else []),
                              *(["--defer-camera-check"] if self.initialization == "home"
                                and (repo / shared / "startup_gate.py").is_file() else [])],
-                "service": ["bash", service, *([] if self.mode == "fovea" else common), *service_args],
+                "service": ["bash", service, *([] if self.mode in ("fovea", "fovea-async") else common), *service_args],
                 "check": ["bash", runtime, *options, "--check"],
                 "execute": ["bash", runtime, *options, "--execute", "--enable-hardware", "--sharpa-backend", "sdk_direct"]}
         result["approval"] = hashlib.sha256(json.dumps({"settings": result["settings"], "identity": model["identity"],

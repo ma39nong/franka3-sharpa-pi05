@@ -56,6 +56,24 @@ class TaskRTC:
         self.bridge_installation = None
         self.awaiting_rtc_resume = False
 
+    def start_prediction(self, actions, ticket, path, on_poll):
+        return self.backend.start(actions, ticket, path, on_poll=on_poll)
+
+    def replan_due(self, status):
+        return status["consumed_since_install"] >= self.args.execute_steps
+
+    def snapshot_for_observation(self, observation):
+        return self.backend.snapshot(self.settings, max(self.delays))
+
+    def prediction_installed(self, metadata, installed, captured, ticket, *, initial_start):
+        pass
+
+    def prediction_rejected(self, installed):
+        pass
+
+    def switch_applied(self):
+        pass
+
     def record(self, event, **fields):
         self.control.event(event, **fields)
 
@@ -233,6 +251,7 @@ class TaskRTC:
                                 c.activate(self.bridge_ticket, f"{self.switch_version}:{status['generation']}")
                                 self.chunk_count += 1
                                 self.awaiting_rtc_resume = True
+                                self.switch_applied()
                                 self.record(
                                     "online_switch_applied",
                                     token=self.boundary["token"],
@@ -264,7 +283,7 @@ class TaskRTC:
                 # Keep IPC/status/stop responsive while the sole SDK owner moves;
                 # polling revokes this operation if the operator changes intent.
                 check_start()
-                installed = self.backend.start(
+                installed = self.start_prediction(
                     actions, ticket, self.directory / f"control-{uuid.uuid4().hex}.jsonl",
                     on_poll=check_start,
                 )
@@ -287,6 +306,7 @@ class TaskRTC:
                         c.data["inference_status"] = "discarded"
                         self.record("online_switch_rejected", inference_request_id=ticket["request_id"],
                                     installation=installed, reason=installed["reason"])
+                        self.prediction_rejected(installed)
                         return True
                     if (
                         installed.get("accepted") is not True
@@ -310,8 +330,10 @@ class TaskRTC:
                         c.data["inference_status"] = "discarded"
                         self.record("inference_rejected", inference_request_id=ticket["request_id"],
                                     installation=installed, reason=installed["reason"])
+                        self.prediction_rejected(installed)
                         return True
                     self.delays.append(installed["skipped"])
+                self.prediction_installed(metadata, installed, captured, ticket, initial_start=initial_start)
                 self.chunk_count += 1
                 c.activate(ticket, f"{ticket['stage_version']}:{installed['generation']}")
                 c.data["inference_status"] = "idle"
@@ -370,7 +392,7 @@ class TaskRTC:
             status = self.backend.status()
             with c.lock:
                 c.data["chunk_progress"] = status
-            if self.future is None and status["consumed_since_install"] >= self.args.execute_steps:
+            if self.future is None and self.replan_due(status):
                 if self.args.num_chunks and self.chunk_count >= self.args.num_chunks:
                     c.command("pause", uuid.uuid4().hex, expected_version=c.data["stage_version"])
                     return True
@@ -404,7 +426,7 @@ class TaskRTC:
                 with c.lock:
                     if c.data["stage_version"] != observed_version or c.data["execution_state"] != "RUNNING":
                         return True
-                    context = self.backend.snapshot(self.settings, max(self.delays))
+                    context = self.snapshot_for_observation(observation)
                     # Bind observation, prompt, epoch and RTC snapshot atomically.
                     self.submit_observed(observation, context)
                     if self.awaiting_rtc_resume:
@@ -488,7 +510,7 @@ class SDKTaskBackend:
         if self.stopped:
             raise RuntimeError("SDK 已失能；必须结束本次运行并重新核对完整部署方案")
 
-    def start(self, actions, ticket, events_path, *, on_poll=None):
+    def start(self, actions, ticket, events_path, *, on_poll=None, admission=None):
         strict_start = os.environ.get("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK") != "1"
         result = self.worker.request(
             dict(
@@ -505,6 +527,7 @@ class SDKTaskBackend:
             # The optional existing low-speed approach can take several seconds.
             timeout=2 if strict_start else 180,
             **({"on_poll": on_poll} if on_poll is not None else {}),
+            **({"admission": admission} if admission is not None else {}),
         )
         self.started = True
         return result

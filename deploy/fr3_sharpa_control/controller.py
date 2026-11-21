@@ -60,8 +60,11 @@ def port_listening(port):
 
 
 def probe(mode, port):
-    if mode == "fovea":
+    if mode in ("fovea", "fovea-async"):
         from deploy.fr3_sharpa_runtime.fovea_runtime import FoveaRuntime
+        if mode == "fovea-async":
+            from deploy.fr3_sharpa_runtime.fovea_async import FoveaAsyncRuntime
+            FoveaRuntime = FoveaAsyncRuntime
         return FoveaRuntime(f"ws://127.0.0.1:{port}", expected_checkpoint=os.environ["SHARPA_FULL_DELTA_CHECKPOINT"]).inspect_metadata()
     from deploy.fr3_sharpa_runtime.runtime import SharpaRuntime
     metadata = SharpaRuntime(f"ws://127.0.0.1:{port}", **({"train_rtc": True, "paper_rtc": mode == "train-paper-rtc"} if mode in ("train-rtc", "train-paper-rtc") else {})).inspect_metadata(require_rtc=mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"))
@@ -218,7 +221,7 @@ class DeploymentController:
         original_values = dict(values)
         mode = values.get("mode", "serial")
         values = {**values, "initialization": "current", "record": False, "rounds": 0,
-                  "speed": "fast" if mode in ("fovea", "rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
+                  "speed": "fast" if mode in ("fovea", "fovea-async", "rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
         return self.start(values, operation="model", persisted_values=original_values)
 
     def _require_model(self, plan, env):

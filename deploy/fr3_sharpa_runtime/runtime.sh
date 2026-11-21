@@ -7,7 +7,7 @@ set -- "${SHARPA_MODEL_ARGS[@]}"
 if [[ "$SHARPA_MODEL_PROFILE" != full ]]; then
   fovea=false
   for argument in "$@"; do
-    [[ "$argument" != --fovea ]] || fovea=true
+    [[ "$argument" != --fovea && "$argument" != --fovea-async ]] || fovea=true
   done
   previous=""
   for argument in "$@"; do

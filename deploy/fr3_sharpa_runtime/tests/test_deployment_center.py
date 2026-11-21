@@ -652,7 +652,7 @@ def fovea_checkpoint(checkpoint):
 
 def test_fovea_identity_requires_matching_type_and_tracks_contract(fovea_checkpoint):
     found = plans.inspect_checkpoint(fovea_checkpoint)
-    assert found['supported_modes'] == ['fovea']
+    assert found['supported_modes'] == ['fovea', 'fovea-async']
     assert found['semantics'] == 'delta' and found['fovea']['foveation']['execute_steps'] == 15
     for model_type in ('full', 'full-delta', 'paper-delta'):
         with pytest.raises(ValueError):
@@ -701,7 +701,7 @@ def test_fovea_ui_preset_has_no_implicit_launch(tmp_path):
         thread.start()
         base = f'http://127.0.0.1:{server.server_port}'
         info = json.load(urllib.request.urlopen(base + '/api/info'))
-        assert info['fovea_preset']['mode'] == 'fovea'
+        assert info['fovea_preset']['mode'] == 'fovea-async'
         assert info['fovea_preset']['task_mode'] == 'tomato-in-hand119'
         assert info['fovea_preset']['initial_stage'] == 'pickup'
         assert info['fovea_preset']['speed'] == 'fast'
@@ -728,3 +728,20 @@ def test_fovea_agent_plan_keeps_serial_mode_and_five_stage_authority(repository,
     from dataclasses import replace
     for change in (dict(task_mode='tomato-b', initial_stage='pickup_1'),dict(rounds=1)):
         with pytest.raises(ValueError):replace(config, **change).plan()
+
+
+def test_fovea_async_plan_has_explicit_service_and_owner_flags(repository, fovea_checkpoint):
+    shared = repository / 'deploy/fr3_sharpa_runtime'
+    for name in ('fovea_serve.sh', 'fovea_task.py', 'fovea_async.py'):
+        (shared / name).write_text('# async fixture')
+    p = plans.DeploymentSettings(str(repository), str(fovea_checkpoint), model_type='fovea',
+        mode='fovea-async', task_mode='tomato-in-hand119', initial_stage='pickup',
+        speed='fast', steps=15, rounds=0).plan()
+    assert '--enable-async' in p['service']
+    assert '--fovea-async' in p['execute']
+    assert '--fovea' in p['check']
+    assert '--model' not in p['service']
+    assert p['model']['input_views'] == 4
+    with pytest.raises(ValueError, match='五阶段'):
+        plans.DeploymentSettings(str(repository), str(fovea_checkpoint), model_type='fovea',
+            mode='fovea-async', speed='fast', steps=15).plan()

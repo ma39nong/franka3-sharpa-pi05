@@ -22,6 +22,7 @@ class FoveaRuntime:
         self.query_index = 0
         self.box = np.array(fovea.INITIAL_BOX)
         self.pending = None
+        self.last_receipt = None
         self.adapter = SharpaActionAdapter()
         self.last_timing = {}
         self.four_view_recording = None
@@ -50,28 +51,42 @@ class FoveaRuntime:
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=3, close_timeout=0.1) as ws:
             return self.validate_metadata(msgpack_numpy.unpackb(ws.recv(timeout=3)))
 
-    def infer_chunk(self, observation, *, response_timeout=120):
-        from openpi_client import msgpack_numpy
-        from websockets.sync.client import connect
-
-        clean = validate_observation(observation)
-        context = {
+    def fovea_context(self):
+        return {
             "session_id": self.session,
             "query_index": self.query_index,
             "executed_steps": 0 if self.query_index == 0 else fovea.EXECUTE_STEPS,
             "current_box": self.box.tolist(),
         }
+
+    def infer_chunk(self, observation, *, response_timeout=120, rtc_context=None):
+        from openpi_client import msgpack_numpy
+        from websockets.sync.client import connect
+
+        clean = validate_observation(observation)
+        context = self.fovea_context()
         if self.four_view_recording is not None:
-            context.update(record_roi=True, source_monotonic_ns=observation.get("_captured_monotonic_ns"))
+            context["record_roi"] = True
+            context.setdefault("source_monotonic_ns", observation.get("_captured_monotonic_ns"))
         started = time.monotonic()
         with connect(self.policy_url, compression=None, max_size=None, open_timeout=10, close_timeout=1) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
             self.validate_metadata(metadata)
-            ws.send(msgpack_numpy.packb({**clean, "_fovea": context}))
+            payload = {**clean, "_fovea": context}
+            if rtc_context is not None:
+                from openpi_client import rtc
+                payload = rtc.make_request(payload, rtc_context)
+            ws.send(msgpack_numpy.packb(payload))
             response = ws.recv(timeout=response_timeout)
         if isinstance(response, str):
             raise RuntimeError(response)
         result = msgpack_numpy.unpackb(response)
+        if rtc_context is not None:
+            from openpi_client import rtc
+            rtc.validate_receipt(result.get("rtc"), rtc_context)
+        elif "rtc" in result:
+            raise ValueError("Unexpected Fovea RTC receipt")
+        self.last_receipt = result.get("rtc")
         accepted = self.accept_result(metadata, result, started=started)
         if self.four_view_recording is not None:
             if "recording_roi" not in result:

@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 
 from openpi.models import model as base
+from openpi.models.pi0 import _rtc_guided_velocity
 from openpi.models.pi0 import Pi0
 from openpi.models.pi0 import make_attn_mask
 from openpi.models.pi0_config import Pi0Config
@@ -106,7 +107,8 @@ class FoveaPi0(Pi0):
     def compute_loss(self, rng, observation, actions, **kwargs):
         return self.compute_loss_components(rng, observation, actions, **kwargs)["loss"]
 
-    def sample_joint(self, rng, observation, *, num_steps=10, noise=None):
+    def sample_joint(self, rng, observation, *, num_steps=10, noise=None,
+                     rtc_actions=None, rtc_weights=None, rtc_max_guidance_weight=5.0):
         """Encode once; reuse the immutable prefix cache for both output branches."""
         observation = base.preprocess_observation(None, observation, image_keys=self.image_keys)
         prefix, valid, ar = self.embed_prefix(observation)
@@ -116,10 +118,17 @@ class FoveaPi0(Pi0):
         count = valid.sum(axis=-1)[:, None]
         if noise is None:
             noise = jax.random.normal(rng, (batch, self.action_horizon, self.action_dim))
+        if (rtc_actions is None) != (rtc_weights is None):
+            raise ValueError("rtc_actions and rtc_weights must both be supplied")
+        if rtc_actions is not None:
+            if rtc_actions.shape != (batch, self.action_horizon, self.action_dim):
+                raise ValueError("Invalid Fovea RTC action shape")
+            if rtc_weights.shape != (batch, self.action_horizon, 1) or jnp.shape(rtc_max_guidance_weight) != ():
+                raise ValueError("Invalid Fovea RTC weights")
         dt = -1.0 / num_steps
 
-        def step(i, x):
-            suffix, sm, sar, cond = self.embed_suffix(observation, x, jnp.full((batch,), 1.0 + i * dt))
+        def velocity(x, time):
+            suffix, sm, sar, cond = self.embed_suffix(observation, x, jnp.full((batch,), time))
             mask = jnp.concatenate(
                 [
                     jnp.broadcast_to(valid[:, None, :], (batch, suffix.shape[1], valid.shape[1])),
@@ -134,7 +143,15 @@ class FoveaPi0(Pi0):
                 kv_cache=prefix_cache,
                 adarms_cond=[None, cond],
             )
-            return x + dt * self.action_out_proj(output[:, -self.action_horizon :])
+            return self.action_out_proj(output[:, -self.action_horizon :])
+
+        def step(i, x):
+            time = 1.0 + i * dt
+            v = velocity(x, time) if rtc_actions is None else _rtc_guided_velocity(
+                lambda value: velocity(value, time), x, time,
+                rtc_actions, rtc_weights, rtc_max_guidance_weight,
+            )
+            return x + dt * v
 
         actions = jax.lax.fori_loop(0, num_steps, step, noise)
         cache = prefix_cache

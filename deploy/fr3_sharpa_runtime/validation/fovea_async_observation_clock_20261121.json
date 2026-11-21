@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-21",
+  "branch": "tomato-foveavla-v1",
+  "base_commit": "55bcdab285e1903f8fec0b96f06665de2e7789e8",
+  "main_commit": "5473050fa96158c3d88ccab39af31d2a0183b844",
+  "protocol": "fovea-observation-clock-v1",
+  "implementation": {
+    "ui_mode": "fovea-async",
+    "serial_comparison_mode": "fovea",
+    "model_actions": [
+      50,
+      58
+    ],
+    "native_hz": 30,
+    "nominal_observation_interval_steps": 15,
+    "box_image_tolerance_steps": 2,
+    "maximum_head_camera_age_ms": 100,
+    "prediction_deadline_margin_steps": 1,
+    "guidance": "existing JAX RTC soft-prefix VJP on Fovea action branch; checkpoint architecture/parameters unchanged",
+    "prefix_space": "canonical absolute commands -> measured-state arm deltas -> checkpoint quantile normalization",
+    "time_anchor": "camera source monotonic time; acquisition/transport/inference included in action skips",
+    "crop_authority": "owner accepts matching task ticket and stream receipt before scheduling predicted crop",
+    "startup": "first t+15 crop target anchored to actual stream start after held initial inference",
+    "stage_handoff": "existing five-stage owner and SDK stream; bounded bridge; discard pre-bridge future box and reacquire fixed crop",
+    "execution_proof": "nominal observation steps are explicitly separate from serial executed_steps confirmation",
+    "memory": false
+  },
+  "verification": {
+    "command": "JAX_PLATFORMS=cpu PYTHONPATH=src:packages/openpi-client/src /home/user/sharpa-pi05/.venv/bin/python -m pytest -q deploy/fr3_sharpa_runtime/tests src/openpi/models/pi0_test.py",
+    "passed": 765,
+    "skipped": 5,
+    "duration_s": 45.19,
+    "async_tests": 15,
+    "real_transports": [
+      "WebSocket joint actions/boxes/RTC receipt with synthetic JAX model",
+      "existing Unix task IPC regression"
+    ],
+    "simulation": [
+      "real streaming timeline advances while background prediction is blocked",
+      "observation cadence independent of install delay and 50ms camera transport lag",
+      "source-time RTC prefix and delay skip",
+      "late prediction deadline",
+      "stop/superseded stage cannot install old prediction",
+      "first dispatch admission race",
+      "bridge discards old box",
+      "checkpoint-normalized action prefix round trip",
+      "actual Fovea joint sampler with lightweight components: zero-weight equivalence and finite guidance"
+    ],
+    "static": "changed Python files pass Ruff F/E9; git diff --check and bash -n runtime.sh pass",
+    "legacy_lint": "repository-wide F/E9 also reports 20 pre-existing issues in unrelated files; not modified",
+    "ui": "browser selected asynchronous Fovea, four images, five stages, tairan and auto preselection; no JS warnings/errors; model/Agent/hardware not started",
+    "offline_cli_check": "fovea_async=true, broker_mode=fovea-async, 30Hz, 15 steps, zero hardware output"
+  },
+  "limitations": {
+    "real_checkpoint_async_gpu_inference_this_patch": false,
+    "server28_gpu_check": "all eight GPUs occupied by existing training, approximately66GB perGPU; no training process modified",
+    "robot_or_ros_started": false,
+    "real_agent_classification_timing_validated": false,
+    "box_accuracy_under_rtc": "unverified: box branch remains conditioned on observation rather than the committed action prefix",
+    "continuous_motion_scope": "same-stage steady state; startup and stage handover retain main waiting/bridge boundaries",
+    "stop_and_resume": "original physical FR3 stop/hold acknowledgement requirement retained; no auto-resume bypass"
+  }
+}

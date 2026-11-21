@@ -452,6 +452,7 @@ def main() -> None:
                         help="Number of replanning rounds; 0 repeats until Ctrl-C")
     parser.add_argument("--policy-url", default=config.POLICY_URL)
     parser.add_argument("--fovea", action="store_true", help="Opt-in Fovea v1 serial fifteen-step action/box policy")
+    parser.add_argument("--fovea-async", action="store_true", help="Fovea observation-clock streaming and RTC guidance (five-stage UI)")
     parser.add_argument("--episode-parquet", type=Path)
     parser.add_argument("--sample-frame", type=int, default=0, help="Offline episode row to read")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
@@ -465,11 +466,15 @@ def main() -> None:
     parser.add_argument("--execution-trace-dir", type=Path, default=config.EXECUTION_TRACE_DIR,
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
+    if args.fovea_async:
+        args.fovea = True
+        if args.task_mode != "tomato-in-hand119":
+            parser.error("Fovea async requires the five-stage UI task")
     if args.fovea:
         if (args.broker_mode != 'serial' or args.task_mode not in ('none', 'tomato-in-hand119') or args.sharpa_backend != 'sdk_direct'
                 or args.train_rtc or args.paper_rtc or args.train_paper_rtc
                 or args.initialization == 'policy' or args.prepare_policy_first):
-            parser.error('Fovea v1 requires serial sdk_direct, current/Home initialization, without RTC; only the five-stage task broker is supported')
+            parser.error('Fovea requires its dedicated sdk_direct path and current/Home initialization; standalone RTC flags and seven-stage tasks are unsupported')
         if args.execute_steps not in (None,15):
             parser.error('Fovea v1 requires --execute-steps 15')
         args.execute_steps = 15
@@ -552,8 +557,8 @@ def main() -> None:
                 or not np.isfinite(args.prepare_speed_rad_s) or args.prepare_speed_rad_s <= 0
                 or args.num_chunks < 0):
             parser.error("Invalid speed, prepare speed or chunk count")
-        print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": args.broker_mode,
-                          "fovea": args.fovea, "memory_enabled": False if args.fovea else None,
+        print(json.dumps({"mode": "check", "hardware_output": False, "broker_mode": "fovea-async" if args.fovea_async else args.broker_mode,
+                          "fovea": args.fovea, "fovea_async": args.fovea_async, "memory_enabled": False if args.fovea else None,
                           "paper_rtc": args.paper_rtc, "train_rtc": args.train_rtc,
                           "speed": args.speed, "execute_speed_scale": args.execute_speed_scale,
                           "prediction_clip_rad": args.prediction_clip_rad,
