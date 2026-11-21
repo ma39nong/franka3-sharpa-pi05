@@ -18,7 +18,7 @@ from deploy.fr3_sharpa_runtime.task_stages import IN_HAND_AGENT_SOURCE, IN_HAND_
 
 LABELS = ("pickup", "harvest", "return", "adjust")
 CLASSES = (0, 1, 2, 3, 0, 1, 2)
-from .agent_settings import AgentSettings, IN_HAND_NORM, TAIRAN_PROVIDER
+from .agent_settings import AGENT_PROVIDERS, AgentSettings, IN_HAND_NORM, TAIRAN_PROVIDER
 from dataclasses import asdict
 
 
@@ -160,10 +160,29 @@ class AgentSupervisor:
             self.settings = asdict(
                 AgentSettings.parse(json.loads(self.settings_path.read_text()), self.controller.root)
             )
+        from .qwen_supervisor import QwenSupervisor
+        self.qwen = QwenSupervisor(controller)
+        self.qwen_active = False
+        with suppress(OSError, ValueError, TypeError):
+            choice = json.loads((Path(controller.root) / ".deployment/agent_choice.json").read_text())
+            self.qwen_active = isinstance(choice, dict) and choice.get("provider") == "qwen"
+        if self.qwen_active:
+            self.settings = asdict(self.qwen.settings)
 
     def snapshot(self):
+        if self.qwen_active:
+            return self.qwen.snapshot()
         with self.lock:
             return json.loads(json.dumps({**self.state, "mode": self.mode}))
+
+    def presets(self):
+        result = {name: asdict(AgentSettings.parse({"provider": name, "profile": "workstation"}, self.controller.root))
+                  for name in AGENT_PROVIDERS}
+        with suppress(OSError, ValueError, TypeError):
+            saved = AgentSettings.parse(json.loads(self.settings_path.read_text()), self.controller.root)
+            result[saved.provider] = asdict(saved)
+        result["qwen"] = asdict(self.qwen.settings)
+        return result
 
     def event(self, event, **fields):
         if self.directory:
@@ -178,6 +197,8 @@ class AgentSupervisor:
                 )
 
     def set_mode(self, mode):
+        if self.qwen_active:
+            return self.qwen.set_mode(mode)
         if mode not in ("manual", "auto"):
             raise ValueError("请选择手动或 Agent 自动")
         with self.lock:
@@ -216,6 +237,20 @@ class AgentSupervisor:
         return task_rpc(c.task_endpoint, c.task_run_id, renew_contact=False)
 
     def start(self, settings):
+        if self.thread and self.thread.is_alive():
+            raise ValueError("请先停止当前Agent，等待退出后再切换实现")
+        if settings.get("provider") == "qwen":
+            with self.lock:
+                result = self.qwen.start(settings)
+                self.qwen_active = True
+                self.mode = "manual"
+                self.gate.reset()
+                self.epoch += 1
+                self.settings = asdict(self.qwen.settings)
+                self.thread, self.directory = self.qwen.thread, self.qwen.directory
+                from .qwen_replay import atomic_json
+                atomic_json(Path(self.controller.root) / ".deployment/agent_choice.json", {"provider": "qwen"})
+                return result
         options = AgentSettings.parse(settings, self.controller.root)
         report = options.check(self.controller.root)
         if not report["ready"]:
@@ -225,6 +260,9 @@ class AgentSupervisor:
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError("Agent 已在运行或正在停止")
+            self.qwen_active = False
+            from .qwen_replay import atomic_json
+            atomic_json(Path(self.controller.root) / ".deployment/agent_choice.json", {"provider": options.provider})
             self.gate = InHandGate() if options.provider == TAIRAN_PROVIDER else DecisionGate()
             self.settings = asdict(options)
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,6 +294,9 @@ class AgentSupervisor:
         return self.snapshot()
 
     def check_environment(self, values):
+        if values.get("provider") == "qwen":
+            from .qwen_supervisor import QwenSettings
+            return QwenSettings.parse(values, self.controller.root).check()
         return AgentSettings.parse(values, self.controller.root).check(self.controller.root)
 
     def _development_check(self, replies, options, expected):
@@ -308,6 +349,8 @@ class AgentSupervisor:
                 raise RuntimeError("开发机模型进程退出")
 
     def stop(self):
+        if self.qwen_active:
+            return self.qwen.stop()
         with self.lock:
             was_auto = self.mode == "auto"
             self.mode = "manual"

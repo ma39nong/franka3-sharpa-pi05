@@ -11,9 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .controller import DeploymentController
 from .plan import desktop, inspect_checkpoint, repository_info
-from .agent_settings import AGENT_PROVIDERS, AgentSettings
 from deploy.fr3_sharpa_runtime.task_stages import catalog
-from dataclasses import asdict
 
 HTML = """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sharpa 部署控制台</title><style>
@@ -28,6 +26,7 @@ button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#173
 .muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
 .agent-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto;gap:10px;align-items:end}.agent-controls select,.agent-controls button{min-height:42px}
+.qwen-agent .agent-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.qwen-agent .agent-controls>.actions{grid-column:1/-1}.agent-controls>div{min-width:0}
 @media(max-width:600px){.agent-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.agent-controls>.actions{grid-column:1/-1}}
 .logs .card{padding:14px;display:flex;flex-direction:column}.logs h2{font-size:15px;margin-bottom:10px}.logs pre{height:clamp(180px,21vh,270px);max-height:none;background:#132b38;color:#d5e5ed;padding:12px;border-radius:6px;margin:0;overflow:auto}.logs .is-active{border-color:#7bb5b0;box-shadow:0 0 0 1px #7bb5b0}
 .page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
@@ -67,15 +66,20 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <p class="muted" id="taskInstructions">执行端就绪后，点击「开始当前阶段」。</p>
 <div class="agent-controls">
 <div><label for="agentMode">阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()" aria-describedby="agentModeHint"><option value="manual">手动切换（默认）</option><option value="auto">Agent 自动切换</option></select></div>
-<div><label for="agentProvider">Agent 模型</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang</option><option value="tairan">tairan · 四路</option></select></div>
+<div><label for="agentProvider">Agent 模型（独立选择）</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">V-JEPA · mengxiang</option><option value="tairan">V-JEPA · tairan 四路</option><option value="qwen">Qwen · 独立观察与任务记忆</option></select></div>
 <div class="actions"><button id="startAgent" class="primary" onclick="agentCommand('start-agent')">启动 Agent</button><button id="stopAgent" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button></div>
+</div>
+<div id="qwenConfig" hidden>
+<div class="row"><div><label>Qwen API 模型（关闭深度思考）</label><select id="qwenModel"><option value="qwen3.8-flash">Qwen 3.8 Flash</option><option value="qwen3.8-max">Qwen 3.8 Max</option><option value="qwen3.6-flash">Qwen 3.6 Flash（效果待测）</option></select></div><div><label>采摘计划（成功放盘颗数）</label><input id="qwenQuotas" value="2,2" placeholder="例如 4 或 2,2"></div></div>
+<label>工作机 API 密钥文件路径（不填写密钥内容）</label><input id="qwenKeyPath">
+<p class="notice">Qwen自行读取ROS观测，独立调用API并保存计划、投放计数与疑点，不加载V-JEPA权重。先启动Qwen，再开始手中调整任务；任务运行后才调用API。目前为独立观察，阶段由操作员切换；API延迟与按颗数自动控制仍在验证。</p>
 </div>
 <p class="muted" id="agentModeHint" hidden></p>
 <p id="agentStatus" class="muted" role="status">Agent 未启动</p><div id="agentError" class="error"></div>
 <details id="agentPaths"><summary>首次配置／修改工作机上的 Agent 路径</summary>
 <p class="muted">选择 Agent 会自动填入对应配置。路径不符时在这里修改；无需选择运行环境。</p>
-<div class="row"><div><label>Agent 仓库目录</label><input id="agentRepository"></div><div><label>Agent 权重路径（可相对 Agent 仓库）</label><input id="agentCheckpoint"></div></div>
-<div class="row"><div><label>Agent Python 路径</label><input id="agentPython"></div><div><label>编码器目录</label><input id="agentPretrained"></div></div>
+<div class="row" data-vjepa-field><div><label>Agent 仓库目录</label><input id="agentRepository"></div><div><label>Agent 权重路径（可相对 Agent 仓库）</label><input id="agentCheckpoint"></div></div>
+<div class="row"><div><label>观测图像 Python 环境</label><input id="agentPython"></div><div data-vjepa-field><label>编码器目录</label><input id="agentPretrained"></div></div>
 <div class="row"><div><label>工作机 Gello 仓库</label><input id="agentGello"></div><div><label>ROS 消息 overlay（可相对部署仓库）</label><input id="agentOverlay"></div></div>
 <div class="actions" style="margin-top:12px"><button id="checkAgent" onclick="checkAgentEnvironment()">检查工作机配置</button></div><div id="agentEnvironmentReport" role="status"></div></details>
 <div id="agentProbabilities" class="task-grid"></div><details><summary>查看 Agent 预测与切换规则</summary><p class="muted">tairan 当前权重基于119条手中调整任务训练，适配五阶段，采用 K1。单次观测中，当前和 +1 秒对下一阶段的概率均达到 80% 时，请求切换。切回手动或停止 tairan 后，当前动作继续执行。mengxiang 当前适配放回盘中调整七阶段，自动模式下停止 mengxiang 会同时停止执行。最终阶段由人工确认完成。</p></details>
@@ -143,10 +147,10 @@ for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=p
 for(let f of fields)$(f).disabled=busy;if(!busy){$('steps').disabled=false;$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value)}}catch(e){failure(e)}}
 
 let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';
-const agentFields={provider:'agentProvider',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
-function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;updateAgentChoice();updateAgentModeControl();$('agentError').textContent=''}
-function agentConfig(){return {...Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value])),profile:'workstation'}}
-function updateAgentChoice(){$('agentEnvironmentReport').textContent=''}
+const agentFields={provider:'agentProvider',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay',model:'qwenModel',quotas:'qwenQuotas',key_path:'qwenKeyPath'};
+function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(lastAgentProvider),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;if(provider==='qwen')autoModePending=false;updateAgentChoice();updateAgentModeControl();$('agentError').textContent=''}
+function agentConfig(provider=$('agentProvider').value){let c={...Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value])),provider,profile:'workstation'};if(provider==='qwen'){delete c.repository;delete c.checkpoint;delete c.pretrained;}else{delete c.model;delete c.quotas;delete c.key_path;}return c}
+function updateAgentChoice(){const qwen=$('agentProvider').value==='qwen';$('taskPanel').classList.toggle('qwen-agent',qwen);$('qwenConfig').hidden=!qwen;for(const el of document.querySelectorAll('[data-vjepa-field]'))el.style.display=qwen?'none':'';$('agentEnvironmentReport').textContent=''}
 async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
 let agentState=null,agentRequestPending=false,autoModePending=false,agentModeRequest=null;
 function agentAutoBlockReason(){
@@ -155,6 +159,7 @@ function agentAutoBlockReason(){
  const profile=t?.task_profile||$('task_mode').value;
  const expectedProvider=profile==='tomato-in-hand119'?'tairan':'mengxiang';
  const provider=['stopped','failed',undefined].includes(a?.status)?$('agentProvider').value:a.provider;
+ if(provider==='qwen')return 'Qwen当前为独立观察，阶段切换请保持手动。';
  if(provider!==expectedProvider)return '此任务请使用 '+expectedProvider+'。';
  if(!a||['stopped','failed'].includes(a.status))return '请启动 Agent。';
  if(a.status!=='ready'||a.control_eligible===false)return '等待 Agent 实时预测就绪。';
@@ -163,6 +168,9 @@ function agentAutoBlockReason(){
  return '';
 }
 function updateAgentModeControl(){
+ const qwen=$('agentProvider').value==='qwen';
+ if(qwen)autoModePending=false;
+ $('agentMode').querySelector('option[value="auto"]').disabled=qwen;
  $('agentMode').value=agentModeRequest||(autoModePending?'auto':agentState?.mode||'manual');
  $('agentMode').disabled=!!agentModeRequest;
  const reason=autoModePending?agentAutoBlockReason():'';
@@ -183,11 +191,20 @@ $('stopAgent').disabled=['stopped','stopping'].includes(a.status);
 for(const id of Object.values(agentFields))$(id).disabled=!canStart;
 $('checkAgent').disabled=!canStart;
 const messages={stopped:'Agent 未启动',loading:'正在加载',ready:'实时预测就绪',waiting:'等待实时观测',stopping:'正在停止',failed:'Agent 已退出'};
-const detail=a.provider==='tairan'&&['waiting','ready'].includes(a.status)?a.message:messages[a.status];
+const detail=['tairan','qwen'].includes(a.provider)&&['waiting','ready'].includes(a.status)?a.message:messages[a.status];
 $('agentStatus').textContent=[a.provider,detail,a.mode==='auto'?'自动切换':''].filter(Boolean).join(' · ');
 if(a.status==='failed')$('agentError').textContent=a.message;
 const box=$('agentProbabilities');
 box.replaceChildren();
+if(a.provider==='qwen'){
+ const show=text=>{const span=document.createElement('span');span.textContent=text;box.append(span)};
+ show('Qwen '+(a.model||'')+' · 独立观察 · 深度思考关闭');
+ show('计划：'+(a.quotas||[]).join(' + ')+' 颗成功放盘');
+ const e=a.evaluation,m=e?.memory;
+ if(m){show('当前步骤：'+m.active_stage);show('模型确认投放：第一轮 '+m.counts.harvest_1+'，第二轮 '+m.counts.harvest_2);if(m.blockers?.length)show('待核查：'+m.blockers.join('；'));show(e.status==='historical_only'?'结果已迟到，仅用于历史记录':'当前观察结果');if(e.proposed_stage)show('建议下一步：'+e.proposed_stage+'（需人工操作）');}
+ if(a.latency_ms!==undefined)show('最近请求耗时 '+(a.latency_ms/1000).toFixed(2)+' 秒');
+ return;
+}
 if(!['ready','waiting'].includes(a.status))return;
 const horizon=a.future_horizon_s||(a.provider==='tairan'?1:1.5);
 const show=text=>{const span=document.createElement('span');span.textContent=text;box.append(span)};
@@ -349,7 +366,7 @@ def server_for(root, *, port=8766):
                 elif parsed.path == "/assets/liqing-logo.png":
                     self.send(200, (Path(__file__).parent / "assets/liqing-logo.png").read_bytes(), "image/png")
                 elif parsed.path == "/api/info":
-                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "crop_preset": crop_preset, "in_hand_preset": in_hand_preset, "task_catalogs": {p: catalog(p) for p in ("tomato-b", "tomato-in-hand119")}, "agent_defaults": {**controller.agent.settings, "profile": "workstation"}, "agent_presets": {name: asdict(AgentSettings.parse({"provider": name, "profile": "workstation"}, root)) for name in AGENT_PROVIDERS}})
+                    self.send(200, {"defaults": defaults, "token": token, "tomato_preset": tomato_preset, "crop_preset": crop_preset, "in_hand_preset": in_hand_preset, "task_catalogs": {p: catalog(p) for p in ("tomato-b", "tomato-in-hand119")}, "agent_defaults": {**controller.agent.settings, "profile": "workstation"}, "agent_presets": controller.agent.presets()})
                 elif parsed.path == "/api/task-status":
                     self.send(200, controller.task_status())
                 elif parsed.path == "/api/crop-preview":

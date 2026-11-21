@@ -244,6 +244,9 @@ Home 目标和从反馈生成的中间指令分别检查。双手每次发送前
 ## Qwen 在线任务记忆与观察研究入口
 
 `qwen-deployment-assist` 分支提供独立的 Qwen 观察进程，保留现有 V-JEPA。
+控制台的「Agent 模型（独立选择）」可选 V-JEPA mengxiang、V-JEPA tairan 四路或 Qwen。
+Qwen 自行启动只读 ROS 观测采集，不需要先启动 V-JEPA，不加载其 checkpoint、编码器或分类头。
+同一控制台一次运行一个 Agent；切换实现前先停止并等待旧进程退出。
 当前输出是带证据的投放事件、计划进度和阶段建议，不接管自动切换、不发送运动命令。
 Qwen 的 API 请求每次显式设置 `enable_thinking=false`；支持选择 `qwen3.8-flash`、
 `qwen3.8-max`、`qwen3.6-flash`，模型切换不改变事件账本或任务计划。
@@ -273,13 +276,29 @@ user 消息先带会话、步骤版本、计划、当前实际步骤、事件账
 
 ### 使用已有观测做在线观察
 
-先按原流程启动 V-JEPA 和 ROS 观察。以下命令在部署仓库根目录运行，
-参数替换为当前 Agent 的 `.deployment/sharpa-agent-*/` 历史目录、当前任务 socket 和真实 run_id。
+推荐从控制台使用独立 Qwen：
+
+1. 在番茄任务面板的「Agent 模型（独立选择）」选择「Qwen · 独立观察与任务记忆」。
+2. 选择 API 模型，采摘计划填写 `2,2`（两颗后调整，再两颗）或 `4`（四颗直接放回的记忆计划，执行图尚未接通）。
+3. 核对工作机密钥文件路径；展开路径配置，检查图像 Python、Gello 与 ROS overlay。
+   Qwen 的环境检查不要求 V-JEPA 仓库、模型、CUDA 或 BF16，也不发送模型请求。
+4. 点击「启动 Agent」。Qwen 自行订阅已有 ROS 相机和状态；不负责启动相机硬件。
+   没有运行中的手中调整任务时显示等待，不调用 API。请先启动 Qwen，再开始实际任务，避免缺少计数起始历史。
+5. 原执行流程仍由操作员启动并手动切换。Qwen 面板显示计划、当前步骤、两轮模型投放计数、
+   疑点和最近请求延迟。迟到结果标为历史记录。自动切换在前后端均拒绝启用。
+
+Qwen 配置单独保存到 `.deployment/qwen_settings.json`，原 V-JEPA 配置仍在
+`.deployment/agent_settings.json`；切换和刷新可恢复各自配置，不将两者权重、判断或记忆混用。
+UI 会话日志位于 `.deployment/sharpa-qwen-*/`；Qwen 事件记忆另存
+`.deployment/qwen_memories/`，按真实执行 run_id 校验恢复，计划不同则拒绝复用。
+
+内部工具也保留只读 CLI，参数替换为某个独立采集目录、任务 socket 和真实 run_id。
+采集目录可来自上述独立 Qwen 的 `.deployment/sharpa-qwen-*/`；该工具不要求 V-JEPA。
 观察进程只读现有数据，不启动相机、模型动作服务或硬件，不续机器人控制心跳。
 
 ```bash
 .venv/bin/python -m deploy.fr3_sharpa_control.qwen_observer \
-  --history-directory /absolute/path/to/current/sharpa-agent-session \
+  --history-directory /absolute/path/to/current/sharpa-qwen-session \
   --task-socket /absolute/path/to/current/task.sock \
   --run-id ACTUAL_EXECUTION_RUN_ID --quotas 2 2 --model qwen3.8-flash \
   --output .deployment/qwen-observer-session
@@ -287,7 +306,7 @@ user 消息先带会话、步骤版本、计划、当前实际步骤、事件账
 
 采集线程在请求期间持续缓存原始帧，推理线程使用最近六秒、约2Hz的两路图像。
 输出保留请求的画面、源时间、模型原始结果、延迟、token 用量、评估和记忆；不保存密钥。
-`status.json` 始终标明 `control_eligible=false`，尚未加入部署控制台 UI。
+CLI `status.json` 和 UI 状态均标明 `control_eligible=false`。
 密钥复用本机 `~/.config/qwen-recognition-test/token-plan.key`，工控机需自行安全配置。
 不自动重试失败请求、不切换计费端点、不自动开启思考。
 
