@@ -6,6 +6,7 @@ import select
 import signal
 import time
 import threading
+from contextlib import nullcontext
 
 from .shutdown import DisableSettings, protect_disable_confirmation, stderr
 
@@ -39,13 +40,17 @@ class MotionWorker:
                     raise KeyboardInterrupt("SIGTERM: await SDK disable confirmation")
                 self._previous_sigterm = signal.signal(signal.SIGTERM, terminate)
 
-    def request(self, payload, *, timeout=None, on_poll=None):
+    def request(self, payload, *, timeout=None, on_poll=None, admission=None):
         deadline = time.monotonic() + timeout if timeout is not None else None
         if on_poll is not None:
             on_poll()
         try:
-            self.process.stdin.write(json.dumps(payload, allow_nan=False)+"\n")
-            self.process.stdin.flush()
+            # Task admission holds its intent lock only through dispatch, never
+            # while waiting for motion. Stage/stop IPC stays responsive afterwards.
+            encoded = json.dumps(payload, allow_nan=False)+"\n"
+            with admission() if admission is not None else nullcontext():
+                self.process.stdin.write(encoded)
+                self.process.stdin.flush()
         except BrokenPipeError:
             # An exiting worker may already have queued the original FAIL.
             # Drain that report before falling back to the generic EOF error.

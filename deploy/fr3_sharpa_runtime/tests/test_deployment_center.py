@@ -702,7 +702,8 @@ def test_fovea_ui_preset_has_no_implicit_launch(tmp_path):
         base = f'http://127.0.0.1:{server.server_port}'
         info = json.load(urllib.request.urlopen(base + '/api/info'))
         assert info['fovea_preset']['mode'] == 'fovea'
-        assert info['fovea_preset']['task_mode'] == 'none'
+        assert info['fovea_preset']['task_mode'] == 'tomato-in-hand119'
+        assert info['fovea_preset']['initial_stage'] == 'pickup'
         assert info['fovea_preset']['speed'] == 'fast'
         assert not server.controller.snapshot()['model_running']
         html = urllib.request.urlopen(base).read().decode()
@@ -711,3 +712,19 @@ def test_fovea_ui_preset_has_no_implicit_launch(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_fovea_agent_plan_keeps_serial_mode_and_five_stage_authority(repository, fovea_checkpoint):
+    runtime = repository / 'deploy/fr3_sharpa_runtime'
+    for name in ('fovea_serve.sh', 'fovea_task.py', 'task_execution.py'):
+        (runtime / name).write_text('# fixture')
+    config = plans.DeploymentSettings(str(repository), str(fovea_checkpoint), mode='fovea', speed='fast',
+        model_type='fovea', task_mode='tomato-in-hand119', initial_stage='pickup', rounds=0)
+    plan = config.plan()
+    assert '--fovea' in plan['execute'] and '--broker-mode' not in plan['execute']
+    assert plan['execute'][plan['execute'].index('--task-mode')+1] == 'tomato-in-hand119'
+    assert plan['model']['fovea'] and plan['model']['input_views'] == 4
+    assert plans.plan_environment(plan)['SHARPA_FOVEA_CHECKPOINT'] == str(fovea_checkpoint)
+    from dataclasses import replace
+    for change in (dict(task_mode='tomato-b', initial_stage='pickup_1'),dict(rounds=1)):
+        with pytest.raises(ValueError):replace(config, **change).plan()

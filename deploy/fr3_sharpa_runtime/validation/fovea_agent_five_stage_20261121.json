@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-21",
+  "branch": "tomato-foveavla-v1",
+  "base_main_commit": "5473050fa96158c3d88ccab39af31d2a0183b844",
+  "mode": "fovea_serial_15",
+  "agent_provider": "tairan",
+  "task_profile": "tomato-in-hand119",
+  "tested_path": "AgentSupervisor._display_inhand -> real Unix task socket -> TaskControl -> FoveaTask -> dispatch admission -> mocked fifteen-step execution -> crop acknowledgement",
+  "test_inputs": "Synthetic Agent probabilities and VLA actions; existing real FoveaRuntime/ActionAdapter, no model retraining",
+  "targeted_fovea_task_tests": 10,
+  "verified": [
+    "No motion before explicit operator start",
+    "Five-stage Agent requests do not activate stages prematurely",
+    "Requests during motion wait for the completed fifteen-step boundary",
+    "New prompt uses fresh post-completion camera stamps and reset initial crop session",
+    "Superseded inference and a stage change immediately before dispatch cannot send actions",
+    "Partial execution and expired observations do not advance the crop query",
+    "Stop prevents further dispatch; missing physical arm-stop proof does not grant resume",
+    "Owner loop archives and closes the sole motion owner",
+    "UI allows five-stage Fovea with tairan Agent auto preselection",
+    "No RTC guidance or seven-stage Agent used"
+  ],
+  "hardware_started": false,
+  "hardware_executed": false,
+  "gpu_inference_rerun": false,
+  "remaining_validation": "Workstation live camera/Agent timing, concurrent GPU load, robot execution and picking success",
+  "runtime_tests": {
+    "passed": 742,
+    "skipped": 5
+  },
+  "targeted_after_full_suite": "Fovea coordinator, transport admission, recording and shutdown regression checks"
+}

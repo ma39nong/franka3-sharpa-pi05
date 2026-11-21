@@ -253,8 +253,8 @@ class DeploymentSettings:
             raise ValueError("不支持的模式、启动姿态或速度")
         if self.mode == "fovea":
             stage(self.fovea_stage, "tomato-in-hand119")
-            if self.speed != "fast" or self.steps != 15 or self.task_mode != "none" or self.rtc_initial_delay_steps:
-                raise ValueError("Fovea要求原速30Hz、15步、独立阶段选择，不接入RTC/Agent任务状态机")
+            if self.speed != "fast" or self.steps != 15 or self.task_mode not in ("none", "tomato-in-hand119") or self.rtc_initial_delay_steps:
+                raise ValueError("Fovea要求原速30Hz、15步；仅支持独立指令或五阶段Agent任务，不支持RTC")
         if type(self.rounds) is not int or self.rounds < 0 or type(self.steps) is not int or type(self.record) is not bool:
             raise ValueError("轮数/步数必须是整数，录制必须是布尔开关")
         if self.mode == "serial" and not 1 <= self.steps <= 50:
@@ -281,7 +281,7 @@ class DeploymentSettings:
             model["supported_modes"] = ["serial", "rtc"]
         if not model["profile"]:
             raise ValueError(model["evidence"])
-        if self.task_mode != "none":
+        if self.task_mode != "none" and self.mode != "fovea":
             if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
                     or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
                 raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
@@ -289,6 +289,11 @@ class DeploymentSettings:
                 raise ValueError("权重与任务流程不匹配：放回盘中调整使用七阶段，手中调整使用五阶段")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
+        if self.mode == "fovea" and self.task_mode != "none":
+            if not model.get("fovea") or self.rounds != 0:
+                raise ValueError("Fovea五阶段任务要求Fovea权重和连续轮数0")
+            if not (repo / "deploy/fr3_sharpa_runtime/fovea_task.py").is_file():
+                raise ValueError("所选仓库缺少Fovea Agent阶段协调器")
         if self.mode not in model["supported_modes"]:
             raise ValueError("该模型不支持所选推理模式；请按识别结果选择RTC、Paper RTC、Train RTC或Train Paper RTC；LoRA仅支持普通串行")
         if model["paper_algorithm"] and not (repo / "deploy/fr3_sharpa_runtime/paper_model.py").is_file():
@@ -307,6 +312,8 @@ class DeploymentSettings:
             runtime_args = ["--fovea", "--policy-url", f"ws://127.0.0.1:{port}",
                             "--prompt", stage(self.fovea_stage, "tomato-in-hand119").prompt]
             description = f"Fovea · {stage(self.fovea_stage, 'tomato-in-hand119').label}：预测50、执行15后更新框；停止后选择下一阶段"
+        if self.mode == "fovea" and self.task_mode != "none":
+            description = "Fovea五阶段：完成15步后切换；可选Agent自动推进，不使用RTC"
         if self.mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc"):
             service_args = [{"paper-rtc": "--enable-paper-rtc", "train-rtc": "--enable-train-rtc", "train-paper-rtc": "--enable-train-paper-rtc", "rtc": "--enable-rtc"}[self.mode]]
             runtime_args = ["--broker-mode", "rtc"]

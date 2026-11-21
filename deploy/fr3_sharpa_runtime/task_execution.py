@@ -36,17 +36,26 @@ def execute_task(args):
     lease.start()
     worker = backend = engine = None
     try:
-        runtime = SharpaRuntime(args.policy_url)
-        metadata = runtime.inspect_metadata(require_rtc=True)
-        if (
-            not metadata.get("tomato_model")
-            or metadata["tomato_model"].get("task_profile", "tomato-b") != profile
-            or (profile == "tomato-in-hand119" and metadata["tomato_model"].get("stage_contract") != TASK_CONTRACTS[profile])
-            or metadata.get("train_rtc")
-            or metadata.get("paper_algorithm")
-            or metadata.get("model_profile") != "full-delta"
-        ):
-            raise ValueError("任务服务未匹配已核对的 B Coarse Full Delta 普通 RTC 模型")
+        fovea_task = getattr(args, "fovea", False)
+        if fovea_task:
+            from .fovea_runtime import FoveaRuntime
+            from .fovea_task import FoveaTask, FoveaTaskBackend
+            if profile != "tomato-in-hand119":
+                raise ValueError("Fovea Agent task requires the five-stage profile")
+            runtime = FoveaRuntime(args.policy_url, expected_checkpoint=os.environ.get("SHARPA_FOVEA_CHECKPOINT"))
+            runtime.inspect_metadata()
+        else:
+            runtime = SharpaRuntime(args.policy_url)
+            metadata = runtime.inspect_metadata(require_rtc=True)
+            if (
+                not metadata.get("tomato_model")
+                or metadata["tomato_model"].get("task_profile", "tomato-b") != profile
+                or (profile == "tomato-in-hand119" and metadata["tomato_model"].get("stage_contract") != TASK_CONTRACTS[profile])
+                or metadata.get("train_rtc")
+                or metadata.get("paper_algorithm")
+                or metadata.get("model_profile") != "full-delta"
+            ):
+                raise ValueError("任务服务未匹配已核对的 B Coarse Full Delta 普通 RTC 模型")
         setup = args.ros_overlay / "setup.bash"
         if not setup.is_file():
             raise FileNotFoundError(setup)
@@ -57,12 +66,13 @@ def execute_task(args):
             f"export SHARPA_SHUTDOWN_REPORT_DIR={shlex.quote(str(directory))}; "
             f"export PYTHONPATH={shlex.quote(str(root))}:{shlex.quote(str(run.GELLO_REPO))}:"
             f'{shlex.quote(str(core))}:"${{PYTHONPATH:-}}"; '
-            "exec python -m deploy.fr3_sharpa_runtime.sdk_direct_motion_ros --enable-hardware --online-task-handoff"
+            "exec python -m deploy.fr3_sharpa_runtime.sdk_direct_motion_ros --enable-hardware"
+            + ("" if fovea_task else " --online-task-handoff")
         )
         worker = MotionWorker(
             ["pixi", "run", "-e", "ros2", "bash", "-lc", inner], cwd=run.ROS_PROJECT, protocol_fd=True
         )
-        backend = SDKTaskBackend(worker, args)
+        backend = FoveaTaskBackend(worker, args) if fovea_task else SDKTaskBackend(worker, args)
         worker.request({"operation": "ready"}, timeout=20)
         run._start_observation_worker(args.ros_overlay)
         if args.initialization == "home":
@@ -95,7 +105,8 @@ def execute_task(args):
         wait_for_cameras()
         observe()  # Use the observation worker's bounded first-snapshot budget.
 
-        engine = TaskRTC(task, runtime, backend, observe, args, directory)
+        engine_class = FoveaTask if fovea_task else TaskRTC
+        engine = engine_class(task, runtime, backend, observe, args, directory)
         if task.data["execution_state"] != "IDLE":
             raise RuntimeError("任务在初始化期间已停止")
         engine.run()

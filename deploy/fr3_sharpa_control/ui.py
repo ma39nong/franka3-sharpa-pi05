@@ -57,7 +57,7 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="fovea">Fovea · 动作与预测框</option><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
-<div id="foveaOptions" hidden><label>Fovea 当前阶段指令</label><select id="fovea_stage"><option value="pickup">拿起番茄串</option><option value="harvest_1">首次采摘</option><option value="adjust_in_hand">手中调整</option><option value="harvest_2">再次采摘</option><option value="return_stem">最终放回</option></select><p class="muted">切换阶段：停止执行，选择下一阶段，重新核对并启动执行。推理服务可保持运行；每次执行从固定初始框开始。Fovea 不接入 Agent 在线阶段切换。</p></div>
+<div id="foveaOptions" hidden><label>Fovea 当前阶段指令</label><select id="fovea_stage"><option value="pickup">拿起番茄串</option><option value="harvest_1">首次采摘</option><option value="adjust_in_hand">手中调整</option><option value="harvest_2">再次采摘</option><option value="return_stem">最终放回</option></select><p class="muted">切换阶段：停止执行，选择下一阶段，重新核对并启动执行。推理服务可保持运行；每次执行从固定初始框开始。需要自动切换时，在部署方式选择五阶段任务，并使用下方 tairan Agent。</p></div>
 <label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
 <div id="cropFields"><label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator"></div>
 <div id="stageRecovery"><label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
@@ -91,7 +91,7 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <input type="hidden" id="initial_stage">
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
 <div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
-<p class="notice">手中调整任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
+<p class="notice">手中调整任务切换会等当前动作块发完，再用新观测和新 Prompt 接入下一阶段；Fovea每块15步，换阶段重置初始框。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
 <div class="card" id="dagger-panel"></div>
 </div>
 <section class="dashboard-row logs" id="logs" aria-label="三个终端日志">
@@ -113,11 +113,11 @@ function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('p
 function applyModeConstraints(){
  const fovea=$('mode').value==='fovea',rtc=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value);
  $('steps').disabled=busy||fovea;$('speed').disabled=busy||fovea||rtc;
- $('task_mode').disabled=busy||fovea;$('image_input').disabled=busy||fovea;$('crop_locator').disabled=busy||fovea;
- $('foveaOptions').hidden=!fovea;$('taskLayout').hidden=fovea;
- if(fovea){$('image_input').value='four';$('steps').value=15;$('speed').value='fast';$('task_mode').value='none';$('initial_stage').value='pickup_1';$('recovery_confirmed').checked=false;}
+ $('task_mode').disabled=busy;$('task_mode').options[1].disabled=fovea;$('image_input').disabled=busy||fovea;$('crop_locator').disabled=busy||fovea;
+ $('foveaOptions').hidden=!fovea||$('task_mode').value!=='none';
+ if(fovea){$('image_input').value='four';$('steps').value=15;$('speed').value='fast';if($('task_mode').value==='tomato-b'){$('task_mode').value='tomato-in-hand119';$('initial_stage').value='pickup';$('recovery_confirmed').checked=false;}}
 }
-function modeChanged(){let mode=$('mode').value;$('steps').value=15;$('steps').max=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?24:50;$('stepsLabel').textContent=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'重规划触发源节点':'每轮执行的模型动作数';if(['fovea','rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode))$('speed').value='fast';else if(['fovea','rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(previousMode))$('speed').value='slow';previousMode=mode;$('modeHint').textContent=mode==='fovea'?'动作与未来框联合预测；固定原速30Hz、每轮执行15步后更新裁剪框。':['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'原速后台重规划；此处节点数不是串行的固定执行前缀。':'每轮预测50，执行填写的前N个动作，然后重新观测推理。';applyModeConstraints();renderTask(taskState);invalidate()}
+function modeChanged(){let mode=$('mode').value;$('steps').value=15;$('steps').max=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?24:50;$('stepsLabel').textContent=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'重规划触发源节点':'每轮执行的模型动作数';if(['fovea','rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode))$('speed').value='fast';else if(['fovea','rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(previousMode))$('speed').value='slow';previousMode=mode;$('modeHint').textContent=mode==='fovea'?'动作与未来框联合预测；固定原速30Hz。五阶段任务可由Agent在15步完成后请求切换。':['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'原速后台重规划；此处节点数不是串行的固定执行前缀。':'每轮预测50，执行填写的前N个动作，然后重新观测推理。';applyModeConstraints();renderTask(taskState);invalidate()}
 
 function modeNames(modes){return modes.map(m=>Array.from($('mode').options).find(o=>o.value===m).textContent).join('、')}
 function updateModes(){let modes=repoModes.filter(m=>!modelModes||modelModes.includes(m));for(let o of $('mode').options)o.disabled=!modes.includes(o.value);if(!modes.includes($('mode').value)){$('mode').value=modes[0]||'serial';modeChanged()}if(modelModes)$('identity').textContent=$('identity').textContent.replace(/可用模式：.*/, '可用模式：'+modeNames(modes));return modes}
@@ -130,9 +130,10 @@ function modelContractText(model){
 }
 let inspectedViews=null;
 function updateDeploymentFields(){
- const fovea=$('mode').value==='fovea',staged=!fovea&&$('task_mode').value!=='none';
+ const fovea=$('mode').value==='fovea',staged=$('task_mode').value!=='none';
+ $('foveaOptions').hidden=!fovea||staged;
  $('unifiedPromptFields').hidden=staged||fovea;
- $('task_mode').options[0].textContent=fovea?'Fovea · 独立阶段指令（停止后切换）':'统一 Prompt · 不分阶段';
+ $('task_mode').options[0].textContent=fovea?'Fovea · 独立指令（停止后切换）':'统一 Prompt · 不分阶段';
  $('stageRecovery').hidden=!staged;
  $('taskPanel').hidden=!staged;
  $('taskLayout').hidden=!staged;
@@ -149,7 +150,7 @@ async function inspect(){try{const c=config();const d=await api('inspect',c);mod
 async function repositoryChanged(){try{let d=await api('repository?path='+encodeURIComponent($('repository').value));repoModes=d.modes;$('repoInfo').textContent='当前分支：'+d.branch+'；仅可选当前代码支持的模式';updateModes();invalidate()}catch(e){failure(e)}}
 async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.fovea?'Fovea · 动作与预测框':p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,图像输入:p.model.input_views+'路',统一Prompt:c.mode==='fovea'?'使用所选Fovea阶段指令':c.task_mode==='none'?c.prompt:'按阶段指令',初始阶段:c.initial_stage,Fovea阶段:c.mode==='fovea'?c.fovea_stage:null,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
 async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';taskModeChanged();modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
-async function foveaPreset(){if(busy)return;try{let info=await api('info');await api('agent-mode',{mode:'manual'});for(let[k,v]of Object.entries(info.fovea_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}modelModes=['fovea'];await repositoryChanged();modelTypeChanged(true);modeChanged();await inspect()}catch(e){failure(e)}}
+async function foveaPreset(){if(busy)return;try{let info=await api('info');await api('agent-mode',{mode:'manual'});for(let[k,v]of Object.entries(info.fovea_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}modelModes=['fovea'];await repositoryChanged();modelTypeChanged(true);modeChanged();taskModeChanged();if(['stopped','failed',undefined].includes(agentState?.status)){$('agentProvider').value='tairan';agentProviderChanged();}await inspect()}catch(e){failure(e)}}
 async function startModel(){try{const c=config();showLog('inference');await api('start-model',{settings:c});await refresh()}catch(e){failure(e)}}
 function showLog(name){for(let key of ['hardware','inference','execution'])$('terminal-'+key).classList.toggle('is-active',key===name)}
 async function start(){
@@ -358,7 +359,7 @@ def server_for(root, *, port=8766):
     fovea_archive = Path('/mnt/public_data/local-realrobot-train-data/checkpoints/mengxiang/tomato-openpi-sharpa/pi05_sharpa_foveavla_v1_h15/mengxiang_tomato_foveavla_v1_h15_s42_b256_s20000_c5000_1118_122914/20000')
     fovea_local = Path(root) / '.deployment/checkpoints/tomato-foveavla-v1/20000'
     fovea_preset = {**tomato_preset, "checkpoint": str(fovea_local if fovea_local.is_dir() or not fovea_archive.is_dir() else fovea_archive),
-                    "model_type": "fovea", "mode": "fovea", "image_input": "four", "task_mode": "none", "crop_locator": "", "fovea_stage": "pickup"}
+                    "model_type": "fovea", "mode": "fovea", "image_input": "four", "task_mode": "tomato-in-hand119", "initial_stage": "pickup", "crop_locator": "", "fovea_stage": "pickup"}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass

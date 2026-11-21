@@ -12,7 +12,7 @@ python -m deploy.fr3_sharpa_runtime.fovea_serve --checkpoint <新Fovea-step目�
 python -m deploy.fr3_sharpa_runtime.run --fovea --check
 ```
 
-现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 15 --speed fast --num-chunks 0`。当前v1按阶段手动停机更换指令并重启，首轮重新使用固定框；不接入旧七阶段RTC/Agent控制台，不支持时间拉伸或RTC。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
+现场准备完成、已获得新训练checkpoint后，执行端沿用本仓库原SDK/ROS边界：`python -m deploy.fr3_sharpa_runtime.run --fovea --execute --enable-hardware --ros-overlay <overlay目录> --prompt '<五阶段v3英文指令>' --initialization current --execute-steps 15 --speed fast --num-chunks 0`。这是独立指令模式，按阶段手动停机更换指令。UI另支持五阶段任务与tairan Agent自动推进：串行执行确认15步后换阶段，重置初始框；不接入七阶段任务，不支持时间拉伸或RTC。已有准备、观测新鲜度、限幅、失能与录制规则仍生效。
 
 初始框为源图归一化xyxy `[0.25,0.22,0.83,0.86]`。checkpoint拥有 `assets/fovea_contract.json`、数据清单指纹及归一化指纹，服务校验15步偏移、相机顺序、坐标格式和初始框。训练框含固定篮子/盘子区域等弱监督先验；改变场景需要重新检查。配置示例在 `examples/foveavla-v1-client.json`。
 

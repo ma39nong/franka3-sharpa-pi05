@@ -466,13 +466,15 @@ def main() -> None:
                         help="Directory for sdk_direct per-chunk JSON execution traces")
     args = parser.parse_args()
     if args.fovea:
-        if (args.broker_mode != 'serial' or args.task_mode != 'none' or args.sharpa_backend != 'sdk_direct'
+        if (args.broker_mode != 'serial' or args.task_mode not in ('none', 'tomato-in-hand119') or args.sharpa_backend != 'sdk_direct'
                 or args.train_rtc or args.paper_rtc or args.train_paper_rtc
                 or args.initialization == 'policy' or args.prepare_policy_first):
-            parser.error('Fovea v1 requires serial sdk_direct, current/Home initialization, without RTC/task broker')
+            parser.error('Fovea v1 requires serial sdk_direct, current/Home initialization, without RTC; only the five-stage task broker is supported')
         if args.execute_steps not in (None,15):
             parser.error('Fovea v1 requires --execute-steps 15')
         args.execute_steps = 15
+        if args.task_mode != 'none' and args.num_chunks != 0:
+            parser.error('Fovea five-stage task requires --num-chunks 0')
         if args.policy_url == config.POLICY_URL:
             args.policy_url = 'ws://127.0.0.1:8010'
     if args.task_mode != "none":
@@ -481,7 +483,7 @@ def main() -> None:
             stage(args.initial_stage, args.task_mode)
         except ValueError as error:
             parser.error(str(error))
-    if args.task_mode in ("tomato-b", "tomato-in-hand119") and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
+    if args.task_mode in ("tomato-b", "tomato-in-hand119") and not args.fovea and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
             or args.train_paper_rtc or config.MODEL_PROFILE.name != "full-delta"
             or args.sharpa_backend != "sdk_direct"):
         parser.error("番茄 B 状态机仅支持 full-delta / sdk_direct / 普通 RTC")

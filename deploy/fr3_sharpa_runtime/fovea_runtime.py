@@ -77,7 +77,8 @@ class FoveaRuntime:
             if "recording_roi" not in result:
                 self.four_view_recording.error = "Fovea service returned no actual crop pixels"
             else:
-                self.four_view_recording.submit(observation, result["recording_roi"], query_id=uuid.uuid4().hex)
+                self.four_view_recording.submit(observation, result["recording_roi"], query_id=uuid.uuid4().hex,
+                                                task=observation.get("_task_record"))
         return accepted
 
     def accept_result(self, metadata, result, *, started=None):
@@ -108,3 +109,10 @@ class FoveaRuntime:
         self.box = self.pending
         self.pending = None
         self.query_index += 1
+
+    def reset_stage(self):
+        """New prompt starts a new crop session, only at the owner motion boundary."""
+        self.session = uuid.uuid4().hex
+        self.query_index = 0
+        self.box = np.array(fovea.INITIAL_BOX)
+        self.pending = None
