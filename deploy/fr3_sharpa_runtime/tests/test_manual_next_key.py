@@ -67,7 +67,7 @@ def test_agent_auto_option_stays_in_stage_mode_dropdown():
     assert [option["value"] for option in options] == ["manual", "auto"]
     assert "disabled" not in options[1]
     assert "initial_stage" not in parser.selects
-    assert [option["value"] for option in parser.selects["agentProvider"][1]] == ["mengxiang", "tairan"]
+    assert [option["value"] for option in parser.selects["agentProvider"][1]] == ["mengxiang", "tairan", "qwen"]
 
 
 
@@ -87,10 +87,13 @@ function element(){
   replaceChildren(){this.children=[]},
   append(child){this.children.push(child)},
   setAttribute(name,value){this[name]=value},
+  querySelector(){return this.autoOption ??= {disabled:false}},
+  classList:{toggle(){}},
  };
 }
 const document={
  addEventListener(){},
+ querySelectorAll(){return []},
  createElement:element,
  getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id)},
 };
@@ -169,6 +172,40 @@ async function fetch(path, request){
  renderTask(ready);
  await applyPendingAgentMode();
  assert.equal(calls.length,1);
+
+ // A uniform-prompt policy has neither stage controls nor an Agent dependency.
+ executionActive=false;agentState.mode='manual';
+ $('task_mode').value='none';$('image_input').value='three';
+ $('prompt').value='Harvest the whole truss into the basket';
+ taskModeChanged();
+ assert.equal($('unifiedPromptFields').hidden,false);
+ assert.equal($('stageRecovery').hidden,true);
+ assert.equal($('taskPanel').hidden,true);
+ assert.equal($('taskLayout').hidden,true);
+ assert.equal($('cropFields').hidden,true);
+ assert.equal(config().prompt,'Harvest the whole truss into the basket');
+ assert.equal(config().initial_stage,'pickup_1');
+ assert.equal(calls.length,1);
+ $('task_mode').value='tomato-in-hand119';$('image_input').value='four';
+ taskModeChanged();
+ assert.equal($('taskPanel').hidden,false);
+ assert.equal($('unifiedPromptFields').hidden,true);
+ assert.equal($('cropFields').hidden,false);
+ assert.equal($('taskStages').children.length,5);
+ assert.equal(calls.length,1);
+ // Selecting Qwen preserves staged UI while blocking automatic stage control.
+ $('agentProvider').value='qwen';
+ taskModeChanged();
+ assert.equal($('taskPanel').hidden,false);
+ assert.equal($('qwenConfig').hidden,false);
+ assert.equal($('agentMode').querySelector('option[value="auto"]').disabled,true);
+ $('agentMode').value='auto';
+ await agentModeChanged();
+ assert.equal($('agentMode').value,'manual');
+ assert.equal(calls.length,1);
+ $('agentProvider').value='tairan';taskModeChanged();
+ assert.equal($('qwenConfig').hidden,true);
+ assert.equal($('agentMode').querySelector('option[value="auto"]').disabled,false);
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
     result = subprocess.run([node, "-"], input=harness + script + scenario,
