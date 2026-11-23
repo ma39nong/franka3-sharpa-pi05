@@ -404,7 +404,7 @@ class TaskRTC:
                 with c.lock:
                     if c.data["stage_version"] != observed_version or c.data["execution_state"] != "RUNNING":
                         return True
-                    context = self.backend.snapshot(self.settings, max(self.delays))
+                    context = self.backend.snapshot(self.settings, self.settings.initial_delay_steps if getattr(self.args, "train_rtc", False) else max(self.delays))
                     # Bind observation, prompt, epoch and RTC snapshot atomically.
                     self.submit_observed(observation, context)
                     if self.awaiting_rtc_resume:
@@ -517,6 +517,7 @@ class SDKTaskBackend:
             dict(
                 operation="stream_snapshot",
                 delay_steps=delay,
+                hard_prefix=getattr(self.args, "train_rtc", False),
                 schedule=settings.prefix_attention_schedule,
                 weight=settings.max_guidance_weight,
             ),

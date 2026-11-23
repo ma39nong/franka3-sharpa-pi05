@@ -457,10 +457,9 @@ def main() -> None:
             stage(args.initial_stage, args.task_mode)
         except ValueError as error:
             parser.error(str(error))
-    if args.task_mode in ("tomato-b", "tomato-in-hand119") and (args.broker_mode != "rtc" or args.train_rtc or args.paper_rtc
-            or args.train_paper_rtc or config.MODEL_PROFILE.name != "full-delta"
+    if args.task_mode in ("tomato-b", "tomato-in-hand119") and (args.broker_mode != "rtc" or config.MODEL_PROFILE.name != "full-delta"
             or args.sharpa_backend != "sdk_direct"):
-        parser.error("番茄 B 状态机仅支持 full-delta / sdk_direct / 普通 RTC")
+        parser.error("分阶段执行需要 full-delta / sdk_direct / RTC 类模式")
     if args.train_paper_rtc:
         if args.train_rtc or args.paper_rtc:
             parser.error("Use --train-paper-rtc alone")

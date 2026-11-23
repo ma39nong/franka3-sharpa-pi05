@@ -715,6 +715,7 @@ def test_task_plan_uses_approved_stage_and_correct_rtc(tmp_path, monkeypatch):
         finetune_mode="full",
         checkpoint="fake",
         norm_stats="fake",
+        input_views=3,
     )
     monkeypatch.setattr(plans, "inspect_checkpoint", lambda *a, **kw: identity)
     settings = plans.DeploymentSettings(str(root), "fake", task_mode="tomato-b", mode="rtc", speed="fast")

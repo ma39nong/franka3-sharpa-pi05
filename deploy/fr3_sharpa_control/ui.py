@@ -43,15 +43,15 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <label for="task_mode">部署方式</label><select id="task_mode"><option value="none">统一 Prompt · 不分阶段</option><option value="tomato-b">分阶段 · 放回盘中调整（七阶段）</option><option value="tomato-in-hand119">分阶段 · 手中调整（五阶段）</option></select>
 <p class="muted">摘一颗，或统一指令摘一串：选不分阶段。只有训练时使用不同阶段指令的权重才选分阶段；Agent 可选。</p>
 <div id="unifiedPromptFields"><label for="prompt">训练时的统一英文 Prompt</label><textarea id="prompt" rows="3" placeholder="填写该权重训练时的统一任务指令"></textarea></div>
-<label for="image_input">图像输入（独立于任务流程）</label><select id="image_input"><option value="auto">自动核对权重加载配置</option><option value="three">三路 · 原始全图</option><option value="four">四路 · 原始三路＋局部图</option></select>
+<label for="image_input">图像输入（独立于任务流程）</label><select id="image_input"><option value="auto">自动识别图像路数</option><option value="three">三路 · 原始全图</option><option value="four">四路 · 原始三路＋局部图</option></select>
 <p class="muted">放回盘中调整和手中调整都可有三路／四路版本。输入选项必须与实际权重匹配；新训练的三路对照完成核验后再接入。</p>
-<label>模型类型（手动选择）</label><select id="model_type"><option value="full">Full Absolute · 全量绝对位置</option><option value="full-delta">Full Delta · 双臂增量</option><option value="lora">LoRA Absolute</option><option value="paper-delta">Paper Delta</option><option value="train-rtc-absolute">Train RTC Absolute</option><option value="train-rtc-delta">Train RTC Delta</option><option value="train-paper-rtc">Train Paper RTC</option><option value="auto">兼容：按现有训练记录自动识别</option></select>
+<label>模型类型（手动选择）</label><select id="model_type"><option value="full">Full Absolute · 全量绝对位置</option><option value="full-delta">Full Delta · 双臂增量</option><option value="lora">LoRA Absolute</option><option value="paper-delta">Paper Delta</option><option value="train-rtc-absolute">Train RTC Absolute</option><option value="train-rtc-delta">Train RTC Delta</option><option value="train-paper-rtc">Train Paper RTC</option><option value="auto">自动识别（未知项可手动选择）</option></select>
 <div class="muted">直接选择checkpoint及其真实训练类型，无需生成、复制部署契约。仍会检查权重结构和配套统计；Paper使用原有算法资产。</div>
 <details><summary>自动识别时的动作语义</summary><select id="semantics"><option value="auto">自动识别</option><option value="absolute">Absolute</option><option value="delta">Delta</option></select></details>
-<details><summary>训练证据（可选，用于交叉核对）</summary><label>归档训练 JSON（可选）</label><div class="path"><input id="training_record"><button onclick="browse('training_record',true)">选择文件</button></div></details>
-<details id="trainRTCSettings"><summary>Train RTC 专用设置</summary><label>训练 RTC 最大延迟（0 自动识别）</label><input id="train_rtc_max_delay" type="number" min="0" max="49" value="0"><div class="muted">手动选择Train RTC时必填实际训练上限（例如10）；普通RTC无需填写。训练JSON仅用于可选核对，不会生成契约副本。</div>
+<details><summary>训练配置（可选，辅助自动识别）</summary><label>归档训练 JSON（可选）</label><div class="path"><input id="training_record"><button onclick="browse('training_record',true)">选择文件</button></div></details>
+<details id="trainRTCSettings"><summary>Train RTC 专用设置</summary><label>训练 RTC 最大延迟（0 自动识别）</label><input id="train_rtc_max_delay" type="number" min="0" max="49" value="0"><div class="muted">手动选择Train RTC时必填实际训练上限（例如10）；普通RTC无需填写。没有训练JSON也可直接手动配置运行。</div>
 <label>Train RTC 初始延迟（0 使用训练上限，最多25）</label><input id="rtc_initial_delay_steps" type="number" min="0" max="25" value="0">
-</details><div class="actions" style="margin-top:14px"><button onclick="inspect()">识别权重</button></div>
+</details><div class="actions" style="margin-top:14px"><button onclick="inspect()">自动识别并填入</button></div>
 <details><summary>历史基线路径（可选）</summary><select id="baselinePreset"><option value="">保留当前权重与部署配置</option><option value="three">放回盘中调整 · 三路 · 93条基线</option><option value="four">放回盘中调整 · 四路 · 100条基线</option><option value="in-hand119">手中调整 · 四路 · 119条基线</option></select><button onclick="applyBaselinePreset()">填入所选基线</button><p class="muted">仅方便填写已有权重路径。普通统一 Prompt 权重直接选择 checkpoint，无需使用基线或 Agent。</p></details><div id="identity" class="notice" style="white-space:pre-line">覆盖：30Hz／58D 的全量 Absolute、普通 Delta、Paper Delta、Train RTC、Train Paper RTC，以及 Absolute LoRA。Paper按资产识别；LoRA Delta与其他结构尚不支持。实际结构在GPU加载时再次核对。</div>
 </article><article class="card" id="execution-card"><h2>2 · 本次执行配置</h2>
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
@@ -115,8 +115,8 @@ function updateModes(){let modes=repoModes.filter(m=>!modelModes||modelModes.inc
 function modelTypeChanged(reset=false){let t=$('model_type').value,train=t.startsWith('train-');$('trainRTCSettings').open=train;modelModes=t==='auto'?null:t==='lora'?['serial']:train?['serial',t==='train-paper-rtc'?'train-paper-rtc':'train-rtc']:['serial',t==='paper-delta'?'paper-rtc':'rtc'];if(t!=='auto')$('semantics').value=t.includes('delta')||t==='train-paper-rtc'?'delta':'absolute';if(reset&&!train&&t!=='auto'){$('train_rtc_max_delay').value=0;$('rtc_initial_delay_steps').value=0}updateModes();invalidate()}
 function modelContractText(model){
  const m=model.tomato_model;
- if(!m)return '任务流程／图像输入：尚未核验，请核对该权重的训练配置';
- return `任务：${m.task_name} · 输入：${m.input_name}\n训练版本：${m.dataset_version} · ${m.dataset_episodes}条 · checkpoint ${m.checkpoint_step}`;
+ if(!m)return '图像输入：'+(model.input_views?model.input_views+'路':'待手动选择');
+ return `任务：${m.task_name} · 输入：${m.input_name}\n训练版本：${m.dataset_version||"自定义配置"} · checkpoint ${m.checkpoint_step||"当前选择"}`;
 }
 let inspectedViews=null;
 function updateDeploymentFields(){
@@ -134,7 +134,18 @@ function applyBaselinePreset(){
  if(!preset)return;
  return tomatoPreset(preset==='in-hand119'?preset:preset==='four');
 }
-async function inspect(){try{const c=config();const d=await api('inspect',c);modelModes=d.supported_modes;inspectedViews=d.input_views;updateDeploymentFields();const modes=updateModes();$('identity').textContent=`${modelContractText(d)}\n${d.finetune_mode} · ${d.semantics||'语义未知'} · 30 Hz / 58D / horizon 50\n${d.evidence}${d.train_rtc?" · Train RTC 最大延迟="+d.train_rtc.max_delay+"步":""}\n归一化：${d.normalization}；噪声：${d.paper_algorithm?'相关噪声 β='+d.paper_algorithm.beta:'独立高斯'}\n可用模式：${modeNames(modes)}`;invalidate()}catch(e){failure(e)}}
+async function inspect(){try{
+ const c=config();const d=await api('inspect',{...c,model_type:'auto',semantics:'auto',train_rtc_max_delay:0,image_input:'auto'});
+ if(d.profile){$('model_type').value=d.train_rtc?(d.paper_algorithm?'train-paper-rtc':d.semantics==='delta'?'train-rtc-delta':'train-rtc-absolute'):d.paper_algorithm?'paper-delta':d.profile;$('semantics').value=d.semantics;}
+ $('train_rtc_max_delay').value=d.train_rtc?d.train_rtc.max_delay:0;
+ if(d.suggestions?.prompt)$('prompt').value=d.suggestions.prompt;
+ if(d.input_views)$('image_input').value=d.input_views===4?'four':'three';
+ if(d.suggestions?.task_mode){$('task_mode').value=d.suggestions.task_mode;taskModeChanged();}
+ modelTypeChanged();modelModes=d.supported_modes;inspectedViews=d.input_views;
+ const preferred=d.supported_modes.at(-1);if(d.profile&&preferred){$('mode').value=preferred;modeChanged();}
+ updateDeploymentFields();const modes=updateModes();
+ $('identity').textContent=`${modelContractText(d)}\n${d.finetune_mode} · ${d.semantics||'动作语义待选'} · 30 Hz / 58D / horizon 50\n${d.evidence}${d.train_rtc?' · Train RTC 最大延迟='+d.train_rtc.max_delay+'步':''}\n归一化：${d.normalization}\n${(d.warnings||[]).join('\\n')}\n已识别项已填入；其余设置可手动修改。可用模式：${modeNames(modes)}`;invalidate();
+ }catch(e){failure(e)}}
 async function repositoryChanged(){try{let d=await api('repository?path='+encodeURIComponent($('repository').value));repoModes=d.modes;$('repoInfo').textContent='当前分支：'+d.branch+'；仅可选当前代码支持的模式';updateModes();invalidate()}catch(e){failure(e)}}
 async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,图像输入:p.model.input_views+'路',统一Prompt:c.task_mode==='none'?c.prompt:'按阶段指令',初始阶段:c.initial_stage,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
 async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';taskModeChanged();modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
@@ -323,7 +334,7 @@ def server_for(root, *, port=8766):
     controller = DeploymentController(root)
     token = secrets.token_urlsafe(32)
     defaults = {"repository": str(root), "output": str(desktop() / "Sharpa部署记录"), "steps": 15, "rounds": 0, "task_mode": "none", "initial_stage": "pickup_1", "prompt": DEFAULT_PROMPT, "image_input": "auto",
-                "model_type": "full-delta", "mode": "rtc", "speed": "fast", "initialization": "current"}
+                "model_type": "auto", "mode": "rtc", "speed": "fast", "initialization": "current"}
     with suppress(OSError, ValueError):
         defaults.update(json.loads((Path(root) / ".deployment/control_last.json").read_text()))
 
@@ -414,7 +425,7 @@ def server_for(root, *, port=8766):
                 if self.path == "/api/inspect":
                     result = inspect_checkpoint(data["checkpoint"], training_record=data.get("training_record", ""),
                                                 semantics=data.get("semantics", "auto"), cache=controller.cache,
-                                                train_rtc_max_delay=data.get("train_rtc_max_delay", 0), model_type=data.get("model_type", "auto"), image_input=data.get("image_input", "auto"))
+                                                train_rtc_max_delay=data.get("train_rtc_max_delay", 0), model_type=data.get("model_type", "auto"), image_input=data.get("image_input", "auto"), task_mode=data.get("task_mode", "none"))
                 elif self.path == "/api/preview":
                     result = controller.preview(data)
                 elif self.path == "/api/start-model":

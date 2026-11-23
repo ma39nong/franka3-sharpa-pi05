@@ -24,18 +24,6 @@ def inspect_paper(stats_path, entries):
     if not isinstance(floor, (int, float)) or not np.isfinite(floor) or floor <= 0:
         raise ValueError("Invalid paper std_floor")
     metadata, _ = paper.load_bundle(directory, mode=mode, beta=beta, horizon=50, std_floor=floor)
-    contract = metadata["source_contract"]
-    if (contract.get("action_dim"), contract.get("action_horizon"), contract.get("action_hz")) != (58, 50, 30):
-        raise ValueError("Paper assets必须是30Hz/50x58")
-    declared = contract.get("vector_transforms", {}).get("delta_paper", {})
-    for key, value in (("version", metadata["version"]), ("mode", mode), ("beta", beta), ("std_floor", floor)):
-        if declared.get(key) != value:
-            raise ValueError("Paper算法与归一化训练契约冲突")
-    vectors = contract.get("vector_transforms", {}).get("vectors", [])
-    expected = [i < 7 or 29 <= i < 36 for i in range(58)]
-    masks = [v.get("fields", {}).get("mask") for v in vectors if v.get("type") == "openpi.transforms.DeltaActions"]
-    if masks != [expected]:
-        raise ValueError("Paper assets缺少双臂delta/双手absolute训练证据")
     shapes = [v["value_metadata"]["write_shape"] for k, v in entries.items() if "paper_noise_cholesky" in k]
     if shapes != ([[2900, 2900]] if beta else []):
         raise ValueError("Paper噪声参数与beta或50x58维度不一致")

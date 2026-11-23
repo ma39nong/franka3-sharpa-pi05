@@ -38,14 +38,17 @@ def checkpoint_contract():
         raise ValueError("Paper delta权重必须使用full-delta模型配置，不能作为absolute/LoRA加载")
     stats = json.loads(config.NORM_STATS.read_text())["norm_stats"]
     validate_stats(stats, paper_algorithm=algorithm)
-    from .train_rtc_contract import inspect_train_rtc
-    from .tomato_model import identify
-    tomato = identify(hashlib.sha256(config.NORM_STATS.read_bytes()).hexdigest(),
-                      hashlib.sha256(manifest.read_bytes()).hexdigest(),
-                      hashlib.sha256(tree_path.read_bytes()).hexdigest())
-    trained = inspect_train_rtc(config.NORM_STATS, checkpoint, paper_algorithm=algorithm)
-    if tomato and (config.MODEL_PROFILE.name != "full-delta" or trained or algorithm):
-        raise ValueError("Verified B Coarse checkpoint requires ordinary full-delta, excludes Absolute/Train/Paper")
+    import os
+    from deploy.fr3_sharpa_control.plan import inspect_checkpoint
+    options = inspect_checkpoint(checkpoint,
+        model_type=os.environ.get("SHARPA_DEPLOY_MODEL_TYPE", "auto"),
+        semantics="delta" if config.MODEL_PROFILE.extra_delta_transform else "absolute",
+        train_rtc_max_delay=int(os.environ.get("SHARPA_TRAIN_RTC_MAX_DELAY", "0")),
+        image_input=os.environ.get("SHARPA_DEPLOY_IMAGE_INPUT", "auto"),
+        task_mode=os.environ.get("SHARPA_DEPLOY_TASK_MODE", "none"))
+    if options["input_views"] is None:
+        raise ValueError("请设置 SHARPA_DEPLOY_IMAGE_INPUT=three 或 four")
+    tomato, trained = options["tomato_model"], options["train_rtc"]
     if trained and (config.MODEL_PROFILE.finetune_mode != "full"
                     or trained["semantics"] != ("delta" if config.MODEL_PROFILE.extra_delta_transform else "absolute")):
         raise ValueError("Train RTC record conflicts with profile/action semantics")
@@ -113,7 +116,11 @@ def build_config():
         from dataclasses import replace
         from .crop_input import CropRuntimeData
         model = replace(model, image_keys=tuple(metadata["tomato_model"]["image_keys"]))
-        data_class = CropRuntimeData
+        if metadata["paper_algorithm"]:
+            from .crop_input import PaperCropRuntimeData
+            data_class = PaperCropRuntimeData
+        else:
+            data_class = CropRuntimeData
     data = data_class(
         repo_id=config.NORM_STATS.parent.name,
         assets=AssetsConfig(assets_dir=str(config.NORM_STATS.parent.parent),

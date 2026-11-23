@@ -1,5 +1,6 @@
 """Hardware-free deployment recipes, checkpoint evidence and run allocation."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
+from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
@@ -7,8 +8,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from deploy.fr3_sharpa_runtime.config import DEFAULT_PROMPT
 
+from deploy.fr3_sharpa_runtime.config import DEFAULT_PROMPT
 
 KNOWN_STATS = {
     "91c0295eea14bd2f1004695dd13a30eb052a96a124cbd67f65d9732a90e1032b": "absolute",
@@ -62,7 +63,11 @@ def allocate_run(root, *, now=None):
             attempt += 1
 
 
-def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto", image_input="auto"):
+def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cache=None, train_rtc_max_delay=0, model_type="auto", image_input="auto", task_mode="none"):
+    if semantics not in ("auto", "absolute", "delta"):
+        raise ValueError("动作语义仅支持 auto/absolute/delta")
+    if type(train_rtc_max_delay) is not int or not 0 <= train_rtc_max_delay < 50:
+        raise ValueError("训练 RTC 最大延迟必须为0..49整数")
     if image_input not in ("auto", "three", "four"):
         raise ValueError("图像输入请选择自动核对、三路或四路")
     choices = {"auto": None, "full": "absolute", "full-delta": "delta", "lora": "absolute",
@@ -85,10 +90,13 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
     stats = paths[0]
     values = json.loads(stats.read_text())["norm_stats"]
     entries = json.loads(metadata.read_text())["tree_metadata"]
-    from deploy.fr3_sharpa_runtime.paper_contract import inspect_paper, validate_stats, algorithm_identity
+    from deploy.fr3_sharpa_runtime.paper_contract import algorithm_identity
+    from deploy.fr3_sharpa_runtime.paper_contract import inspect_paper
+    from deploy.fr3_sharpa_runtime.paper_contract import validate_stats
     algorithm = inspect_paper(stats, entries)
     validate_stats(values, paper_algorithm=algorithm)
-    from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile, validate_parameter_layout
+    from deploy.fr3_sharpa_runtime.model_profiles import get_model_profile
+    from deploy.fr3_sharpa_runtime.model_profiles import validate_parameter_layout
     lora = any("lora" in key.lower() for key in entries)
     if algorithm and lora:
         raise ValueError("Paper目前仅支持全量delta，不能套用LoRA")
@@ -107,80 +115,52 @@ def inspect_checkpoint(checkpoint, *, training_record="", semantics="auto", cach
             projections["output"] = entry["value_metadata"]["write_shape"]
     if projections != {"input": 58, "output": [58]}:
         raise ValueError("仅支持原生58D模型投影；不能按目录名称假定模型结构")
-    from deploy.fr3_sharpa_runtime.train_rtc_contract import inspect_train_rtc
-    trained = inspect_train_rtc(stats, root, training_record or None, paper_algorithm=algorithm,
-                                manual_delay=train_rtc_max_delay, manual_semantics=semantics, model_type=model_type)
-    if trained and lora:
-        raise ValueError("Train RTC requires full checkpoint, excludes LoRA")
+    from deploy.fr3_sharpa_runtime.deployment_options import discover
+    from deploy.fr3_sharpa_runtime.deployment_options import input_route
+    found = discover(root, training_record)
+    warnings = found.pop("warnings")
+    # Manual settings always win over optional historical evidence.
+    detected = semantics if semantics != "auto" else ("delta" if algorithm else found.get("semantics") or KNOWN_STATS.get(fingerprint(stats)))
+    if manual:
+        detected = choices[model_type]
+    delay = train_rtc_max_delay or (found.get("rtc_max_delay", 0) if not manual else 0)
+    is_train = model_type.startswith("train-") if manual else bool(delay)
+    if is_train and not 0 < delay < 50:
+        raise ValueError("请填写训练 RTC 最大延迟（1..49）")
+    if lora and (is_train or detected == "delta"):
+        raise ValueError("当前加载器支持 LoRA Absolute 串行部署")
     stats_sha, manifest_sha = fingerprint(stats), fingerprint(manifest)
     from deploy.fr3_sharpa_runtime.tomato_model import identify
-    tomato = identify(stats_sha, manifest_sha, fingerprint(metadata))
-    # These are the input routes implemented by the loader. A path name or
-    # normalization shared by two experiments cannot activate a fourth camera.
-    input_views = 4 if tomato and tomato.get("online_roi_required") else 3
-    if image_input != "auto" and {"three": 3, "four": 4}[image_input] != input_views:
-        raise ValueError("所选图像输入与已接入的权重加载配置不匹配；四路模型需核验局部图配置，不能按数据条数推断")
-    if tomato and (trained or algorithm or (manual and model_type != "full-delta") or semantics == "absolute"):
-        raise ValueError("已识别的 B Coarse 必须使用普通 Full Delta，不能覆盖为 Absolute 或训练 RTC")
-    identity = hashlib.sha256((manifest_sha + stats_sha + algorithm_identity(algorithm) + (trained["record_sha256"] if trained else "")).encode()).hexdigest()
-    detected, source = KNOWN_STATS.get(stats_sha), "已核对的训练统计指纹"
-    if tomato:
-        detected, source = "delta", "已核对 B Coarse checkpoint 配套统计与模型指纹"
-    if algorithm:
-        detected, source = "delta", "完整Paper资产、噪声参数和双臂delta训练契约已匹配"
-    if trained:
-        detected, source = trained["semantics"], ("操作员手动确认训练RTC及最大延迟" if trained.get("manual_confirmation") else "匹配统计与结构的Train RTC训练记录")
-    cached_confirmation = False
-    if training_record:
-        from deploy.fr3_sharpa_runtime.train_rtc_contract import load_training_record
-        record = load_training_record(Path(training_record).expanduser(), stats, paper_algorithm=algorithm)
-        config = record["config"]["fields"]
-        model, data = config["model"]["fields"], config["data"]["fields"]
-        if (model["action_dim"], model["action_horizon"], model["max_token_len"], data["action_hz"]) != (58, 50, 256, 30):
-            raise ValueError("训练记录不是58D/50步/token256/30Hz")
-        expected = ("gemma_2b_lora", "gemma_300m_lora") if lora else ("gemma_2b", "gemma_300m")
-        if (model["paligemma_variant"], model["action_expert_variant"]) != expected:
-            raise ValueError("训练记录模型变体与权重参数结构不一致")
-        if record["inputs"].get("norm_stats_sha256") != stats_sha:
-            raise ValueError("训练记录的归一化统计摘要与 checkpoint 不一致")
-        if algorithm and not data["extra_delta_transform"]:
-            raise ValueError("训练记录与Paper资产的delta语义冲突")
-        detected = "delta" if data["extra_delta_transform"] else "absolute"
-        source = "匹配统计和模型结构的训练记录"
-    if manual:
-        if training_record and detected and detected != semantics:
-            raise ValueError("手动模型类型与提供的训练记录冲突")
-        detected, source = semantics, "操作员手动选择模型类型（训练JSON可选，无需契约副本）"
-    if cache and not detected:
-        binding = Path(cache) / f"{identity}.json"
-        if binding.is_file():
-            detected = json.loads(binding.read_text())["semantics"]
-            if detected not in ("absolute", "delta"):
-                raise ValueError("该权重保存的语义绑定无效，请核对训练记录")
-            source = "该权重此前保存的操作员确认"
-            cached_confirmation = True
-    if semantics not in ("auto", "absolute", "delta"):
-        raise ValueError("动作语义仅支持auto/absolute/delta")
-    if semantics != "auto":
-        if detected and detected != semantics and not cached_confirmation:
-            raise ValueError("手动选择与已有训练证据冲突，请核对训练配置")
-        if not detected or cached_confirmation:
-            detected, source = semantics, "操作员按训练配置手动确认"
-    if detected and lora and detected == "delta":
-        raise ValueError("当前新部署配置尚不支持LoRA delta；不会套用全量delta配置")
+    try:
+        historical = identify(stats_sha, manifest_sha, fingerprint(metadata))
+    except ValueError:
+        historical = None
+    views = image_input if image_input != "auto" else found.get("image_input")
+    if views is None and historical:
+        views = "four" if historical.get("online_roi_required") else "three"
+    route = input_route(views, task_mode, historical)
+    trained = None
+    if is_train:
+        if not detected:
+            warnings.append("请选择 Absolute 或 Delta 动作类型")
+        trained = {"max_delay": delay, "record": None, "manual_confirmation": True,
+                   "semantics": detected, "record_sha256": hashlib.sha256(f"{manifest_sha}:{stats_sha}:{delay}:{detected}".encode()).hexdigest()}
     supported_modes = ["serial"]
     if not lora:
-        supported_modes += ["paper-rtc" if algorithm else "rtc"]
-    if trained:
-        supported_modes = ["serial", "train-paper-rtc" if algorithm else "train-rtc"]
-    if tomato and tomato.get("online_roi_required"):
-        supported_modes = ["serial", "rtc"]
-    return {"tomato_model": tomato, "input_views": input_views, "train_rtc": trained, "supported_modes": supported_modes,
+        supported_modes.append("train-paper-rtc" if trained and algorithm else "train-rtc" if trained else "paper-rtc" if algorithm else "rtc")
+    identity = hashlib.sha256(json.dumps([manifest_sha, stats_sha, algorithm_identity(algorithm), trained, route], sort_keys=True).encode()).hexdigest()
+    if views is None:
+        warnings.append("无法识别图像路数，请手动选择三路或四路")
+    if not detected:
+        warnings.append("无法识别动作语义，请手动选择模型类型")
+    return {"tomato_model": route, "input_views": {"three": 3, "four": 4}.get(views),
+            "train_rtc": trained, "supported_modes": supported_modes,
             "paper_algorithm": algorithm, "normalization": algorithm["mode"] if algorithm else "global_quantile",
             "checkpoint": str(root), "norm_stats": str(stats), "identity": identity,
             "manifest_sha256": manifest_sha, "stats_sha256": stats_sha,
             "finetune_mode": "lora" if lora else "full", "semantics": detected,
-            "evidence": source if detected else "无法从参数识别动作语义：请提供训练JSON或明确确认",
+            "evidence": "手动配置" if manual else "参数、算法资产及可选配置中的可识别字段",
+            "warnings": warnings, "suggestions": found,
             "profile": ("lora" if lora else "full-delta" if detected == "delta" else "full") if detected else None,
             "action_dim": 58, "action_horizon": 50, "action_hz": 30}
 
@@ -240,7 +220,7 @@ class DeploymentSettings:
             raise ValueError("RTC初始延迟仅适用于Train RTC执行模式")
         model = inspect_checkpoint(self.checkpoint, training_record=self.training_record, semantics=self.semantics,
                                    cache=cache, train_rtc_max_delay=self.train_rtc_max_delay, model_type=self.model_type,
-                                   image_input=self.image_input)
+                                   image_input=self.image_input, task_mode=self.task_mode)
         if self.crop_device not in ("cuda", "cpu"):
             raise ValueError("局部图设备仅支持cuda/cpu")
         if model.get("tomato_model") and model["tomato_model"].get("online_roi_required"):
@@ -249,15 +229,14 @@ class DeploymentSettings:
             model["crop_locator"] = locator
             model["crop_locator_sha256"] = locator_sha
             model["identity"] = hashlib.sha256((model["identity"] + locator_sha + self.crop_device).encode()).hexdigest()
-            model["supported_modes"] = ["serial", "rtc"]
+
         if not model["profile"]:
             raise ValueError(model["evidence"])
+        if model["input_views"] is None:
+            raise ValueError("请选择三路或四路图像输入后核对配置")
         if self.task_mode != "none":
-            if (self.mode != "rtc" or model["profile"] != "full-delta" or not model.get("tomato_model")
-                    or model["train_rtc"] or model["paper_algorithm"] or self.rounds != 0):
-                raise ValueError("番茄 B 任务要求已识别 B Coarse 权重、普通 Full Delta RTC、连续轮数0")
-            if model["tomato_model"].get("task_profile", "tomato-b") != self.task_mode:
-                raise ValueError("权重与任务流程不匹配：放回盘中调整使用七阶段，手中调整使用五阶段")
+            if self.mode == "serial" or model["profile"] != "full-delta" or self.rounds != 0:
+                raise ValueError("分阶段任务要求 Full Delta、RTC 类执行模式和连续轮数0")
             if not (repo / "deploy/fr3_sharpa_runtime/task_execution.py").is_file():
                 raise ValueError("所选仓库缺少番茄任务执行接口")
         if self.mode not in model["supported_modes"]:
@@ -340,7 +319,9 @@ def plan_environment(plan):
                 profile.norm_stats_env: plan["model"]["norm_stats"],
                 profile.port_env: str(plan["port"]),
                 "SHARPA_MODEL_PROFILE": profile.name,
-                "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto")})
+                "SHARPA_DEPLOY_MODEL_TYPE": plan["settings"].get("model_type", "auto"),
+                "SHARPA_DEPLOY_IMAGE_INPUT": "four" if plan["model"]["input_views"] == 4 else "three",
+                "SHARPA_DEPLOY_TASK_MODE": plan["settings"].get("task_mode", "none")})
     root = plan["settings"]["repository"]
     for key in ("SHARPA_CROP_LOCATOR", "SHARPA_CROP_DEVICE", "SHARPA_CROP_STATUS_DIR", "SHARPA_SHARED_ROI_DIR", "SHARPA_FOUR_VIEW_RECORD_DIR"):
         env.pop(key, None)

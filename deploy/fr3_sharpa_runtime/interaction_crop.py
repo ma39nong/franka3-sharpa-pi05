@@ -84,7 +84,7 @@ class InteractionCropper:
         cv2.setNumThreads(1)
         locator = RgbLocator(root, device=os.environ.get('SHARPA_CROP_DEVICE', 'cuda'))
         from .tomato_model import IN_HAND_STATS_SHA256
-        roi_profile = 'in_hand119_right_truss_v1' if hashlib.sha256(Path(norm_stats).read_bytes()).hexdigest() == IN_HAND_STATS_SHA256 else 'old100_r11'
+        roi_profile = 'in_hand119_right_truss_v1' if os.environ.get('SHARPA_DEPLOY_TASK_MODE') == 'tomato-in-hand119' or hashlib.sha256(Path(norm_stats).read_bytes()).hexdigest() == IN_HAND_STATS_SHA256 else 'old100_r11'
         stats = json.loads(Path(norm_stats).read_text())['norm_stats']['state']
         instance = cls(locator, np.asarray(stats['q99'])-np.asarray(stats['q01']),
                        status_dir=os.environ.get('SHARPA_CROP_STATUS_DIR'), roi_profile=roi_profile)

@@ -72,15 +72,14 @@ def test_evidence_and_plan(trained_checkpoint):
     assert info["supported_modes"] == ["serial", "train-rtc"]
     assert info["profile"] == "full-delta"
     repo = str(Path(__file__).resolve().parents[3])
-    plan = DeploymentSettings(repo, str(root), mode="train-rtc", speed="fast").plan()
+    plan = DeploymentSettings(repo, str(root), mode="train-rtc", speed="fast", image_input="three").plan()
     assert "--enable-train-rtc" in plan["service"]
     assert "--train-rtc" in plan["execute"]
     assert plan["execute"][plan["execute"].index("--rtc-initial-delay-steps") + 1] == "10"
-    assert plan_environment(plan)["SHARPA_TRAIN_RTC_RECORD"] == str(path)
+    assert plan_environment(plan)["SHARPA_TRAIN_RTC_MAX_DELAY"] == "10"
     with pytest.raises(ValueError, match="不支持所选推理模式"):
-        DeploymentSettings(repo, str(root), mode="rtc", speed="fast").plan()
-    with pytest.raises(ValueError, match="冲突"):
-        inspect_checkpoint(root, semantics="absolute")
+        DeploymentSettings(repo, str(root), mode="rtc", speed="fast", image_input="three").plan()
+    assert inspect_checkpoint(root, semantics="absolute")["semantics"] == "absolute"
     stats.write_text(stats.read_text() + " ")
     with pytest.raises(ValueError, match="hash"):
         inspect_train_rtc(stats, root)
@@ -241,6 +240,7 @@ def test_loader_selects_trained_model_and_check_only_needs_no_gpu(trained_checkp
     monkeypatch.setattr(config, "NORM_STATS", stats)
     monkeypatch.setattr(config, "MODEL_PROFILE", profile)
     monkeypatch.setattr(config, "CONFIG_NAME", profile.config_name)
+    monkeypatch.setenv("SHARPA_DEPLOY_IMAGE_INPUT", "three")
     training = model_loader.build_config()
     assert isinstance(training.model, TrainRTCPi0Config)
     assert training.model.rtc_max_delay == 10

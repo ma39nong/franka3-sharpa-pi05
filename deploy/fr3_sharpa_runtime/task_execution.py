@@ -36,17 +36,15 @@ def execute_task(args):
     lease.start()
     worker = backend = engine = None
     try:
-        runtime = SharpaRuntime(args.policy_url)
+        runtime = SharpaRuntime(args.policy_url, **{key: True for key in ("train_rtc", "paper_rtc") if getattr(args, key, False)})
         metadata = runtime.inspect_metadata(require_rtc=True)
         if (
             not metadata.get("tomato_model")
             or metadata["tomato_model"].get("task_profile", "tomato-b") != profile
             or (profile == "tomato-in-hand119" and metadata["tomato_model"].get("stage_contract") != TASK_CONTRACTS[profile])
-            or metadata.get("train_rtc")
-            or metadata.get("paper_algorithm")
             or metadata.get("model_profile") != "full-delta"
         ):
-            raise ValueError("任务服务未匹配已核对的 B Coarse Full Delta 普通 RTC 模型")
+            raise ValueError("任务服务与所选阶段流程或 Full Delta 配置不一致")
         setup = args.ros_overlay / "setup.bash"
         if not setup.is_file():
             raise FileNotFoundError(setup)

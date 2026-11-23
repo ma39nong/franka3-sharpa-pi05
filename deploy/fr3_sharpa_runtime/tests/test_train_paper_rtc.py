@@ -71,7 +71,7 @@ def test_recognition_plan_and_loader(trained_paper, monkeypatch, capsys):
     assert info["supported_modes"] == ["serial", "train-paper-rtc"]
     repo = Path(__file__).resolve().parents[3]
     assert "train-paper-rtc" in repository_info(repo)["modes"]
-    settings = DeploymentSettings(str(repo), str(root), mode="train-paper-rtc", speed="fast")
+    settings = DeploymentSettings(str(repo), str(root), mode="train-paper-rtc", speed="fast", image_input="three")
     plan = settings.plan()
     assert "--enable-train-paper-rtc" in plan["service"]
     assert "--train-paper-rtc" in plan["execute"]
@@ -84,6 +84,7 @@ def test_recognition_plan_and_loader(trained_paper, monkeypatch, capsys):
         CHECKPOINT=root, NORM_STATS=assets / "norm_stats.json", MODEL_PROFILE=profile, CONFIG_NAME=profile.config_name
     ).items():
         monkeypatch.setattr(config, key, value)
+    monkeypatch.setenv("SHARPA_DEPLOY_IMAGE_INPUT", "three")
     training = model_loader.build_config()
     assert isinstance(training.model, TrainPaperRTCPi0Config)
     assert training.model.rtc_max_delay == 10
@@ -120,8 +121,7 @@ def test_training_paper_contract_must_match_assets(trained_paper, field, value):
     root, _, path, record = trained_paper
     record["config"]["fields"]["model"]["fields"][field] = value
     path.write_text(json.dumps(record))
-    with pytest.raises(ValueError, match="mismatch"):
-        inspect_checkpoint(root)
+    assert inspect_checkpoint(root)["paper_algorithm"] is not None
 
 
 def test_known_records_match_exact_manifest_and_metadata(tmp_path, monkeypatch):

@@ -1,5 +1,15 @@
 # 统一部署控制台与 Chunk 录制
 
+## 自动识别与手动配置（2026-11-24）
+
+选择 checkpoint 步骤目录后点击“自动识别并填入”。控制台读取实际参数结构、配套归一化和 Paper 资产，并尽力读取步骤目录或其父目录 `reproducibility/effective_config.json`、运行 JSON 中的字段。已知字段自动填入模型类型、图像路数、RTC 延迟、执行模式及可识别的任务流程／统一 Prompt；未知项显示提示，可直接手动选择。无需生成训练契约、登记 checkpoint 指纹或提供训练 JSON，手动配置优先于可选记录。历史模型名称只作提示。
+
+无法只从权重区分的 Absolute／Delta、RTC 训练方式、图像路数和任务流程，需要操作员补齐。三路、四路均可手动选择；四路需填写可用的局部图定位器。五阶段、七阶段可配合普通 RTC、Paper RTC、Train RTC、Train Paper RTC，Train RTC 需填写最大延迟。四路 Paper 使用同时保留 Paper 归一化和第四路 RGB 的适配器。
+
+参数维度、归一化数值、Paper 数值资产及噪声矩阵的匹配仍须满足加载器要求。此版本支持的动作接口仍为 30Hz、50×58；手动设置不能把缺失的数值资产或其他模型结构变成可加载模型。本文后面的历史指纹准入、训练证据冲突阻止运行及仅限普通 RTC 的描述由本节替代。
+
+命令行可用 `SHARPA_DEPLOY_IMAGE_INPUT=three|four` 和 `SHARPA_DEPLOY_TASK_MODE=none|tomato-b|tomato-in-hand119` 明确输入与阶段流程，服务端与执行端使用相同环境。模型类型通过 `SHARPA_DEPLOY_MODEL_TYPE` 设置，Train RTC 最大延迟通过 `SHARPA_TRAIN_RTC_MAX_DELAY` 设置。
+
 面向现场操作人员的逐步说明见 [部署 UI 使用手册](../../部署UI使用手册.md)。本页保留模型契约、模式实现与维护细节。
 
 ## 工作机启动

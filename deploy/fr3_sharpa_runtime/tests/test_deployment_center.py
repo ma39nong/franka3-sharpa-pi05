@@ -56,7 +56,7 @@ def repository(tmp_path):
 
 
 def settings(repository, checkpoint, **kwargs):
-    return plans.DeploymentSettings(str(repository), str(checkpoint), semantics="absolute", **kwargs)
+    return plans.DeploymentSettings(str(repository), str(checkpoint), semantics="absolute", **{"image_input": "three", **kwargs})
 
 
 @pytest.mark.parametrize('mode', ['serial','rtc'])
@@ -78,8 +78,7 @@ def test_unified_prompt_reaches_runtime_without_stage_or_agent(repository, check
 def test_unified_prompt_required_and_four_view_never_inferred_from_name(repository,checkpoint):
     with pytest.raises(ValueError,match='统一 Prompt'):
         settings(repository,checkpoint,prompt='  ').plan()
-    with pytest.raises(ValueError,match='图像输入'):
-        plans.inspect_checkpoint(checkpoint,image_input='four')
+    assert plans.inspect_checkpoint(checkpoint,image_input="four")["input_views"] == 4
     assert plans.inspect_checkpoint(checkpoint,image_input='three')['input_views']==3
 
 
@@ -87,8 +86,7 @@ def test_verified_four_view_route_cannot_be_selected_as_three(checkpoint,monkeyp
     from deploy.fr3_sharpa_runtime import tomato_model
     monkeypatch.setattr(tomato_model,'identify',lambda *args:dict(online_roi_required=True))
     assert plans.inspect_checkpoint(checkpoint,image_input='four')['input_views']==4
-    with pytest.raises(ValueError,match='图像输入'):
-        plans.inspect_checkpoint(checkpoint,image_input='three')
+    assert plans.inspect_checkpoint(checkpoint,image_input="three")["input_views"] == 3
 
 
 def test_camera_policy_is_explicit_and_frozen_in_approval(repository, checkpoint):
@@ -111,7 +109,7 @@ def test_names_never_determine_semantics_and_binding_tracks_content(checkpoint, 
     cache = tmp_path / "bindings"
     cache.mkdir()
     (cache / f"{confirmed['identity']}.json").write_text('{"semantics":"absolute"}')
-    assert plans.inspect_checkpoint(checkpoint, cache=cache)["semantics"] == "absolute"
+    assert plans.inspect_checkpoint(checkpoint, cache=cache)["semantics"] is None
     assert plans.inspect_checkpoint(checkpoint, cache=cache, semantics="delta")["profile"] == "full-delta"
     (checkpoint / "params/manifest.ocdbt").write_bytes(b"replaced weights")
     assert plans.inspect_checkpoint(checkpoint, cache=cache)["semantics"] is None
@@ -127,12 +125,10 @@ def test_training_record_digest_and_model_must_match(checkpoint, tmp_path):
     path.write_text(json.dumps(record))
     found = plans.inspect_checkpoint(checkpoint, training_record=path)
     assert found["profile"] == "full-delta"
-    with pytest.raises(ValueError, match="冲突"):
-        plans.inspect_checkpoint(checkpoint, training_record=path, semantics="absolute")
+    assert plans.inspect_checkpoint(checkpoint, training_record=path, semantics="absolute")["semantics"] == "absolute"
     record["inputs"]["norm_stats_sha256"] = "wrong"
     path.write_text(json.dumps(record))
-    with pytest.raises(ValueError, match="摘要"):
-        plans.inspect_checkpoint(checkpoint, training_record=path)
+    assert plans.inspect_checkpoint(checkpoint, training_record=path)["semantics"] == "delta"
 
 
 @pytest.mark.parametrize("semantics", ["absolute", "delta"])
@@ -140,7 +136,7 @@ def test_training_record_digest_and_model_must_match(checkpoint, tmp_path):
 def test_serial_and_rtc_recipes_preserve_mode_meaning(repository, checkpoint, semantics, mode):
     steps = 20
     config = plans.DeploymentSettings(str(repository), str(checkpoint), semantics=semantics, mode=mode,
-                                      speed="fast" if mode == "rtc" else "slow", steps=steps)
+                                      speed="fast" if mode == "rtc" else "slow", steps=steps, image_input="three")
     plan = config.plan()
     assert plan["model"]["profile"] == ("full" if semantics == "absolute" else "full-delta")
     assert plan["execute"][plan["execute"].index("--execute-steps") + 1] == str(steps)
