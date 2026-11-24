@@ -242,6 +242,7 @@ def main() -> None:
                 if args.online_task_handoff:
                     validate_action_ranges(target_chunk(actions[0]), check_slew=False)
                 # Only the initial handover uses the existing slow approach.
+                startup_approach_steps = 0
                 if request.get("strict_start"):
                     from .preflight import execute_preflight
                     execute_preflight(actions, current, now_ros_ns=node.get_clock().now().nanoseconds,
@@ -251,7 +252,7 @@ def main() -> None:
                     validate_action_ranges(transition)
                     frames = [actions[0]]
                 else:
-                    frames, _ = chunk_command_frames(actions, current.state, execute_steps=1,
+                    frames, startup_approach_steps = chunk_command_frames(actions, current.state, execute_steps=1,
                         approach_speed_rad_s=float(request.get("approach_speed_rad_s", args.speed_rad_s)))
                 executor.resume_stream()
                 def send_initial(frame):
@@ -274,7 +275,8 @@ def main() -> None:
                 stream_log = path.open("x", encoding="utf-8")
                 stream_event("start", generation=stream.generation, clipping=clipping_report,
                              task_epoch=stream.task_epoch, task_request_id=request.get("task_request_id"))
-                print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now)}), file=protocol, flush=True)
+                print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now),
+                                  "startup_approach_steps": startup_approach_steps}), file=protocol, flush=True)
             elif operation == "stream_status":
                 if stream is None:
                     raise ValueError("No active RTC stream")
