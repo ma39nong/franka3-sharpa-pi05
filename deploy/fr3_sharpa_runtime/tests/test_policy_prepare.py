@@ -4,11 +4,24 @@ import numpy as np
 import pytest
 
 from deploy.fr3_sharpa_runtime.feedback import LiveFeedback
-from deploy.fr3_sharpa_runtime.policy_prepare import SlowApproach, prepare_and_run_chunks, check_validation_excursion
+from deploy.fr3_sharpa_runtime.policy_prepare import (
+    HOME_SPEED_RAD_S, SlowApproach, prepare_and_run_chunks, check_validation_excursion,
+)
 
 
 def live(state, clock):
     return LiveFeedback(state.copy(), (clock,)*4, (clock,)*4)
+
+
+def test_fixed_home_speed_limits_both_arms_and_hands():
+    state = np.zeros(58, dtype=np.float32)
+    target = np.full(58, 0.3, dtype=np.float32)
+    planner = SlowApproach(target, state, speed_rad_s=HOME_SPEED_RAD_S)
+    clock = 1_000_000_000
+    command, _, _ = planner.step(live(state, clock), now_ros_ns=clock, now_monotonic_ns=clock,
+                                 enforce_execute_delta=False)
+    expected = 0.10 * DT_NS / 1e9
+    np.testing.assert_allclose(command, expected, atol=1e-7)
 
 
 def test_large_initial_mismatch_approaches_with_small_steps_and_measured_settling():

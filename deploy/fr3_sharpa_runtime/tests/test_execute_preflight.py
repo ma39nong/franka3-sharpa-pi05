@@ -87,6 +87,36 @@ def test_missing_live_topic_rejected():
         FeedbackCache().snapshot(now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW)
 
 
+def test_feedback_aligns_original_recent_samples_and_diagnoses_missing_history():
+    cache = FeedbackCache()
+
+    def update(key, age_ms, position):
+        side, kind = key.split("_")
+        names = ([f"{side}_fr3v2_joint{i}" for i in range(1, 8)] if kind == "arm"
+                 else [f"{side}_{joint}" for joint in SHARPA_JOINT_NAMES])
+        stamp = ROS_NOW - age_ms * 1_000_000
+        message = SimpleNamespace(
+            name=names, position=[position] * len(names),
+            header=SimpleNamespace(stamp=SimpleNamespace(sec=stamp // 1_000_000_000,
+                                                        nanosec=stamp % 1_000_000_000)),
+        )
+        cache.update(key, message, MONO_NOW - age_ms * 1_000_000)
+
+    for key in FEEDBACK_KEYS:
+        update(key, 130, 1)
+    for key in FEEDBACK_KEYS[:-1]:
+        update(key, 10, 2)
+    update(FEEDBACK_KEYS[-1], 120, 3)
+    result = cache.snapshot(now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW)
+    assert result.ros_stamps_ns == (ROS_NOW-130_000_000,)*3 + (ROS_NOW-120_000_000,)
+    assert result.state[0] == 1 and result.state[-1] == 3
+
+    cache.histories["left_arm"].clear()
+    cache.histories["left_arm"].append(cache.latest["left_arm"])
+    with pytest.raises(ValueError, match=r"span_ms=110\.000.*left/franka/joint_states.*source_age_ms"):
+        cache.snapshot(now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW)
+
+
 def test_action_shape_and_finite_are_still_enforced():
     feedback = mock_realtime_feedback(measured_state())
     with pytest.raises(ValueError, match="Expected action shape"):

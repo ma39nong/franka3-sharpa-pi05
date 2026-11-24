@@ -21,6 +21,7 @@ ERROR_GROUPS = {
 
 # Fixed-Home completion tolerance; command safety limits are separate.
 HOME_TOLERANCE_RAD = 0.025
+HOME_SPEED_RAD_S = 0.10
 
 
 def target_chunk(target):

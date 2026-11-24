@@ -22,7 +22,7 @@ import numpy as np
 from . import config
 from .action_adapter import SharpaActionAdapter
 from .feedback import ROSFeedbackProvider
-from .policy_prepare import SlowApproach, target_chunk
+from .policy_prepare import HOME_SPEED_RAD_S, SlowApproach, target_chunk
 from .protocol import (DT_NS, LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE,
                        as_finite_action_chunk)
 from .ros_transport import construct_messages, validate_action_ranges, validate_gateway_admission
@@ -379,7 +379,10 @@ def main() -> None:
                     recovery = recover_before_home(executor, fresh_feedback,
                         emit=lambda report: print(json.dumps(report), file=sys.stderr, flush=True))
                 current = fresh_feedback()
-                prepare_speed = float(request.get("speed_rad_s", args.speed_rad_s))
+                prepare_speed = (
+                    HOME_SPEED_RAD_S if request.get("home_recovery") is True
+                    else float(request.get("speed_rad_s", args.speed_rad_s))
+                )
                 print(json.dumps({"event": "prepare_initial_feedback", "speed_rad_s": prepare_speed,
                                   "measured_state_rad": current.state.tolist(), "target_rad": target.tolist()}),
                       file=sys.stderr, flush=True)

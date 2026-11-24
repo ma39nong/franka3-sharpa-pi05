@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
+import threading
 import time
 
 import numpy as np
@@ -34,15 +36,26 @@ class LiveFeedback:
                 raise ValueError(f"Stale/future received feedback: {FEEDBACK_TOPICS[key]}; "
                                  f"receipt_age_ms={(now_monotonic_ns-received)/1e6:.3f}")
         if max(self.ros_stamps_ns) - min(self.ros_stamps_ns) > MAX_SPREAD_NS:
-            raise ValueError("Live feedback timestamps are not synchronized")
+            span = (max(self.ros_stamps_ns) - min(self.ros_stamps_ns)) / 1e6
+            details = ", ".join(
+                f"{FEEDBACK_TOPICS[key]} source_age_ms={(now_ros_ns-stamp)/1e6:.3f}"
+                f" receipt_age_ms={(now_monotonic_ns-received)/1e6:.3f}"
+                for key, stamp, received in zip(
+                    FEEDBACK_KEYS, self.ros_stamps_ns, self.received_monotonic_ns, strict=True
+                )
+            )
+            raise ValueError(f"Live feedback timestamps are not synchronized: span_ms={span:.3f}, "
+                             f"limit_ms={MAX_SPREAD_NS/1e6:.3f}; {details}")
 
 
 class FeedbackCache:
     """Cache only observations received from the four state subscriptions."""
 
     def __init__(self):
+        self.lock = threading.RLock()
         self.latest = {}
         self.errors = {}
+        self.histories = {key: deque(maxlen=256) for key in FEEDBACK_KEYS}
 
     def update(self, key: str, message, received_monotonic_ns: int) -> None:
         if key not in FEEDBACK_KEYS:
@@ -54,22 +67,52 @@ class FeedbackCache:
             if stamp <= 0:
                 raise ValueError("Feedback has no valid ROS timestamp")
         except (ValueError, TypeError, AttributeError) as error:
-            self.latest.pop(key, None)
-            self.errors[key] = str(error)
+            with self.lock:
+                self.latest.pop(key, None)
+                self.histories[key].clear()
+                self.errors[key] = str(error)
             return
-        self.latest[key] = (values, stamp, received_monotonic_ns)
-        self.errors.pop(key, None)
+        with self.lock:
+            entry = (values, stamp, received_monotonic_ns)
+            self.latest[key] = entry
+            self.histories[key].append(entry)
+            self.errors.pop(key, None)
 
     def snapshot(self, *, now_ros_ns: int, now_monotonic_ns: int) -> LiveFeedback:
-        missing = [FEEDBACK_TOPICS[key] for key in FEEDBACK_KEYS if key not in self.latest]
-        if missing:
-            raise ValueError(f"Missing/invalid live feedback: {missing}; errors={self.errors}")
-        entries = [self.latest[key] for key in FEEDBACK_KEYS]
-        result = LiveFeedback(
-            state=np.concatenate([entry[0] for entry in entries]).astype(np.float32),
-            ros_stamps_ns=tuple(entry[1] for entry in entries),
-            received_monotonic_ns=tuple(entry[2] for entry in entries),
-        )
+        with self.lock:
+            missing = [FEEDBACK_TOPICS[key] for key in FEEDBACK_KEYS if key not in self.latest]
+            if missing:
+                raise ValueError(f"Missing/invalid live feedback: {missing}; errors={self.errors}")
+            entries = [self.latest[key] for key in FEEDBACK_KEYS]
+            histories = [tuple(self.histories[key]) for key in FEEDBACK_KEYS]
+
+        def assemble(entries):
+            return LiveFeedback(
+                state=np.concatenate([entry[0] for entry in entries]).astype(np.float32),
+                ros_stamps_ns=tuple(entry[1] for entry in entries),
+                received_monotonic_ns=tuple(entry[2] for entry in entries),
+            )
+
+        result = assemble(entries)
+        try:
+            result.validate_freshness(now_ros_ns=now_ros_ns, now_monotonic_ns=now_monotonic_ns)
+            return result
+        except ValueError as error:
+            if not str(error).startswith("Live feedback timestamps are not synchronized"):
+                raise
+            latest_error = error
+        anchor = min(entry[1] for entry in entries)
+        aligned = []
+        for history in histories:
+            candidates = [
+                entry for entry in history
+                if entry[1] <= anchor and 0 <= now_ros_ns - entry[1] <= MAX_AGE_NS
+                and 0 <= now_monotonic_ns - entry[2] <= MAX_AGE_NS
+            ]
+            if not candidates:
+                raise latest_error
+            aligned.append(max(candidates, key=lambda entry: entry[1]))
+        result = assemble(aligned)
         result.validate_freshness(now_ros_ns=now_ros_ns, now_monotonic_ns=now_monotonic_ns)
         return result
 
@@ -93,10 +136,11 @@ class ROSFeedbackProvider:
         ]
 
     def snapshot(self) -> LiveFeedback:
-        return self.cache.snapshot(
-            now_ros_ns=self.node.get_clock().now().nanoseconds,
-            now_monotonic_ns=time.monotonic_ns(),
-        )
+        with self.cache.lock:
+            return self.cache.snapshot(
+                now_ros_ns=self.node.get_clock().now().nanoseconds,
+                now_monotonic_ns=time.monotonic_ns(),
+            )
 
     def wait(self, timeout_s: float = 5.0) -> LiveFeedback:
         import rclpy
