@@ -10,7 +10,9 @@ import time
 
 from .camera_alignment_recovery import DEFAULT_RECOVERY_SEC
 from .camera_alignment_recovery import AlignmentRecovery
+from .camera_brightness import HeadBrightness
 from .camera_clock import CAMERA_STARTUP_TIMEOUT_SEC
+from .camera_clock import STARTUP_SETTLE_SEC
 from .camera_clock import SourceClockSettling
 from .camera_startup import camera_contract
 from .ros_observation import TOPICS
@@ -40,6 +42,7 @@ def probe(path, timeout=CAMERA_STARTUP_TIMEOUT_SEC, *, watch=False, alignment_re
     rclpy.init()
     node = rclpy.create_node("sharpa_deployment_camera_gate")
     clock_settling = SourceClockSettling(expected, time.monotonic_ns())
+    head_brightness = HeadBrightness()
     # Reuse the exact runtime freshness/history/stability rules, but require cameras only.
     provider = ObservationProvider.__new__(ObservationProvider)
     provider.latest = {}
@@ -66,6 +69,8 @@ def probe(path, timeout=CAMERA_STARTUP_TIMEOUT_SEC, *, watch=False, alignment_re
             issues[key] = "图像不是有效RGB/BGR帧"
             return
         issues.pop(key, None)
+        if key == "cam0":
+            head_brightness.observe(message, time.monotonic_ns())
         provider.remember(key, message)
         clock_settling.observe(key, stamp_ns(message), now_ros=node.get_clock().now().nanoseconds,
                               now_mono=time.monotonic_ns())
@@ -112,6 +117,14 @@ def probe(path, timeout=CAMERA_STARTUP_TIMEOUT_SEC, *, watch=False, alignment_re
                 detail = f"等待实际设备序列号，应答缺失：{sorted(set(expected) - serials.keys())}"
                 continue
             check_serials(expected, serials)
+            now_ns = time.monotonic_ns()
+            exposure_settled = ready or now_ns - clock_settling.started_ns >= STARTUP_SETTLE_SEC * 1e9
+            if exposure_settled and head_brightness.failed(now_ns):
+                raise RuntimeError("cam0持续严重欠曝，禁止继续部署；"
+                                   + json.dumps(head_brightness.diagnostic(now_ns), ensure_ascii=False))
+            if not ready and not head_brightness.ready(now_ns):
+                detail = "等待cam0连续3秒亮度正常：" + json.dumps(head_brightness.diagnostic(now_ns))
+                continue
             if issues or len(provider.latest) != 3 or not provider.cameras_ready(time.monotonic_ns()):
                 if ready:
                     raise RuntimeError("运行中相机图像无效；停止动作，禁止自动重启驱动")
@@ -192,6 +205,7 @@ def probe(path, timeout=CAMERA_STARTUP_TIMEOUT_SEC, *, watch=False, alignment_re
                 "command_publishers_created": 0,
                 "alignment_recovery_sec": recovery.seconds,
                 "source_clock_settling": clock_settling.diagnostic(time.monotonic_ns()),
+                "head_brightness": head_brightness.diagnostic(time.monotonic_ns()),
             }
             if not watch:
                 return report
