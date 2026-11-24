@@ -7,7 +7,6 @@ time RTC guidance for the existing checkpoint, not an RTC-trained checkpoint.
 
 from contextlib import contextmanager
 import math
-import os
 import time
 
 from .fovea_runtime import FoveaRuntime
@@ -72,8 +71,7 @@ class FoveaAsyncRuntime(FoveaRuntime):
         context = super().fovea_context()
         context.pop("executed_steps")
         return dict(context, execution_mode=PROTOCOL, nominal_observation_steps=15,
-                    source_monotonic_s=self.prediction_source, used_target_monotonic_s=self.used_target,
-                    source_monotonic_ns=int(self.prediction_source * 1e9))
+                    source_monotonic_s=self.prediction_source, used_target_monotonic_s=self.used_target)
 
     def accept_result(self, metadata, result, *, started=None):
         receipt = result["foveation"]
@@ -115,9 +113,23 @@ class FoveaAsyncTask(TaskRTC):
         if (control.profile != "tomato-in-hand119" or args.execute_steps != 15
                 or args.execute_speed_scale != 1.0 or args.num_chunks != 0):
             raise ValueError("Async Fovea requires five stages, 30Hz, 15-step observations and continuous rounds")
-        if os.environ.get("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK") == "1":
-            raise ValueError("Async Fovea requires strict first-target admission; use Home/current preparation")
-        super().__init__(control, runtime, backend, observe, args, directory, **kwargs)
+        def fresh_observation(**options):
+            timeout = min(float(options.get("timeout_s", 2.0)), 0.3)
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("No head-camera observation within 100ms arrived before the Fovea acquisition deadline")
+                observation = observe(**{**options, "timeout_s": remaining})
+                age = observation.get("_alignment", {}).get("source_age_ms", {}).get("cam0")
+                if not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0:
+                    source_time(observation)
+                if age <= 100:
+                    return observation
+                if options.get("on_poll"):
+                    options["on_poll"]()
+
+        super().__init__(control, runtime, backend, fresh_observation, args, directory, **kwargs)
         self.crop_target = None
         self.camera_lag = 0.0
 
@@ -157,13 +169,16 @@ class FoveaAsyncTask(TaskRTC):
 
     def prediction_installed(self, metadata, installed, captured, ticket, *, initial_start):
         self.camera_lag = max(0.0, captured - self.runtime.prediction_source)
-        if installed.get("entry_bridge_steps", 0):
+        startup_approach = initial_start and installed.get("startup_approach_steps", 0) > 0
+        if startup_approach or installed.get("entry_bridge_steps", 0):
             # The bounded worker bridge altered the predicted trajectory. Reset
             # the crop session on the next observation rather than asserting
             # that the old t+15 prediction still describes that trajectory.
             self.runtime.reset_stage()
             self.crop_target = self.clock() + PERIOD
-            self.record("fovea_crop_reset", reason="RTC entry bridge changed trajectory")
+            self.record("fovea_crop_reset", reason=(
+                "initial slow approach changed trajectory" if startup_approach
+                else "RTC entry bridge changed trajectory"))
             return
         self.crop_target = self.runtime.commit_installation(installed, initial_start=initial_start)
         self.record("fovea_async_accepted", inference_request_id=ticket["request_id"],

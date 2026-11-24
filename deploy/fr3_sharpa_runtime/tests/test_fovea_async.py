@@ -374,3 +374,51 @@ def test_camera_transport_lag_does_not_shorten_each_observation_period(engine):
     sources = [row[0] for row in runtime.calls]
     assert sources[2] - sources[1] == pytest.approx(.5, abs=.025)
     assert runtime.query_index == 2
+
+
+def test_initial_slow_approach_resets_box_and_reacquires(monkeypatch, request):
+    monkeypatch.setenv("SHARPA_TASK_SKIP_FIRST_TARGET_CHECK", "1")
+    e, control, runtime, backend = request.getfixturevalue("engine")
+    original_start = backend.start
+
+    def start(*args, **kwargs):
+        installed = original_start(*args, **kwargs)
+        return {**installed, "startup_approach_steps": 60}
+
+    monkeypatch.setattr(backend, "start", start)
+    command(control, "start")
+    until(e, lambda: e.chunk_count == 1)
+    assert runtime.query_index == 0 and runtime.next_crop is None
+    assert e.crop_target is not None
+    until(e, lambda: e.chunk_count == 2)
+    assert runtime.calls[-1][1] == 0
+    assert runtime.calls[-1][3] is not None
+    assert control.snapshot()["execution_state"] == "RUNNING"
+
+
+def test_observation_retries_old_aligned_frame_within_budget(engine, monkeypatch):
+    e, control, runtime, backend = engine
+    fresh = obs(age=40)
+    frames = iter([obs(age=114.6), fresh])
+    monkeypatch.setattr(__import__(__name__, fromlist=["obs"]), "obs", lambda: next(frames))
+    assert e.observe(timeout_s=0.2) is fresh
+
+
+def test_observation_retry_times_out_when_head_camera_stays_old(engine, monkeypatch):
+    e, control, runtime, backend = engine
+    old = obs(age=114.6)
+    monkeypatch.setattr(__import__(__name__, fromlist=["obs"]), "obs", lambda: old)
+    with pytest.raises(TimeoutError, match="acquisition deadline"):
+        e.observe(timeout_s=0.01)
+
+
+def test_recording_timestamp_does_not_override_capture_time():
+    runtime = FoveaAsyncRuntime.__new__(FoveaAsyncRuntime)
+    runtime.session = "recording-test"
+    runtime.query_index = 0
+    runtime.box = np.asarray(fovea.INITIAL_BOX)
+    runtime.prediction_source = 12.0
+    runtime.used_target = None
+    context = runtime.fovea_context()
+    assert context["source_monotonic_s"] == 12.0
+    assert "source_monotonic_ns" not in context
