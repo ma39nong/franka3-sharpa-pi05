@@ -17,19 +17,23 @@ GROUP_SLICES = {
 }
 
 
-def execute_preflight(actions, feedback: LiveFeedback, *, now_ros_ns: int, now_monotonic_ns: int) -> dict:
+def execute_preflight(actions, feedback: LiveFeedback, *, now_ros_ns: int, now_monotonic_ns: int,
+                      groups=None) -> dict:
     chunk = as_finite_action_chunk(actions)
     if not isinstance(feedback, LiveFeedback):
         raise ValueError("EXECUTE PREFLIGHT requires fresh ROS feedback, not an episode state array")
     feedback.validate_freshness(now_ros_ns=now_ros_ns, now_monotonic_ns=now_monotonic_ns)
-    deltas = {name: float(np.max(np.abs(chunk[0, part] - feedback.state[part])))
-              for name, part in GROUP_SLICES.items()}
+    selected = tuple(GROUP_SLICES) if groups is None else tuple(groups)
+    if not selected or any(name not in GROUP_SLICES for name in selected):
+        raise ValueError("Unknown or empty preflight joint groups")
+    deltas = {name: float(np.max(np.abs(chunk[0, GROUP_SLICES[name]] - feedback.state[GROUP_SLICES[name]])))
+              for name in selected}
     for name, delta in deltas.items():
         if delta > FIRST_TARGET_LIMITS_RAD[name]:
             raise ValueError(f"EXECUTE PREFLIGHT: FAIL; {name} first-target delta {delta:.6f} rad "
                              f"> {FIRST_TARGET_LIMITS_RAD[name]:.6f} rad against live ROS feedback")
     return {"status": "PASS", "reference": "live_ros_feedback", "compared_action_index": 0,
-            "max_delta_rad": deltas, "limits_rad": FIRST_TARGET_LIMITS_RAD.copy()}
+            "max_delta_rad": deltas, "limits_rad": {name: FIRST_TARGET_LIMITS_RAD[name] for name in selected}}
 
 
 def offline_sanity_check(actions, episode_state) -> dict:

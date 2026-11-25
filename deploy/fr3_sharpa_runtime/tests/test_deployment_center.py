@@ -500,14 +500,17 @@ def test_execution_requires_separately_started_matching_inference(repository, ch
         controller.start(values)
 
 
-def test_inference_ignores_home_recording_and_playback_settings(repository, checkpoint, tmp_path):
+@pytest.mark.parametrize("dagger", [False, True])
+@pytest.mark.parametrize("record", [False, True])
+def test_inference_ignores_home_recording_and_playback_settings(repository, checkpoint, tmp_path, dagger, record):
     controller = FakeDeployment(repository)
-    values = settings(repository, checkpoint, initialization="home", record=True, steps=99,
+    values = settings(repository, checkpoint, initialization="home", record=record, dagger=dagger, steps=99,
         output=str(tmp_path / "records")).__dict__
     controller.ready(values)
     assert controller.model_ready and controller.commands == ["model_check", "model_ready"]
     saved = json.loads((repository / ".deployment/control_last.json").read_text())
-    assert saved["initialization"] == "home" and saved["record"] and saved["steps"] == 99
+    assert saved["initialization"] == "home" and saved["record"] is record and saved["steps"] == 99
+    assert saved["dagger"] is dagger
     assert not (tmp_path / "records").exists()
 
 

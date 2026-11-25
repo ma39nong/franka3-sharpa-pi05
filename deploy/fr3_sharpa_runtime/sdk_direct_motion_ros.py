@@ -23,6 +23,7 @@ from . import config
 from .action_adapter import SharpaActionAdapter
 from .feedback import ROSFeedbackProvider
 from .policy_prepare import HOME_SPEED_RAD_S, SlowApproach, target_chunk
+from .policy_execution import install_policy_rtc, policy_command, prepare_policy_actions
 from .protocol import (DT_NS, LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE,
                        as_finite_action_chunk)
 from .ros_transport import construct_messages, validate_action_ranges, validate_gateway_admission
@@ -76,16 +77,9 @@ def main() -> None:
             stream_log.flush()
 
     def stream_actions(request):
-        if args.online_task_handoff:
-            raw = as_finite_action_chunk(request["actions"])
-            projected = command_limiter.project(raw)
-            adjustment = np.abs(projected - raw)
-            return projected, {"joint_range_projected_values": int(np.count_nonzero(adjustment)),
-                               "max_joint_range_projection_rad": float(adjustment.max())}
-        actions, clipping = clip_hand_predictions(request["actions"], execute_steps=50,
+        return prepare_policy_actions(request["actions"],
+            limiter=command_limiter if args.online_task_handoff else None,
             max_correction_rad=float(request.get("prediction_clip_rad", DEFAULT_PREDICTION_CLIP_RAD)))
-        validate_action_ranges(actions, check_slew=False)
-        return actions, clipping
 
     def publish_frame(values: np.ndarray) -> None:
         nonlocal sequence
@@ -194,14 +188,8 @@ def main() -> None:
                     previous_handoff_token = stream.applied_token if args.online_task_handoff else None
                     sample_time = max(stream.installed_at, stream_tick) if entry_bridge_tick and not handover_tick else now
                     target = stream.sample(sample_time)
-                    command = (command_limiter.step_toward(stream_last_command, target)
-                               if command_limiter is not None else target)
-                    transition = target_chunk(command)
-                    transition[0] = stream_last_command
-                    validate_action_ranges(transition)  # Includes the actual splice slew.
-                    if command_limiter is not None:
-                        from .stage_handoff import validate_command_step
-                        validate_command_step(stream_last_command, command, gateway_speed)
+                    command = policy_command(stream_last_command, target,
+                        limiter=command_limiter, arm_speed=gateway_speed)
                     executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
                     publish_frame(command)
                     stream_last_command = command.copy()
@@ -321,26 +309,13 @@ def main() -> None:
                 if stream is None:
                     raise ValueError("No active RTC stream")
                 actions, clipping_report = stream_actions(request)
-                def validate_window(window, *, check_slew=True):
-                    padded = target_chunk(window[-1])
-                    padded[:len(window)] = window
-                    validate_action_ranges(padded, check_slew=check_slew)
-
-                def prepare_entry(candidate, skipped):
-                    from .stage_handoff import prepare_rtc_entry
-                    return prepare_rtc_entry(candidate, skipped, stream_last_command, gateway_speed,
-                                             lambda window: validate_window(window, check_slew=False),
-                                             validate_window)
-
-                result = stream.install(actions, request["receipt"], time.monotonic(),
-                                        task_epoch=request.get("task_epoch"),
-                                        prepare_entry=prepare_entry if args.online_task_handoff else None)
+                result = install_policy_rtc(stream, actions, request["receipt"], time.monotonic(),
+                    stream_last_command, task_epoch=request.get("task_epoch"),
+                    arm_speed=gateway_speed if args.online_task_handoff else None)
                 if result.get("rejected"):
                     stream_event("install_rejected", **result, receipt=request["receipt"])
                     print(json.dumps({"status": "PASS", **result}), file=protocol, flush=True)
                     continue
-                if not args.online_task_handoff:
-                    validate_window(np.stack((stream_last_command, stream.sample(time.monotonic()))))
                 steps = result.get("entry_bridge_steps", 0)
                 entry_bridge_until = stream.installed_at + steps / stream.node_hz if steps else None
                 stream_event("install", **result, receipt=request["receipt"], clipping=clipping_report)

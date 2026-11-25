@@ -1,4 +1,4 @@
-"""Execute the real browser pedal handler without connecting robot hardware."""
+"""Exercise real pedal handlers and measured-hold recovery without hardware."""
 import shutil
 import subprocess
 
@@ -7,56 +7,168 @@ import pytest
 from deploy.fr3_sharpa_control.ui import HTML
 
 
-def test_pedal_toggles_confirmed_left_follow_and_hold_without_retrigger():
+def test_space_takeover_and_resume_waits_for_hold_and_l_toggles_stage_stop():
     node = shutil.which('node')
     if not node:
         pytest.skip('Node required for browser pedal handler execution')
-    handler = HTML.split('let daggerPedalDown=false;', 1)[1].split(
-        "document.addEventListener('keydown',daggerPedalKey);", 1)[0]
-    render = HTML.split('function renderDagger(d){', 1)[1].split(
-        'async function daggerCommand(command){', 1)[0]
-    script = """
+    script = HTML.split('let daggerState=null,daggerPending=false;', 1)[1].split(
+        'let homePedalDown=', 1)[0]
+    harness = """
 const assert=require('node:assert/strict');
-let daggerPedalDown=false,daggerState=null,daggerPending=false,executionActive=true;
-let editing=false,dialog=false,prevented=0;
+let daggerState=null,daggerPending=false,executionActive=true;
+let editing=false,dialog=false,taskState={run_id:'task-one',execution_state:'READY'};
 const nodes=new Map(),calls=[];
-const $=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id)};
-const document={querySelector:()=>dialog};
-function daggerCommand(command){calls.push(command);daggerPending=true;renderDagger(daggerState)}
-""" + 'function renderDagger(d){' + render + handler + """
-function key(changes={}){return {code:'KeyA',type:'keydown',repeat:false,
- target:{closest:()=>editing},preventDefault(){prevented++},...changes}}
-function release(){daggerPedalKey(key({type:'keyup'}))}
-function tap(changes={}){daggerPedalKey(key(changes));release()}
-function state(mode,extra={}){daggerPending=false;renderDagger({mode,input_ready:true,...extra})}
-
-// A never takes authority or resumes the model by itself.
-for(const mode of ['IDLE','STARTING','POLICY','HOLDING','RESUMING','STOPPED']){
- state(mode);tap();
+const $=id=>{
+ if(!nodes.has(id))nodes.set(id,{disabled:false,value:'',textContent:''});
+ return nodes.get(id);
+};
+const document={querySelector:()=>dialog,addEventListener(){}};
+const window={addEventListener(){}};
+let statuses=[],stageAccepted=true;
+async function api(route,values){
+ if(route==='status')return statuses.shift();
+ calls.push(values.command);
+ return {...daggerState,mode:values.command==='hold'?'HOLDING':
+  values.command==='resume'?'RESUMING':'HOLDING',generation:daggerState.generation+1};
 }
-assert.deepEqual(calls,[]);
-state('HOLD');daggerPedalKey(key());
-assert.deepEqual(calls,['follow']);
-// Repeat, duplicate keydown, and pending requests cannot toggle back.
-daggerPedalKey(key({repeat:true}));daggerPedalKey(key());
-state('HUMAN_LEFT');daggerPedalKey(key());
-assert.deepEqual(calls,['follow']);release();
-daggerPedalKey(key());assert.deepEqual(calls,['follow','hold']);release();
-tap();assert.equal(calls.length,2); // request still pending
-
-state('HOLD',{input_ready:false});tap();
-state('HOLD',{communication_error:'offline'});tap();
-state('HOLD');executionActive=false;tap();executionActive=true;
-for(const modifier of ['ctrlKey','altKey','metaKey','shiftKey','isComposing'])tap({[modifier]:true});
-editing=true;tap();editing=false;dialog=true;tap();dialog=false;
-tap({target:{isContentEditable:true}});
-tap({code:'KeyC'});tap({code:'KeyB'});tap({code:'KeyL'});tap({code:'Space'});
-assert.equal(calls.length,2);
-// Lost input must still permit hold from active human following.
-state('HUMAN_LEFT',{input_ready:false});tap();
-assert.deepEqual(calls,['follow','hold','hold']);
-assert.equal(prevented,3);
-state('HOLD');tap();assert.equal(calls.at(-1),'follow');
+async function refresh(){}
+async function taskCommand(command){calls.push(command);return stageAccepted}
+async function stop(){calls.push('stop')}
+function state(mode,extra={}){
+ daggerPending=false;
+ renderDagger({run_id:'run-one',generation:1,mode,input_ready:true,...extra});
+}
+function key(code,extra={}){
+ return {code,type:'keydown',repeat:false,target:{closest:()=>editing},
+ preventDefault(){this.prevented=true},...extra};
+}
 """
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+    scenario = """
+(async()=>{
+ state('HUMAN_LEFT');
+ statuses=[{execution_running:true,dagger:{...daggerState,mode:'HOLDING'}},
+  {execution_running:true,dagger:{...daggerState,mode:'HOLD',generation:2}}];
+ await daggerCommand('resume');
+ assert.deepEqual(calls,['hold','resume']);
+ assert.equal(daggerState.mode,'RESUMING');
+ assert.equal(daggerPending,false);
+
+ calls.length=0;state('HOLD');
+ await daggerCommand('resume');
+ assert.deepEqual(calls,['resume']);
+
+ calls.length=0;state('HUMAN_LEFT');
+ statuses=[{execution_running:false,dagger:{...daggerState,mode:'STOPPED'}}];
+ await daggerCommand('resume');
+ assert.deepEqual(calls,['hold']); // Ended run never receives a resume request.
+ assert.match($('daggerError').textContent,/恢复已取消/);
+
+ // Stub dispatch only after exercising the real hold/confirmation sequence.
+ daggerCommand=command=>{calls.push(command);daggerPending=true};
+ calls.length=0;state('POLICY');
+ const press=key('Space');daggerPedalKey(press);
+ assert.equal(press.prevented,true);
+ assert.deepEqual(calls,['takeover']);
+ daggerPedalKey(key('Space',{repeat:true}));
+ daggerPedalKey(key('Space'));
+ assert.equal(calls.length,1);
+ daggerPedalKey(key('Space',{type:'keyup'}));
+ for(const mode of ['HOLD','HOLDING','HUMAN_LEFT']){
+  state(mode);daggerPedalKey(key('Space'));daggerPedalKey(key('Space',{type:'keyup'}));
+  assert.equal(calls.at(-1),'resume');
+ }
+ const before=calls.length;
+ for(const mode of ['IDLE','STARTING','STOPPED']){
+  state(mode);daggerPedalKey(key('Space'));daggerPedalKey(key('Space',{type:'keyup'}));
+ }
+ state('POLICY',{communication_error:'offline'});
+ daggerPedalKey(key('Space'));daggerPedalKey(key('Space',{type:'keyup'}));
+ assert.equal(calls.length,before);
+ state('POLICY');
+ for(const modifier of ['ctrlKey','altKey','metaKey','shiftKey','isComposing']){
+  daggerPedalKey(key('Space',{[modifier]:true}));
+ }
+ editing=true;daggerPedalKey(key('Space'));editing=false;
+ dialog=true;daggerPedalKey(key('Space'));dialog=false;
+ daggerPedalKey(key('KeyA'));
+ assert.equal(calls.length,before);
+
+ // A follows only after confirmed takeover, then holds even if input is lost.
+ calls.length=0;state('HOLD');
+ followPedalKey(key('KeyA'));
+ assert.deepEqual(calls,['follow']);
+ followPedalKey(key('KeyA',{repeat:true}));
+ followPedalKey(key('KeyA'));
+ assert.equal(calls.length,1);
+ followPedalKey(key('KeyA',{type:'keyup'}));
+ state('HUMAN_LEFT',{input_ready:false});
+ followPedalKey(key('KeyA'));
+ assert.deepEqual(calls,['follow','hold']);
+ followPedalKey(key('KeyA',{type:'keyup'}));
+ state('HOLD',{input_ready:false});
+ followPedalKey(key('KeyA'));followPedalKey(key('KeyA',{type:'keyup'}));
+ for(const mode of ['POLICY','IDLE','HOLDING','RESUMING','STOPPED']){
+  state(mode);followPedalKey(key('KeyA'));followPedalKey(key('KeyA',{type:'keyup'}));
+ }
+ state('HOLD');
+ for(const modifier of ['ctrlKey','altKey','metaKey','shiftKey','isComposing']){
+  followPedalKey(key('KeyA',{[modifier]:true}));
+ }
+ editing=true;followPedalKey(key('KeyA'));editing=false;
+ dialog=true;followPedalKey(key('KeyA'));dialog=false;
+ followPedalKey(key('KeyA',{target:{isContentEditable:true}}));
+ followPedalKey(key('KeyC'));followPedalKey(key('KeyC',{type:'keyup'}));
+ assert.deepEqual(calls,['follow','hold']);
+ state('HOLD',{communication_error:'offline'});
+ followPedalKey(key('KeyA'));followPedalKey(key('KeyA',{type:'keyup'}));
+ state('HOLD');executionActive=false;followPedalKey(key('KeyA'));executionActive=true;
+ assert.deepEqual(calls,['follow','hold']);
+
+ calls.length=0;$('task_mode').value='tomato-in-hand119';
+ await taskPedalKey(key('KeyL'));
+ assert.deepEqual(calls,['start']);
+ await taskPedalKey(key('KeyL',{repeat:true}));
+ await taskPedalKey(key('KeyL'));
+ assert.equal(calls.length,1);
+ await taskPedalKey(key('KeyL',{type:'keyup'}));
+ await taskPedalKey(key('KeyL'));
+ assert.deepEqual(calls,['start','stop']); // Even while READY feedback lags.
+ await taskPedalKey(key('KeyL',{type:'keyup'}));
+ for(const modifier of ['ctrlKey','altKey','metaKey','shiftKey','isComposing']){
+  await taskPedalKey(key('KeyL',{[modifier]:true}));
+  await taskPedalKey(key('KeyL',{type:'keyup'}));
+ }
+ editing=true;await taskPedalKey(key('KeyL'));editing=false;
+ await taskPedalKey(key('KeyL',{type:'keyup'}));
+ dialog=true;await taskPedalKey(key('KeyL'));dialog=false;
+ await taskPedalKey(key('KeyL',{type:'keyup'}));
+ executionActive=false;await taskPedalKey(key('KeyL'));executionActive=true;
+ await taskPedalKey(key('KeyL',{type:'keyup'}));
+ $('task_mode').value='none';await taskPedalKey(key('KeyL'));
+ assert.deepEqual(calls,['start','stop']);
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result = subprocess.run([node, '-'], input=harness + script + scenario,
+                            text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_both_end_buttons_use_the_same_stop_action():
+    from html.parser import HTMLParser
+
+    class Buttons(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.buttons = {}
+        def handle_starttag(self, tag, attributes):
+            values = dict(attributes)
+            if tag == 'button' and values.get('id'):
+                self.buttons[values['id']] = values
+
+    parser = Buttons()
+    parser.feed(HTML)
+    assert parser.buttons['daggerEnd']['onclick'] == 'stop()'
+    assert parser.buttons['daggerTakeoverRight']['disabled'] is None
+    assert parser.buttons['daggerFollowRight']['disabled'] is None
+    assert 'id="daggerHold"' not in HTML
+    assert '<button class="stop" onclick="stop()">停止执行</button>' in HTML

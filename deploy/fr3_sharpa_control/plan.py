@@ -190,6 +190,7 @@ class DeploymentSettings:
     prompt: str = DEFAULT_PROMPT
     image_input: str = "auto"
     dagger: bool = False
+    dagger_output: str = ""
 
     def plan(self, *, cache=None, machine_root=None):
         if type(self.dagger) is not bool or (self.dagger and not self.record):

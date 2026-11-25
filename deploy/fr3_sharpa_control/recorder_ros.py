@@ -131,7 +131,7 @@ class BagCapture:
                     try:
                         import rosbag2_py
                         self.writer = rosbag2_py.SequentialWriter()
-                        self.writer.open(rosbag2_py.StorageOptions(uri=str(self.directory / "rosbag"), storage_id="sqlite3"),
+                        self.writer.open(rosbag2_py.StorageOptions(uri=str((self.directory / "rosbag").resolve()), storage_id="sqlite3"),
                                          rosbag2_py.ConverterOptions("", ""))
                         for topic, kind in ALL_TOPICS.items():
                             self.writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=kind, serialization_format="cdr"))

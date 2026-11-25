@@ -68,12 +68,38 @@ def test_stage_request_does_not_fake_activation_and_is_idempotent():
         c.command("next", "stale", expected_version=0)
 
 
-@pytest.mark.parametrize("target", ["invalid", "pickup_1", "return_stem", "adjust"])
-def test_invalid_jump_or_rollback_rejected(target):
+def test_unknown_stage_is_rejected():
     c = TaskControl()
     running(c)
     with pytest.raises(ValueError):
-        command(c, "stage", target=target)
+        command(c, "stage", target="invalid")
+    assert c.snapshot()["stage_version"] == 0
+
+
+@pytest.mark.parametrize("profile", ["tomato-b", "tomato-in-hand119"])
+def test_operator_can_select_any_stage_and_old_predictions_are_invalidated(profile):
+    c = TaskControl(profile=profile, initial_stage="pickup" if profile == "tomato-in-hand119" else "pickup_1")
+    old = running(c)
+    for target in (c.phases[-1], c.phases[0], c.phases[2], c.phases[2]):
+        previous_active = c.snapshot()["active_stage"]
+        result = command(c, "stage", target=target)
+        assert result["requested_stage"] == target
+        assert result["active_stage"] == previous_active
+        assert not c.valid(old)
+        c.transition("SWITCHING", "simulated handover boundary")
+        fresh = c.ticket()
+        assert fresh["prompt"] == c.stage(target).prompt
+        c.activate(fresh, "test-chunk")
+        assert c.snapshot()["active_stage"] == target
+        old = fresh
+
+
+@pytest.mark.parametrize("target", ["pickup_1", "return_stem", "adjust"])
+def test_agent_remains_limited_to_next_stage(target):
+    c = TaskControl()
+    running(c)
+    with pytest.raises(ValueError, match="下一阶段"):
+        command(c, "stage", target=target, source="agent")
     assert c.snapshot()["stage_version"] == 0
 
 
@@ -324,6 +350,20 @@ def test_full_seven_stage_simulation_fresh_boundaries_and_no_auto_progress(engin
     assert e.tick() is False
     assert c.snapshot()["execution_state"] == "COMPLETED"
     assert any(x["event"] == "inference_accepted" for x in events)
+
+
+def test_manual_jump_and_rollback_reuse_execution_owner_and_fresh_observations(engine):
+    e, c, runtime, backend, observations, _ = engine
+    start_engine(engine)
+    for target in ("return_stem", "pickup_1", "adjust", "adjust"):
+        count = len(observations)
+        command(c, "stage", target=target)
+        until(e, lambda: c.snapshot()["execution_state"] == "RUNNING")
+        assert c.snapshot()["active_stage"] == target
+        assert runtime.calls[-1][0]["prompt"] == c.stage(target).prompt
+        assert len(observations) > count
+    assert sum(isinstance(call, tuple) and call[0] == "start" for call in backend.calls) == 1
+    assert "stop" not in backend.calls
 
 
 def test_stage_change_before_first_stream_uses_initial_acquisition(engine):

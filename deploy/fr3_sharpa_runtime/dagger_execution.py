@@ -100,7 +100,7 @@ def execute_dagger(args):
             gello_config_sha256=hashlib.sha256((run.GELLO_REPO/'config/modes/gello.yaml').read_bytes()).hexdigest()))
         initial_owner = worker.request(dict(operation='dagger_start',broker_mode=args.broker_mode,
             execute_steps=args.execute_steps,speed_scale=args.execute_speed_scale,
-            approach_speed_rad_s=args.prepare_speed_rad_s),timeout=20)
+            approach_speed_rad_s=args.prepare_speed_rad_s,online_task_handoff=staged),timeout=20)
         if task:
             task.ready()
         else:

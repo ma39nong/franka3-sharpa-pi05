@@ -234,3 +234,132 @@ def test_terminal_recorder_also_persists_outcome_for_ui_rating(tmp_path, monkeyp
     result = quality.summary(directory)
     assert result["can_rate"] and result["execution"]["outcome"] == expected
     assert rate(tmp_path, directory, "D")["grade"] == "D"
+
+
+def test_dagger_archive_moves_only_episode_and_keeps_deployment_reports(tmp_path):
+    output = tmp_path / "logs"
+    directory = output / "2026-11-25/15.30"
+    directory.mkdir(parents=True)
+    archive = tmp_path / "samples"
+    quality.begin(directory, archive_parent=archive)
+    assert all((archive / name).is_dir() for name in ("A", "B", "C", "D", "pending"))
+    assert not directory.is_symlink()
+    pending = (directory / "rosbag").resolve()
+    assert pending == archive / "pending/episode0"
+    pending.mkdir()
+    (directory / "rosbag/test.db3").write_bytes(b"sensor data")
+    (directory / "dagger").mkdir()
+    (directory / "dagger/frames.jsonl").write_text("expert labels")
+    write_json(directory / "recording.json", {"status": "COMPLETE", "started_unix_ns": 1, "ended_unix_ns": 2})
+    write_json(directory / "video_export.json", {"status": "EXPORTING"})
+    quality.finish(directory, outcome="FINISHED", reason="", returncode=0, recorder_closed=True)
+    result = rate(output, directory, "A")
+    assert result["grade"] == "A" and result["archive_pending"]
+    assert (directory / "rosbag").resolve() == pending
+    write_json(directory / "video_export.json", {"status": "COMPLETE"})
+    quality.archive_when_ready(directory)
+    assert not pending.exists()
+    assert (directory / "rosbag").resolve() == archive / "A/episode0"
+    assert (directory / "rosbag/test.db3").read_bytes() == b"sensor data"
+    assert (directory / "dagger/frames.jsonl").read_text() == "expert labels"
+    assert not (archive / "A/episode0/dagger").exists()
+    assert not directory.is_symlink()
+    assert quality.list_recordings(output)[0]["grade"] == "A"
+    rate(output, directory, "B")
+    assert (directory / "rosbag").resolve() == archive / "B/episode0"
+    assert [event["grade"] for event in quality.read(directory)["history"]] == ["A", "B"]
+
+
+def test_dagger_failure_waits_for_operator_rating_and_allows_review(tmp_path):
+    output = tmp_path / "logs"
+    directory = output / "2026-11-25/15.30"
+    directory.mkdir(parents=True)
+    archive = tmp_path / "samples"
+    quality.begin(directory, archive_parent=archive)
+    (directory / "rosbag").resolve().mkdir()
+    (directory / "rosbag/partial.db3").write_bytes(b"partial data")
+    seal(directory)
+    value = quality.summary(directory)
+    assert value["grade"] is None
+    assert value["history"] == []
+    assert (directory / "rosbag").resolve() == archive / "pending/episode0"
+    rate(output, directory, "C")
+    assert (directory / "rosbag").resolve() == archive / "C/episode0"
+    assert value["execution"]["outcome"] == "FAILED"
+    rate(output, directory, "D")
+    assert (directory / "rosbag").resolve() == archive / "D/episode0"
+    assert (directory / "rosbag/partial.db3").read_bytes() == b"partial data"
+
+
+def test_dagger_archive_rejects_parent_inside_run(tmp_path):
+    directory = tmp_path / "2026-11-25/15.30"
+    directory.mkdir(parents=True)
+    with pytest.raises(ValueError, match="内部"):
+        quality.begin(directory, archive_parent=directory / "data")
+    assert directory.is_dir() and not directory.is_symlink()
+
+
+
+def test_episode_numbers_skip_existing_samples_across_grades(tmp_path):
+    archive = tmp_path / "samples"
+    (archive / "C/episode519").mkdir(parents=True)
+    first = tmp_path / "logs/2026-11-25/15.30"
+    second = tmp_path / "logs/2026-11-25/15.31"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda directory: quality.begin(directory, archive_parent=archive), [first, second]))
+    assert {quality.read(path)["archive"]["episode"] for path in (first, second)} == {"episode520", "episode521"}
+    assert (archive / "C/episode519").is_dir()
+
+
+
+def test_episode_destination_collision_preserves_both_bags(tmp_path):
+    directory = tmp_path / "logs/2026-11-25/15.30"
+    directory.mkdir(parents=True)
+    archive = tmp_path / "samples"
+    quality.begin(directory, archive_parent=archive)
+    pending = (directory / "rosbag").resolve()
+    pending.mkdir()
+    (pending / "test.db3").write_bytes(b"new bag")
+    write_json(directory / "recording.json", {"status": "COMPLETE", "started_unix_ns": 1, "ended_unix_ns": 2})
+    seal(directory, outcome="FINISHED")
+    destination = archive / "A/episode0"
+    destination.mkdir()
+    (destination / "test.db3").write_bytes(b"existing bag")
+    result = rate(tmp_path / "logs", directory, "A")
+    assert result["archive_error"]
+    assert (pending / "test.db3").read_bytes() == b"new bag"
+    assert (destination / "test.db3").read_bytes() == b"existing bag"
+
+
+def test_note_updates_follow_episode_after_grade_archive(tmp_path):
+    directory = tmp_path / "logs/2026-11-25/19.00"
+    directory.mkdir(parents=True)
+    archive = tmp_path / "samples"
+    quality.begin(directory, archive_parent=archive)
+    (directory / "rosbag").resolve().mkdir()
+    (directory / "rosbag/metadata.yaml").write_text("test")
+    write_json(directory / "recording.json", {
+        "status": "COMPLETE", "started_unix_ns": 1, "ended_unix_ns": 2})
+    quality.finish(directory, outcome="FINISHED", reason="operator stop",
+                   returncode=130, recorder_closed=True)
+    value = rate(tmp_path / "logs", directory, "B")
+    result = quality.update_note(tmp_path / "logs", "2026-11-25/19.00",
+                                run_id=value["run_id"], expected_revision=value["revision"],
+                                note="左侧人工纠正后成功")
+    assert result["grade"] == "B"
+    assert result["execution"]["outcome"] == "FINISHED"
+    assert quality.read(archive / "B/episode0")["note"] == "左侧人工纠正后成功"
+    with pytest.raises(ValueError, match="版本"):
+        quality.update_note(tmp_path / "logs", "2026-11-25/19.00",
+                            run_id=value["run_id"], expected_revision=value["revision"],
+                            note="stale edit")
+
+
+def test_historical_clean_operator_stop_is_displayed_as_finished(recorded):
+    _, directory = recorded
+    quality.finish(directory, outcome="STOPPED", reason="operator stop",
+                   returncode=130, recorder_closed=True)
+    assert quality.summary(directory)["execution"]["outcome"] == "FINISHED"
+    assert quality.read(directory)["execution"]["outcome"] == "STOPPED"

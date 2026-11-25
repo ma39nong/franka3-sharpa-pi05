@@ -160,9 +160,9 @@ class TaskControl:
                     if confirmed is not True:
                         raise ValueError("人工恢复需要明确确认停止和重新观测")
                     if state not in ("READY", "PAUSED"):
-                        raise ValueError("跳转或回退必须先独立暂停；在线切换只允许向前推进")
-                elif index == len(self.phases) - 1 or target != self.phases[index + 1]:
-                    raise ValueError("普通切换仅允许下一阶段；跳转或回退请使用人工恢复")
+                        raise ValueError("人工恢复入口仅用于就绪或已暂停状态；运行中可直接选择阶段")
+                elif source != "operator" and (index == len(self.phases) - 1 or target != self.phases[index + 1]):
+                    raise ValueError("Agent 仅可请求下一阶段")
                 previous, old_version = d["requested_stage"], d["stage_version"]
                 self.event("request_superseded", request_id=d["pending_request_id"], reason="newer operator intent")
                 d.update(

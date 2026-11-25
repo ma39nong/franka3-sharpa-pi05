@@ -1,6 +1,7 @@
 """Own deployment subprocesses, replay immutable plans, preserve normal SIGINT cleanup."""
 import argparse
 from contextlib import suppress
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,16 @@ from deploy.fr3_sharpa_runtime.camera_lease import CameraLease, LEASE_ENV
 
 class Cancelled(Exception):
     pass
+
+
+def validate_ui_preferences(values):
+    if not isinstance(values, dict) or set(values) - {'stage_switch_mode', 'dagger_output'}:
+        raise ValueError('不支持的界面默认选项')
+    if 'stage_switch_mode' in values and values['stage_switch_mode'] not in ('manual', 'auto'):
+        raise ValueError('阶段切换方式必须为manual或auto')
+    if 'dagger_output' in values and not isinstance(values['dagger_output'], str):
+        raise ValueError('DAgger保存父目录必须为字符串')
+    return dict(values)
 
 
 def interrupt(process):
@@ -80,6 +91,10 @@ class DeploymentController:
         self.cache = self.root / ".deployment/control_bindings"
         self.cache.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self.preferences_path = self.root / '.deployment/control_preferences.json'
+        self.ui_preferences = {}
+        with suppress(OSError, ValueError):
+            self.ui_preferences = validate_ui_preferences(json.loads(self.preferences_path.read_text()))
         self.cancel = threading.Event()
         self.thread = None
         self.runtime = self.model = self.recorder = None
@@ -88,6 +103,10 @@ class DeploymentController:
         self.model_directory = None
         self.execution_directory = None
         self.operation = None
+        self.home_thread = self.home_process = None
+        self.home_cancel = threading.Event()
+        self.home_state = {"running": False, "phase": "idle"}
+        self.cleanup_running = False
         self.plan = None
         self.directory = None
         self.socket = None
@@ -108,6 +127,18 @@ class DeploymentController:
             if self.directory:
                 write_json(self.directory / "ui_status.json", self.state)
 
+    def save_ui_preferences(self, values):
+        changes = validate_ui_preferences(values)
+        with self.lock, self.preferences_path.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            saved = self.ui_preferences
+            with suppress(OSError, ValueError):
+                saved = validate_ui_preferences(json.loads(self.preferences_path.read_text()))
+            preferences = {**saved, **changes}
+            write_json(self.preferences_path, preferences)
+            self.ui_preferences = preferences
+            return dict(preferences)
+
     def snapshot(self):
         with self.lock:
             state = dict(self.state)
@@ -121,6 +152,9 @@ class DeploymentController:
             state["model_owned"] = alive
             state["operation"] = self.operation
             state["execution_running"] = bool(state.get("running") and self.operation == "execute")
+            state["execution_cleaning"] = bool(state["execution_running"] and
+                                                (self.cancel.is_set() or self.cleanup_running))
+            state["home"] = dict(self.home_state)
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
         state["interaction_crop"] = None
@@ -140,6 +174,8 @@ class DeploymentController:
                           (self.agent.directory, "model.log"), (self.agent.directory, "observation.log")],
             "execution": [(execution_directory, name) for name in ("parameter_check.log", "recording_check.log", "recorder.log", "runtime.log", "video_export.log")],
         }
+        if state["home"].get("directory"):
+            groups["execution"].append((Path(state["home"]["directory"]), "home.log"))
         logs = {}
         for group, files in groups.items():
             parts = []
@@ -235,13 +271,82 @@ class DeploymentController:
                 plan["model"]["profile"], plan["port"], plan["settings"]["mode"])
 
     def start_model(self, values):
-        # Home, playback speed/steps and recording are execution settings. Model
+        # Home, playback speed/steps, DAgger and recording are execution settings. Model
         # warmup must work even when no robot or Home files are available.
         original_values = dict(values)
         mode = values.get("mode", "serial")
-        values = {**values, "initialization": "current", "record": False, "rounds": 0,
+        values = {**values, "initialization": "current", "record": False, "dagger": False, "rounds": 0,
                   "speed": "fast" if mode in ("rtc", "paper-rtc", "train-rtc", "train-paper-rtc") else "slow", "steps": 26 if mode.startswith("soft-") else 15}
         return self.start(values, operation="model", persisted_values=original_values)
+
+    def home_arms(self, repository):
+        from deploy.fr3_sharpa_runtime.home_pose import load_home
+        with self.lock:
+            executing = self.state.get("running") and self.operation == "execute"
+            cleaning = executing and (self.cancel.is_set() or self.cleanup_running)
+            if executing and not cleaning:
+                return {"ignored": True, "reason": "执行期间B踏板无效"}
+            if self.home_thread and self.home_thread.is_alive():
+                return {"ignored": True, "reason": "双臂回Home已请求"}
+            repo = Path(repository or self.root).expanduser().resolve()
+            launcher = repo / "deploy/fr3_sharpa_runtime/home_arms.sh"
+            if not launcher.is_file():
+                raise ValueError("所选部署仓库缺少双臂独立回Home入口")
+            poses = repo / ".deployment/operator_poses.yaml"
+            if not poses.is_file():
+                poses = self.root / ".deployment/operator_poses.yaml"
+            load_home(poses, "powder_weighing")
+            self.home_cancel.clear()
+            directory = allocate_run(self.root / ".deployment/control_home_sessions")
+            self.home_state = {"running": True, "phase": "queued" if cleaning else "starting",
+                               "message": "清理完成后双臂回Home" if cleaning else "正在启动双臂回Home",
+                               "directory": str(directory)}
+            self.home_thread = threading.Thread(target=self._run_home,
+                args=(repo, poses, directory, self.thread if cleaning else None,
+                      self.execution_directory if cleaning and self.runtime is not None else None),
+                daemon=True, name="sharpa-idle-home")
+            self.home_thread.start()
+            return {"accepted": True, "home": dict(self.home_state)}
+
+    def _run_home(self, repo, poses, directory, cleanup_thread, shutdown_directory):
+        failure = None
+        try:
+            if cleanup_thread is not None:
+                cleanup_thread.join()
+            if shutdown_directory is not None:
+                reports = list(shutdown_directory.glob("logs/shutdown-*.json"))
+                if not reports:
+                    raise RuntimeError("缺少设备失能确认，双臂回Home已取消")
+                for report in reports:
+                    if json.loads(report.read_text()).get("status") != "PASS":
+                        raise RuntimeError("清理尚未确认设备失能，双臂回Home已取消")
+            if self.home_cancel.is_set():
+                return
+            env = os.environ.copy()
+            overlay = self.root / ".deployment/sharpa_ros_messages/install"
+            if overlay.is_dir():
+                env.setdefault("SHARPA_ROS_MESSAGES_OVERLAY", str(overlay))
+            with (directory / "home.log").open("ab", buffering=0) as output:
+                with self.lock:
+                    if self.home_cancel.is_set():
+                        return
+                    self.home_state.update(phase="running", message="双臂正在回Home")
+                    self.home_process = subprocess.Popen(
+                        ["bash", "deploy/fr3_sharpa_runtime/home_arms.sh", "--home-poses", str(poses)],
+                        cwd=repo, env=env, stdin=subprocess.DEVNULL,
+                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                self.home_process.wait()
+                if self.home_process.returncode and not self.home_cancel.is_set():
+                    detail = command_failure_detail(directory / "home.log")
+                    raise RuntimeError("双臂回Home失败；" + (detail or "请查看home.log"))
+        except Exception as error:
+            failure = str(error)
+        finally:
+            with self.lock:
+                cancelled = self.home_cancel.is_set()
+                self.home_process = None
+                self.home_state.update(running=False, phase="failed" if failure else "stopped" if cancelled else "finished",
+                    message=failure or ("双臂回Home已取消" if cancelled else "双臂已回Home，硬件清理完成"))
 
     def _require_model(self, plan, env):
         if not self.model_ready or self.model_key != self._model_identity(plan):
@@ -255,6 +360,8 @@ class DeploymentController:
         if operation not in ("model", "execute"):
             raise ValueError("Unknown deployment operation")
         with self.lock:
+            if operation == "execute" and self.home_thread and self.home_thread.is_alive():
+                raise ValueError("请等待双臂回Home及硬件清理完成")
             if self.thread and self.thread.is_alive():
                 raise ValueError("当前部署尚未停止和清理完毕")
             if self.recorder and self.recorder.poll() is None:
@@ -265,6 +372,7 @@ class DeploymentController:
             if operation == "execute":
                 self._require_model(plan, plan_environment(plan))
             self.cancel.clear()
+            self.cleanup_running = False
             self.operation = operation
             self.plan = json.loads(json.dumps(plan))
             self.directory = allocate_run(self.root / ".deployment/control_model_sessions" if operation == "model" else plan["settings"]["output"])
@@ -293,7 +401,10 @@ class DeploymentController:
                 write_json(self.directory / "run.json", self.plan)
                 if operation == "execute" and plan["settings"]["record"]:
                     from .quality import begin
-                    begin(self.directory)
+                    archive_parent = None
+                    if plan["settings"].get("dagger"):
+                        archive_parent = plan["settings"].get("dagger_output") or str(Path(plan["settings"]["output"]) / "DAgger")
+                    begin(self.directory, archive_parent=archive_parent)
                 write_json(self.root / ".deployment/control_last.json", persisted_values if persisted_values is not None else values)
                 # Save only evidence bound to both manifest and statistics, never path alone.
                 self.cache.mkdir(parents=True, exist_ok=True)
@@ -394,6 +505,9 @@ class DeploymentController:
                         raise RuntimeError("导出进程未提供COMPLETE结果")
                 except Exception as error:
                     write_json(report, {"status": "FAILED", "error": str(error)})
+                finally:
+                    from .quality import archive_when_ready
+                    archive_when_ready(directory)
         thread = threading.Thread(target=work, daemon=True, name="sharpa-video-export")
         self.export_threads.append(thread)
         thread.start()
@@ -413,6 +527,9 @@ class DeploymentController:
                     export(directory)
                 except Exception as error:
                     write_json(report, dict(status='FAILED',error=str(error),raw_preserved=True))
+                finally:
+                    from .quality import archive_when_ready
+                    archive_when_ready(directory)
         thread = threading.Thread(target=work,daemon=True,name='dagger-label-export')
         self.export_threads.append(thread)
         thread.start()
@@ -455,6 +572,11 @@ class DeploymentController:
     def stop(self):
         self.agent.set_mode("manual")
         with self.lock:
+            if self.home_thread and self.home_thread.is_alive():
+                self.home_cancel.set()
+                interrupt(self.home_process)
+                self.home_state.update(phase="stopping", message="正在取消双臂回Home并等待硬件清理")
+                return self.snapshot()
             if not self.state.get("running") or self.cancel.is_set():
                 return self.snapshot()
             if self.operation == "model":
@@ -622,6 +744,8 @@ class DeploymentController:
                 self.stop()
                 self.runtime.wait()  # Existing finite disable-confirmation owner controls its timeout.
         finally:
+            with self.lock:
+                self.cleanup_running = True
             self._stop_recorder()
             if self.recorder:
                 try:
@@ -671,7 +795,7 @@ class DeploymentController:
             if self.plan["settings"]["record"]:
                 try:
                     from .quality import finish
-                    finish(directory, outcome="FAILED" if failure else "STOPPED" if self.cancel.is_set() else "FINISHED",
+                    finish(directory, outcome="FAILED" if failure else "FINISHED",
                            reason=failure or ("operator stop" if self.cancel.is_set() else "execution completed"),
                            returncode=self.runtime.returncode if self.runtime is not None else None,
                            recorder_closed=self.recorder is not None and self.recorder.poll() is not None)

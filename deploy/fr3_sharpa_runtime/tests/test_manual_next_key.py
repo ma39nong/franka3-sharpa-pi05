@@ -84,6 +84,7 @@ const nodes=new Map(), calls=[];
 function element(){
  return {
   textContent:'',value:'',checked:false,disabled:false,children:[],
+  addEventListener(){},
   replaceChildren(){this.children=[]},
   append(child){this.children.push(child)},
   setAttribute(name,value){this[name]=value},
@@ -94,8 +95,10 @@ const document={
  createElement:element,
  getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id)},
 };
+const window={addEventListener(){}};
 async function fetch(path, request){
  const payload=JSON.parse(request.body);
+ if(path==='/api/preferences')return {ok:true,json:async()=>payload};
  calls.push([path,payload]);
  return {ok:true,json:async()=>({...agentState,mode:payload.mode})};
 }
@@ -142,7 +145,7 @@ async function fetch(path, request){
 
  renderTask(ready);
  assert.equal($('taskStart').disabled,false);
- assert.equal(stages.children[1].disabled,true);
+ assert.equal(stages.children[1].disabled,false);
  await applyPendingAgentMode();
  await applyPendingAgentMode();
  assert.equal(agentState.mode,'auto');
@@ -153,6 +156,19 @@ async function fetch(path, request){
  await applyPendingAgentMode();
  assert.equal($('agentMode').value,'manual');
  assert.equal(calls.length,1);
+
+ // Manual control allows every stage while the Agent remains ready.
+ renderTask({...ready,execution_state:'RUNNING',active_stage:'harvest_1'});
+ assert.equal(agentState.status,'ready');
+ assert.equal(stages.children.every(b=>!b.disabled),true);
+ const originalTaskCommand=taskCommand,selected=[];
+ taskCommand=(op,target)=>selected.push([op,target]);
+ stages.children[4].onclick();
+ stages.children[0].onclick();
+ assert.deepEqual(selected,[['stage','return_stem'],['stage','pickup']]);
+ taskCommand=originalTaskCommand;
+ renderTask({...ready,execution_state:'RUNNING',dagger_suspended:true});
+ assert.equal(stages.children.every(b=>b.disabled),true);
 
  executionActive=false;
  renderTask({...ready,execution_state:'FAULT'});
@@ -178,7 +194,7 @@ async function fetch(path, request){
  assert.equal($('unifiedPromptFields').hidden,false);
  assert.equal($('stageRecovery').hidden,true);
  assert.equal($('taskPanel').hidden,true);
- assert.equal($('taskLayout').hidden,true);
+ assert.equal($('taskLayout').hidden,false);
  assert.equal($('cropFields').hidden,true);
  assert.equal(config().prompt,'Harvest the whole truss into the basket');
  assert.equal(config().initial_stage,'pickup_1');

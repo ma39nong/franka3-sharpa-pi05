@@ -68,6 +68,26 @@ def test_offline_array_cannot_be_used_as_live_feedback():
         execute_preflight(np.tile(state, (50, 1)), state, now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW)
 
 
+def test_left_follow_checks_only_acquired_groups_and_keeps_all_feedback_fresh():
+    state = measured_state()
+    actions = np.tile(state, (50, 1))
+    actions[:, 7] += .02
+    actions[:, 36] += .23
+    feedback = mock_realtime_feedback(state)
+    result = execute_preflight(actions, feedback, now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW,
+                               groups=('left_fr3', 'left_sharpa'))
+    assert set(result['max_delta_rad']) == {'left_fr3', 'left_sharpa'}
+    with pytest.raises(ValueError, match='right_sharpa first-target delta'):
+        execute_preflight(actions, feedback, now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW)
+    actions[:, 7] += .2
+    with pytest.raises(ValueError, match='left_sharpa first-target delta'):
+        execute_preflight(actions, feedback, now_ros_ns=ROS_NOW, now_monotonic_ns=MONO_NOW,
+                          groups=('left_fr3', 'left_sharpa'))
+    with pytest.raises(ValueError, match='Stale/future'):
+        execute_preflight(actions, feedback, now_ros_ns=ROS_NOW+200_000_000,
+                          now_monotonic_ns=MONO_NOW+200_000_000, groups=('left_fr3', 'left_sharpa'))
+
+
 def test_feedback_that_expires_before_dispatch_is_rejected():
     state = measured_state()
     feedback = mock_realtime_feedback(state, age_ns=199_000_000)
