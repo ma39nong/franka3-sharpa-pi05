@@ -28,7 +28,7 @@ input[type=checkbox]{width:auto}.row{display:flex;gap:10px;align-items:end}.row>
 button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#17394a;font:600 13px system-ui;cursor:pointer;white-space:nowrap}button.primary{background:#087b75;color:white}button.stop{background:#b63f37;color:white}button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
-.agent-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto;gap:10px;align-items:end}.agent-controls select,.agent-controls button{min-height:42px}
+.agent-controls{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,2fr);gap:10px;align-items:end}.agent-controls select,.agent-controls button{min-height:42px}
 @media(max-width:600px){.agent-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.agent-controls>.actions{grid-column:1/-1}}
 .logs .card{padding:14px;display:flex;flex-direction:column}.logs h2{font-size:15px;margin-bottom:10px}.logs pre{height:clamp(180px,21vh,270px);max-height:none;background:#132b38;color:#d5e5ed;padding:12px;border-radius:6px;margin:0;overflow:auto}.logs .is-active{border-color:#7bb5b0;box-shadow:0 0 0 1px #7bb5b0}
 .page-note{margin:0;color:#62778a;font-size:12px}#directory{overflow-wrap:anywhere}#recordStatus{margin-top:6px}
@@ -40,8 +40,6 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <label>部署仓库目录</label><div class="path"><input id="repository"><button onclick="browse('repository')">选择目录</button></div>
 <div class="muted" id="repoInfo">选择本机部署目录，核对当前代码与权重配置。</div>
 <label>Checkpoint 步骤目录</label><div class="path"><input id="checkpoint" placeholder="直接包含 params/ 和 assets/ 的目录"><button onclick="browse('checkpoint')">选择目录</button></div>
-<label for="task_mode">部署方式</label><select id="task_mode"><option value="none">统一 Prompt · 不分阶段</option><option value="tomato-b">分阶段 · 放回盘中调整（七阶段）</option><option value="tomato-in-hand119">分阶段 · 手中调整（五阶段）</option></select>
-<p class="muted">摘一颗，或统一指令摘一串：选不分阶段。只有训练时使用不同阶段指令的权重才选分阶段；Agent 可选。</p>
 <div id="unifiedPromptFields"><label for="prompt">训练时的统一英文 Prompt</label><textarea id="prompt" rows="3" placeholder="填写该权重训练时的统一任务指令"></textarea></div>
 <label for="image_input">图像输入（独立于任务流程）</label><select id="image_input"><option value="auto">自动识别图像路数</option><option value="three">三路 · 原始全图</option><option value="four">四路 · 原始三路＋局部图</option></select>
 <p class="muted">放回盘中调整和手中调整都可有三路／四路版本。输入选项必须与实际权重匹配；新训练的三路对照完成核验后再接入。</p>
@@ -56,6 +54,8 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div class="row"><div><label>执行模式</label><select id="mode" onchange="modeChanged()"><option value="serial">普通串行</option><option value="rtc">RTC</option><option value="train-rtc">Train RTC · 训练前缀条件</option><option value="train-paper-rtc">Train Paper RTC · 训练前缀＋Paper</option><option value="paper-rtc">Paper RTC · 时间步归一化</option></select></div><div><label>启动姿态</label><select id="initialization"><option value="current">Current · 从当前状态推理</option><option value="home">Home · 先回固定位置再推理</option></select></div></div>
 <div class="row"><div><label>速度</label><select id="speed"><option value="slow">Slow · 0.1倍</option><option value="medium">Medium · 0.5倍</option><option value="fast">Fast · 模型原速</option></select></div><div><label id="stepsLabel">每轮执行的模型动作数</label><input id="steps" type="number" value="15" min="1" max="50"></div><div><label>轮数（0为持续）</label><input id="rounds" type="number" value="0" min="0"></div></div>
 <div id="modeHint" class="notice"></div>
+<label for="task_mode">部署方式</label><select id="task_mode"><option value="none">统一 Prompt · 不分阶段</option><option value="tomato-b">分阶段 · 放回盘中调整（七阶段）</option><option value="tomato-in-hand119">分阶段 · 手中调整（五阶段）</option></select>
+<p class="muted">摘一颗，或统一指令摘一串：选不分阶段。只有训练时使用不同阶段指令的权重才选分阶段；Agent 可选。</p>
 <label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
 <div id="cropFields"><label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator"></div>
 <div id="stageRecovery"><label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
@@ -72,11 +72,9 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <section class="card" id="taskPanel" aria-label="番茄采摘任务状态机"><h2>番茄采摘任务状态机</h2>
 <p class="muted" id="taskInstructions">执行端就绪后，点击「开始当前阶段」。</p>
 <div class="agent-controls">
-<div><label for="agentMode">阶段切换方式</label><select id="agentMode" onchange="agentModeChanged()" aria-describedby="agentModeHint"><option value="manual">手动切换</option><option value="auto">Agent 自动切换</option></select></div>
 <div><label for="agentProvider">Agent 模型</label><select id="agentProvider" onchange="agentProviderChanged()"><option value="mengxiang">mengxiang</option><option value="tairan">tairan · 四路</option></select></div>
 <div class="actions"><button id="startAgent" class="primary" onclick="agentCommand('start-agent')">启动 Agent</button><button id="stopAgent" class="stop" onclick="agentCommand('stop-agent')" disabled>停止 Agent</button></div>
 </div>
-<p class="muted" id="agentModeHint" hidden></p>
 <p id="agentStatus" class="muted" role="status">Agent 未启动</p><div id="agentError" class="error"></div>
 <details id="agentPaths"><summary>首次配置／修改工作机上的 Agent 路径</summary>
 <p class="muted">选择 Agent 会自动填入对应配置。路径不符时在这里修改；无需选择运行环境。</p>
@@ -84,12 +82,12 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div class="row"><div><label>Agent Python 路径</label><input id="agentPython"></div><div><label>编码器目录</label><input id="agentPretrained"></div></div>
 <div class="row"><div><label>工作机 Gello 仓库</label><input id="agentGello"></div><div><label>ROS 消息 overlay（可相对部署仓库）</label><input id="agentOverlay"></div></div>
 <div class="actions" style="margin-top:12px"><button id="checkAgent" onclick="checkAgentEnvironment()">检查工作机配置</button></div><div id="agentEnvironmentReport" role="status"></div></details>
-<div id="agentProbabilities" class="task-grid"></div><details><summary>查看 Agent 预测与切换规则</summary><p class="muted">tairan 当前权重基于119条手中调整任务训练，适配五阶段，采用 K1。单次观测中，当前和 +1 秒对下一阶段的概率均达到 80% 时，请求切换。切回手动或停止 tairan 后，当前动作继续执行。mengxiang 当前适配放回盘中调整七阶段，自动模式下停止 mengxiang 会同时停止执行。最终阶段由人工确认完成。</p></details>
+<div id="agentProbabilities" class="task-grid"></div><details><summary>查看 Agent 预测与切换规则</summary><p class="muted">Agent 启动并就绪后，按已有概率阈值请求下一阶段。人工可随时点击任意阶段，旧预测随阶段版本失效。停止 Agent 后由人工切阶段。最终阶段结束后点击停止执行。</p></details>
 <div id="taskStages" class="task-stages"></div>
 <div id="autoActivePrompt" class="notice" hidden><strong id="autoPromptStage"></strong><p id="autoPromptText"></p></div>
 <input type="hidden" id="initial_stage">
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
-<div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
+<div class="actions"><button id="taskStart" class="primary" onclick="taskCommand(taskState?.execution_state==='PAUSED'?'resume':'start')" disabled>开始当前阶段</button><button id="taskPause" title="暂停当前动作，执行端确认可恢复后点击继续当前阶段" onclick="taskCommand('pause')" disabled>暂停</button><button class="stop" onclick="stop()">停止执行</button></div>
 <p class="notice">手中调整任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
 <section class="card" id="dagger-panel" aria-label="DAgger 与录制质量"><h2>DAgger · 接管与数据</h2>
 <label><input id="dagger" type="checkbox" onchange="daggerChanged()"> 本次启用 DAgger 接管与自动标注（同时开启录制）</label>
@@ -105,7 +103,6 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <button id="daggerResume" class="primary" onclick="daggerCommand('resume')" disabled>恢复策略</button>
 <button id="daggerFollow" title="A 踏板切换左侧跟随／保持" onclick="daggerCommand(daggerState?.mode==='HUMAN_LEFT'?'hold':'follow')" disabled>左侧开始跟随</button>
 <button id="daggerFollowRight" disabled title="C 踏板预留，暂未实现">右侧开始跟随</button>
-<button id="daggerEnd" class="stop" onclick="stop()" disabled>结束本轮采集</button>
 </div>
 <p class="muted">Space 踏板切换左侧接管／恢复策略；L 踏板开始当前阶段，再踩一次停止执行。A 踏板切换左侧跟随／保持，C 踏板为右侧跟随预留。恢复策略前自动停止跟随并等待保持确认。请让部署页面获得焦点，编辑输入框或弹窗打开时踏板停用，长踩只触发一次。</p><div id="daggerError" class="error" role="alert"></div>
 <label for="qualityNote">最近一条录制的批注（可选）</label><textarea id="qualityNote" rows="2" maxlength="2000" placeholder="填写最近一次录制的批注"></textarea>
@@ -148,7 +145,7 @@ function renderDagger(d){
  $('daggerTakeover').disabled=!valid||!['POLICY','RESUMING'].includes(mode);
  $('daggerFollow').disabled=!valid||!(mode==='HUMAN_LEFT'||mode==='HOLD'&&d?.input_ready);
  $('daggerFollow').textContent=mode==='HUMAN_LEFT'?'左侧保持':'左侧开始跟随';
- $('daggerResume').disabled=!valid||!['HOLD','HOLDING','HUMAN_LEFT'].includes(mode);$('daggerEnd').disabled=!executionActive||!d;
+ $('daggerResume').disabled=!valid||!['HOLD','HOLDING','HUMAN_LEFT'].includes(mode);
  if(d?.communication_error)$('daggerError').textContent=d.communication_error;
 }
 async function daggerCommand(command){
@@ -226,11 +223,11 @@ async function taskPedalKey(event){
  const target=event.target;
  if(target?.isContentEditable||target?.closest?.('input,textarea,select,[role="textbox"]')||document.querySelector('dialog[open]'))return;
  if(taskPedalPending||!executionActive||!taskState||$('task_mode').value==='none')return;
- const starting=taskState.execution_state==='READY'&&taskPedalStartedRun!==taskState.run_id;
+ const starting=['READY','PAUSED'].includes(taskState.execution_state)&&taskPedalStartedRun!==taskState.run_id;
  if(starting?$('taskStart').disabled:$('stop').disabled)return;
  event.preventDefault();taskPedalPending=true;
  const runId=taskState.run_id;
- try{if(starting){if(await taskCommand('start'))taskPedalStartedRun=runId}else await stop()}
+ try{if(starting){if(await taskCommand(taskState.execution_state==='PAUSED'?'resume':'start'))taskPedalStartedRun=runId}else await stop()}
  finally{taskPedalPending=false}
 }
 document.addEventListener('keydown',taskPedalKey);
@@ -266,8 +263,7 @@ function saveControlPreferences(values){
 }
 function restoreControlPreferences(values){
  if(typeof values?.dagger_output==='string')$('dagger_output').value=values.dagger_output;
- autoModePending=values?.stage_switch_mode==='auto';
- updateAgentModeControl();
+
 }
 function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('previewSummary').textContent='执行配置明细';$('start').disabled=true;$('error').textContent=''}
 function modeChanged(){let mode=$('mode').value;$('steps').disabled=false;$('steps').value=15;$('steps').max=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?24:50;$('stepsLabel').textContent=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'重规划触发源节点':'每轮执行的模型动作数';$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode);if(['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode))$('speed').value='fast';else if(['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(previousMode))$('speed').value='slow';previousMode=mode;$('modeHint').textContent=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes(mode)?'原速后台重规划；此处节点数不是串行的固定执行前缀。':'每轮预测50，执行填写的前N个动作，然后重新观测推理。';invalidate()}
@@ -314,16 +310,15 @@ try{
  const status=await api('start',{settings:config(),approval:approvedPlan});
  executionActive=status.execution_running;busy=status.running;showLog('execution');
  await refresh();
-}catch(e){failure(e)}finally{executionStarting=false;renderTask(taskState);applyPendingAgentMode()}
+}catch(e){failure(e)}finally{executionStarting=false;renderTask(taskState)}
 }
-async function stop(){try{autoModePending=false;updateAgentModeControl();await api('stop',{});await refresh()}catch(e){failure(e)}}
+async function stop(){queuedManualStage=null;try{await api('stop',{});await refresh()}catch(e){failure(e)}}
 async function closeModel(){try{await api('close-model',{});await refresh()}catch(e){failure(e)}}
 async function refresh(){try{let s=await api('status');busy=s.running;
-if(executionActive&&!s.execution_running)autoModePending=false;
 executionActive=s.execution_running;
 homeRunning=!!s.home?.running;
 renderDagger(s.dagger);
-renderAgent(s.agent);renderTask(s.task);applyPendingAgentMode();
+renderAgent(s.agent);renderTask(s.task);
 $('phase').textContent=({idle:'空闲',validating:'配置检查',hardware_up:'启动硬件',model_loading:'推理预热中',model_stopping:'停止推理中',model_ready:'推理就绪',model_off:'推理已停止',recording_ready:'准备录制',running:'执行中',stopping:'停止执行中',failed:'失败',stopped:'执行已停止',finished:'执行已完成'})[s.phase]||s.phase;
 $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'正在加载／停止':s.model_ready?(s.model_owned?'已就绪':'已就绪（外部终端）'):s.model_running?'未就绪':'未启动';$('executionState').textContent=s.execution_running?'执行／清理中':'未运行';
 if(s.interaction_crop){let r=s.interaction_crop;$('cropStatus').textContent=`局部图：${r.mode} · ${r.source_monotonic_ns==null?'模型预热样本':r.age_s>2?'画面已过期':'最新查询'} · 检测 ${r.detector_ms.toFixed(1)} ms / 恢复 ${(r.recovery_ms??0).toFixed(1)} ms / 裁剪合计 ${r.crop_total_ms.toFixed(1)} ms · 原图 ${r.source_size.join('×')} · ${JSON.stringify(r.counts)}`;$('cropPreview').style.display='block';$('cropPreview').src='/api/crop-preview?t='+r.updated_wall_time}else{$('cropPreview').style.display='none';$('cropStatus').textContent='局部图：等待四路模型启动及新观测'}
@@ -411,40 +406,15 @@ $('qualityDialog').addEventListener('cancel',event=>{event.preventDefault();if(!
 
 let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';
 const agentFields={provider:'agentProvider',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
-function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;updateAgentChoice();updateAgentModeControl();$('agentError').textContent=''}
+function agentProviderChanged(){agentProviderCache[lastAgentProvider]={...agentConfig(),provider:lastAgentProvider};let provider=$('agentProvider').value,settings=agentProviderCache[provider]||agentPresets[provider];if(settings){for(let[k,id]of Object.entries(agentFields))$(id).value=settings[k]||'';}lastAgentProvider=provider;updateAgentChoice();$('agentError').textContent=''}
 function agentConfig(){return {...Object.fromEntries(Object.entries(agentFields).map(([k,id])=>[k,$(id).value])),profile:'workstation'}}
 function updateAgentChoice(){$('agentEnvironmentReport').textContent=''}
 async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
-let agentState=null,agentRequestPending=false,autoModePending=false,agentModeRequest=null;
-function agentAutoBlockReason(){
- if(daggerState&&executionActive&&!['POLICY','IDLE'].includes(daggerState.mode))return 'DAgger 接管或恢复期间保持手动阶段控制。';
- const a=agentState;
- const t=executionActive?taskState:null;
- const profile=t?.task_profile||$('task_mode').value;
- const expectedProvider=profile==='tomato-in-hand119'?'tairan':'mengxiang';
- const provider=['stopped','failed',undefined].includes(a?.status)?$('agentProvider').value:a.provider;
- if(provider!==expectedProvider)return '此任务请使用 '+expectedProvider+'。';
- if(!a||['stopped','failed'].includes(a.status))return '请启动 Agent。';
- if(a.status!=='ready'||a.control_eligible===false)return '等待 Agent 实时预测就绪。';
- if(!t||t.communication_error||!(t.execution_state==='READY'||
-    (t.execution_state==='RUNNING'&&t.active_stage===t.requested_stage)))return '等待任务就绪。';
- return '';
-}
-function updateAgentModeControl(){
- $('agentMode').value=agentModeRequest||(autoModePending?'auto':agentState?.mode||'manual');
- $('agentMode').disabled=!!agentModeRequest;
- const reason=autoModePending?agentAutoBlockReason():'';
- const hint=agentModeRequest?'正在应用切换方式。':autoModePending?'已预选自动切换。'+reason:'';
- $('agentModeHint').textContent=hint;
- $('agentModeHint').hidden=!hint;
-}
-function applyPendingAgentMode(){
- if(autoModePending&&!executionStarting&&!agentModeRequest&&!agentRequestPending&&!taskPending&&!agentAutoBlockReason())return setAgentMode('auto');
-}
+let agentState=null,agentRequestPending=false;
 function renderAgent(a){
 if(!a)return;
 agentState=a;
-updateAgentModeControl();
+
 const canStart=!agentRequestPending&&['stopped','failed'].includes(a.status);
 $('startAgent').disabled=!canStart;
 $('stopAgent').disabled=['stopped','stopping'].includes(a.status);
@@ -466,31 +436,8 @@ for(const [label,title] of [['current','当前预测'],['future','采集后 +'+h
 if(a.status==='ready'&&Number.isInteger(a.roi_fallback_frames))show('第四路 ROI 回退全图 '+a.roi_fallback_frames+'/16 帧');
 if(a.provider==='tairan'&&a.status==='ready')show('推理耗时 '+Math.round(a.latency_ms)+' ms');
 }
-async function agentCommand(path){if(agentRequestPending)return;if(path==='stop-agent'){autoModePending=false;updateAgentModeControl()}const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
-async function setAgentMode(mode){
- agentModeRequest=mode;autoModePending=false;updateAgentModeControl();
- try{renderAgent(await api('agent-mode',{mode}))}
- catch(e){$('agentError').textContent=e.message}
- finally{agentModeRequest=null;renderTask(taskState)}
-}
-function agentModeChanged(){
- if(agentModeRequest)return;
- saveControlPreferences({stage_switch_mode:$('agentMode').value});
- $('agentError').textContent='';
- autoModePending=$('agentMode').value==='auto';
- updateAgentModeControl();
- if(autoModePending)return applyPendingAgentMode();
- if(agentState?.mode==='auto')return setAgentMode('manual');
-}
+async function agentCommand(path){if(agentRequestPending)return;const settings=agentConfig();agentRequestPending=true;if(agentState)renderAgent(agentState);try{$('agentError').textContent='';renderAgent(await api(path,path==='start-agent'?settings:{}));await refresh()}catch(e){$('agentError').textContent=e.message}finally{agentRequestPending=false;if(agentState)renderAgent(agentState)}}
 let taskState=null, taskPending=false, taskPolling=false, taskCatalogs={};
-function manualNextKey(event){
-if(event.code!=='KeyN'||event.repeat||event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return;
-const target=event.target;
-if(target?.isContentEditable||target?.closest?.('input,textarea,select,[role="textbox"]')||document.querySelector('dialog[open]'))return;
-if(!taskState||taskState.execution_state!=='RUNNING'||taskState.requested_stage!==taskState.active_stage||taskPending||agentState?.mode!=='manual'||$('taskNext').disabled)return;
-event.preventDefault();taskCommand('next');
-}
-document.addEventListener('keydown',manualNextKey);
 async function refreshTask(){if(!taskState||taskPolling||!['RUNNING','RESUMING','SWITCH_REQUESTED','SWITCHING','PAUSING','STOPPING'].includes(taskState.execution_state))return;taskPolling=true;try{renderTask(await api('task-status'))}catch(e){$('taskError').textContent=String(e)}finally{taskPolling=false}}
 const oldStageList=[['pickup_1','首次拿起'],['harvest_1','首次采摘'],['return_truss','放回整串'],['adjust','调整'],['pickup_2','再次拿起'],['harvest_2','再次采摘'],['return_stem','放回裸杆']];
 const inHandStageList=[['pickup','拿起番茄串'],['harvest_1','首次采摘'],['adjust_in_hand','手中调整'],['harvest_2','再次采摘'],['return_stem','最终放回']];
@@ -500,7 +447,7 @@ function configuredStageList(){
 }
 function taskModeChanged(){
  updateDeploymentFields();
- if($('task_mode').value==='none'){autoModePending=false;updateAgentModeControl();if(agentState?.mode==='auto')setAgentMode('manual');}
+
  const list=configuredStageList(), initial=$('initial_stage');
  if($('task_mode').value==='none'||!list.some(([id])=>id===initial.value)){
   initial.value=list[0][0];
@@ -509,7 +456,7 @@ function taskModeChanged(){
  updateAgentChoice();renderTask(taskState);
 }
 function selectInitialStage(id){
- if(executionActive||executionStarting||$('task_mode').value==='none'||$('initial_stage').value===id)return;
+ if($('task_mode').value==='none'||$('initial_stage').value===id)return;
  $('initial_stage').value=id;
  $('recovery_confirmed').checked=false;
  invalidate();renderTask(taskState);
@@ -517,19 +464,17 @@ function selectInitialStage(id){
 function renderTask(t){
  updateDeploymentFields();
  if(t&&taskState&&t.run_id===taskState.run_id&&t.stage_version<taskState.stage_version)return;
- taskState=t;updateAgentModeControl();
+ taskState=t;
  const live=executionActive&&!executionStarting;
- const configuring=!executionActive&&!executionStarting&&$('task_mode').value!=='none';
+ const configuring=(!live||['STOPPING','STOPPED','COMPLETED','FAULT'].includes(t?.execution_state))&&$('task_mode').value!=='none';
  const configured=configuredStageList();
  const rows=(live?t?.stages:null)||taskCatalogs[$('task_mode').value]||taskCatalogs['tomato-b']||[];
  stageList=(live?t?.stages?.map(s=>[s.id,s.label]):null)||configured;
  const state=t?.execution_state||'IDLE', available=live&&!!t&&!t.communication_error;
- const idx=stageList.findIndex(([id])=>id===t?.requested_stage);
- const canSwitch=agentState?.mode!=='auto'&&available&&!taskPending&&!t?.dagger_suspended&&(!daggerState||['POLICY','IDLE'].includes(daggerState.mode))&&['READY','RUNNING','SWITCH_REQUESTED','SWITCHING','RESUMING','PAUSED'].includes(state);
  const initial=$('initial_stage').value;
  $('taskInstructions').textContent=configuring
   ?'点击下方阶段按钮选择初始阶段。'+(initial!==configured[0][0]?'从后续阶段启动需要勾选「人工恢复」并重新核对配置。':'')
-  :state==='READY'?'选择阶段后，点击「开始当前阶段」。':'手动模式可点击任意阶段切换；待新轨迹实际接入后更新当前阶段。';
+  :state==='READY'?'选择阶段后，点击「开始当前阶段」。':'可点击任意阶段；Agent 启动后自动请求下一阶段，人工选择优先。';
  const box=$('taskStages');box.replaceChildren();
  stageList.forEach(([id,name])=>{
   const b=document.createElement('button');
@@ -544,21 +489,46 @@ function renderTask(t){
    const passed=live&&t?.completed_stages?.includes(id);
    b.textContent=(active?'● ':requested?'◷ ':'')+name+(passed?' · 已离开':'');
    b.className=active?'active':requested?'pending':passed?'passed':'';
-   b.disabled=!canSwitch;
-   b.onclick=()=>taskCommand('stage',id);
+   b.disabled=false;
+   b.onclick=()=>selectLiveStage(id);
   }
   box.append(b);
  });
 $('taskPrompt').textContent=t?.active_prompt||'尚未接入阶段动作';
 const active=rows.find(stage=>stage.id===t?.active_stage);
-$('autoActivePrompt').hidden=agentState?.mode!=='auto';
+$('autoActivePrompt').hidden=!t?.active_prompt;
 $('autoPromptStage').textContent=(t?.communication_error?'上次确认的 Prompt':'当前激活的 Prompt')+(active?' · '+active.label:'');
 $('autoPromptText').textContent=t?.active_prompt||'等待执行端接入首个动作块';
 $('taskError').textContent=t?.communication_error||t?.last_error||'';
-$('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=stageList.length-1;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state);
-if(daggerState&&executionActive){for(const id of ['taskPause','taskResume','taskRecover'])$(id).disabled=true;if(t?.dagger_suspended||!['POLICY','IDLE'].includes(daggerState.mode)){for(const id of ['taskStart','taskNext','taskComplete'])$(id).disabled=true}}}
-async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;if(['pause','resume','recover','complete'].includes(command))autoModePending=false;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent='';return true}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
-async function recoverTask(){let target=prompt('请输入要恢复的阶段 ID：'+stageList.map(x=>x[0]).join('、'));if(!target)return;if(!stageList.some(x=>x[0]===target)){failure(Error('未知阶段'));return}if(confirm('人工恢复入口用于就绪或已安全暂停时重新选阶段；运行中可直接点击阶段按钮切换。确认人工恢复到 '+target+'？'))await taskCommand('recover',target,true)}
+$('taskStart').textContent=state==='PAUSED'?'继续当前阶段':'开始当前阶段';
+$('taskStart').disabled=!available||taskPending||!(state==='READY'||state==='PAUSED'&&t?.safe_to_resume);
+$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);
+if(daggerState&&executionActive){
+ $('taskPause').disabled=true;
+ if(t?.dagger_suspended||!['POLICY','IDLE'].includes(daggerState.mode)){
+  $('taskStart').disabled=true;
+ }
+}}
+let queuedManualStage=null,manualStageSending=false;
+function selectLiveStage(id){
+ queuedManualStage=id;
+ return applyManualStage();
+}
+async function applyManualStage(){
+ if(manualStageSending||taskPending||!queuedManualStage)return;
+ manualStageSending=true;
+ try{
+  while(queuedManualStage&&!taskPending){
+   const target=queuedManualStage;queuedManualStage=null;
+   if(!executionActive||!taskState||['STOPPING','STOPPED','COMPLETED','FAULT'].includes(taskState.execution_state)){
+    selectInitialStage(target);continue;
+   }
+   await taskCommand('stage',target);
+  }
+ }finally{manualStageSending=false}
+}
+async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;const request={expected_run_id:taskState.run_id,client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent='';return true}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask();applyManualStage()}}
+
 async function browse(target,file=false){if(busy)return;pickerTarget=target;pickerFile=file;$('chooseDirectory').hidden=file;$('browsePath').value=$(target).value||$('repository').value;$('picker').showModal();await loadDirectory()}
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}

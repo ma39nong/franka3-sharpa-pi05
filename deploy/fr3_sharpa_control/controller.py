@@ -243,8 +243,8 @@ class DeploymentController:
         with self.agent.lock:
             if values.get("source") not in (None, "operator"):
                 raise ValueError("UI 不允许伪造 Agent 来源")
-            if values.get("command") in ("stage", "next", "recover") and self.agent.mode == "auto":
-                raise ValueError("请先切换为手动控制")
+            if values.get("expected_run_id") not in (None, self.task_run_id):
+                raise ValueError("任务会话已变化，请刷新后操作")
             if values.get("command") in ("pause", "stop", "complete", "recover", "resume"):
                 self.agent.set_mode("manual")
             self.agent.gate.reset()
@@ -257,8 +257,9 @@ class DeploymentController:
             raise ValueError("没有运行中的番茄任务；请先核对并启动任务执行端")
         # A separate socket per request; task stop never queues behind another
         # controller command. The execution owner serializes actual authority.
-        result = task_rpc(self.task_endpoint, self.task_run_id,
-                          **{**values, "http_received_monotonic_ns": time.monotonic_ns()})
+        request = {key: value for key, value in values.items() if key != "expected_run_id"}
+        request["http_received_monotonic_ns"] = time.monotonic_ns()
+        result = task_rpc(self.task_endpoint, self.task_run_id, **request)
         self.task_last = result
         return result
 

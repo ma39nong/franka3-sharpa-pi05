@@ -126,7 +126,7 @@ class TaskControl:
             if getattr(self, 'dagger_mode', False):
                 if command in ('pause', 'resume', 'recover'):
                     raise ValueError('DAgger运行时请使用接管区的保持、跟随与恢复策略按钮')
-                if getattr(self, 'dagger_suspended', False) and command != 'stop':
+                if getattr(self, 'dagger_suspended', False) and command != 'stop' and not (command == 'stage' and source == 'operator'):
                     raise ValueError('人工接管期间禁止推进阶段；请先恢复策略')
             if source == "operator":
                 self.last_contact = time.monotonic()
@@ -143,12 +143,14 @@ class TaskControl:
                 or d["active_stage"] != d["requested_stage"]
             ):
                 raise ValueError("四路 Agent 只可推进稳定运行中的 119 条任务")
-            if command != "stop" and (type(expected_version) is not int or expected_version != d["stage_version"]):
+            manual_selection = command == "stage" and source == "operator"
+            if command != "stop" and (type(expected_version) is not int
+                    or expected_version != d["stage_version"] and not manual_selection):
                 raise ValueError("阶段版本已改变，请刷新状态后操作")
             if state in ("STOPPING", "STOPPED", "COMPLETED"):
                 raise ValueError("任务正在停止或已经结束")
             if command in ("next", "stage", "recover"):
-                if state not in ("READY", "RUNNING", "SWITCH_REQUESTED", "SWITCHING", "PAUSED", "RESUMING"):
+                if state not in ("READY", "RUNNING", "SWITCH_REQUESTED", "SWITCHING", "PAUSED", "PAUSING", "RESUMING"):
                     raise ValueError("当前状态不允许切换阶段")
                 index = self.phases.index(d["requested_stage"])
                 if command == "next":
@@ -185,7 +187,10 @@ class TaskControl:
                     client_clicked_unix_ms=client_clicked_unix_ms,
                     lock_wait_ms=(time.monotonic_ns() - received_ns) / 1e6,
                 )
-                if state in ("READY", "PAUSED"):
+                if command == "stage" and source == "operator" and getattr(self, 'dagger_suspended', False):
+                    d["manual_selected_stage"] = target
+                    d["request_status"] = "selected"
+                elif state in ("READY", "PAUSED", "PAUSING"):
                     # No motion exists to hand over; changing the selected stage
                     # must not open execution authority without start/resume.
                     d["request_status"] = "selected"
@@ -271,6 +276,7 @@ class TaskControl:
                 self.data.update(active_stage_version=ticket['stage_version'],active_applied_unix_s=time.time())
             if previous and previous != ticket["stage_id"] and previous not in self.data["completed_stages"]:
                 self.data["completed_stages"].append(previous)
+            self.data.pop("manual_selected_stage", None)
             self.data.update(
                 active_stage=ticket["stage_id"],
                 active_prompt=ticket["prompt"],

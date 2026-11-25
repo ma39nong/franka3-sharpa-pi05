@@ -12,8 +12,9 @@ from deploy.fr3_sharpa_runtime import run, startup_gate
 from deploy.fr3_sharpa_control import controller as control
 
 
+@pytest.mark.parametrize('select_during_takeover',[False,True])
 @pytest.mark.parametrize('profile',['none','tomato-in-hand119','tomato-b'])
-def test_takeover_revokes_inflight_prediction_and_resume_uses_fresh_observation(tmp_path,monkeypatch,profile):
+def test_takeover_revokes_inflight_prediction_and_resume_uses_fresh_observation(tmp_path,monkeypatch,profile,select_during_takeover):
     (tmp_path/'overlay').mkdir();(tmp_path/'overlay/setup.bash').touch()
     (tmp_path/'config/modes').mkdir(parents=True);(tmp_path/'config/modes/gello.yaml').write_text('test config')
     for key,value in dict(SHARPA_DAGGER_DIRECTORY=str(tmp_path),SHARPA_TASK_SOCKET=str(tmp_path/'task.sock'),
@@ -73,6 +74,10 @@ def test_takeover_revokes_inflight_prediction_and_resume_uses_fresh_observation(
             if self.mode in ('HOLDING','HOLD'):
                 self.takeover_ticks+=1
                 if self.takeover_ticks==2:self.mode='HOLD'
+                if self.takeover_ticks==3 and select_during_takeover and task_holder:
+                    task=task_holder[0]
+                    task.command('stage','manual-during-hold',expected_version=task.data['stage_version'],
+                                 target=task.phases[-1])
                 if self.takeover_ticks>=4:
                     self.mode='RESUMING';self.generation+=1;release.set()
             return dict(dagger=dict(mode=self.mode,generation=self.generation,
@@ -91,11 +96,14 @@ def test_takeover_revokes_inflight_prediction_and_resume_uses_fresh_observation(
     assert inferences[1]['context'] is not None and inferences[2]['context'] is None
     assert installed[0]['generation']<installed[1]['generation']
     assert [round(r['actions'][0][0],3) for r in installed]==[.001,.003]  # .002 is never dispatched.
-    assert installed[0]['prompt']==installed[1]['prompt']
+    if select_during_takeover and profile!='none':
+        assert installed[1]['prompt']==task_holder[0].stage(task_holder[0].phases[-1]).prompt
+    else:
+        assert installed[0]['prompt']==installed[1]['prompt']
     assert len([r for r in requests if r['operation']=='dagger_start'])==1
     assert all(r['operation'] not in ('close','prepare') for r in requests)
     if profile!='none':
-        assert task_holder[0].data['active_stage']==args.initial_stage
+        assert task_holder[0].data['active_stage']==(task_holder[0].phases[-1] if select_during_takeover else args.initial_stage)
         assert task_holder[0].data['stage_version']>0
 
 

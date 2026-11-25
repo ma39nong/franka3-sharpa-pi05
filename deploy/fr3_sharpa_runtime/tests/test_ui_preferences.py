@@ -79,14 +79,13 @@ def test_browser_saves_mode_typed_and_browsed_paths_and_restores_without_activat
     if not node:
         pytest.skip('Node required for browser preference handlers')
     persistence = HTML.split('let preferenceSaves=Promise.resolve();', 1)[1].split('function invalidate()', 1)[0]
-    mode_handler = HTML.split('function agentModeChanged(){', 1)[1].split('let taskState=', 1)[0]
     choose_path = HTML.split('function choosePath(path){', 1)[1].split('\n', 1)[0]
     input_handler = re.search(r'<input id="dagger_output" oninput="([^"]+)"', HTML)[1]
     harness = """
 const assert=require('node:assert/strict');
 const nodes=new Map(), calls=[];
 const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',close(){}});return nodes.get(id)};
-let autoModePending=false,agentModeRequest=null,agentState={mode:'manual'},pickerTarget='dagger_output';
+let agentState={mode:'manual'},pickerTarget='dagger_output';
 let preferenceSaves=Promise.resolve();
 async function api(path,values){assert.equal(path,'preferences');calls.push(values);return values}
 function failure(error){throw error}
@@ -100,20 +99,16 @@ function modelTypeChanged(){}
     scenario = """
 (async()=>{
  restoreControlPreferences({stage_switch_mode:'auto',dagger_output:'/data/restored'});
- assert.equal($('agentMode').value,'auto');assert.equal($('dagger_output').value,'/data/restored');
+ assert.equal($('dagger_output').value,'/data/restored');
  assert.equal(agentState.mode,'manual');assert.deepEqual(calls,[]);
- $('agentMode').value='auto';agentModeChanged();
  $('dagger_output').value='/data/typed';
  TYPED_HANDLER
- $('agentMode').value='manual';agentModeChanged();
  choosePath('/data/browsed');
  await preferenceSaves;
- assert.deepEqual(calls,[{stage_switch_mode:'auto'},{dagger_output:'/data/typed'},
-                         {stage_switch_mode:'manual'},{dagger_output:'/data/browsed'}]);
- assert.equal($('agentMode').value,'manual');
+ assert.deepEqual(calls,[{dagger_output:'/data/typed'},{dagger_output:'/data/browsed'}]);
 })().catch(error=>{console.error(error);process.exitCode=1});
 """.replace('TYPED_HANDLER', '(function(){'+input_handler+'}).call($("dagger_output"));')
-    script = harness + persistence + 'function agentModeChanged(){' + mode_handler
+    script = harness + persistence
     script += 'function choosePath(path){' + choose_path + '\n' + scenario
     result = subprocess.run([node, '-e', script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

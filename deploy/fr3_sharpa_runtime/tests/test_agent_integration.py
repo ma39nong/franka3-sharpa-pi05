@@ -275,14 +275,15 @@ def test_agent_ipc_does_not_renew_operator_lease(tmp_path):
         server.close()
 
 
-def test_stop_auto_requests_execution_stop_and_resets(tmp_path):
+def test_stop_agent_leaves_execution_running_and_resets(tmp_path):
     calls = []
     controller = SimpleNamespace(root=tmp_path, stop=lambda: calls.append("stop"))
     agent = AgentSupervisor(controller)
     agent.mode = "auto"
     agent.gate.count = 1
     agent.stop()
-    assert calls == ["stop"] and agent.mode == "manual" and agent.gate.count == 0
+    assert calls == [] and agent.mode == "manual" and agent.gate.count == 0
+    assert not agent.automatic_requested
 
 
 def test_mode_requires_live_ready_and_task_and_resets(tmp_path):
@@ -340,9 +341,18 @@ def test_http_mode_authority_and_source_forgery(tmp_path):
             post("agent-mode", {"mode": "auto"}, "wrong")
         assert err.value.code == 403
         assert post("agent-mode", {"mode": "auto"}, token)["mode"] == "auto"
-        with pytest.raises(urllib.error.HTTPError):
-            post("task-command", dict(command="next", expected_version=0, request_id="manual"), token)
-        assert c.snapshot()["stage_version"] == 0
+        selected = post("task-command", dict(command="stage", target="return_stem",
+                        expected_version=0, request_id="manual"), token)
+        assert selected["requested_stage"] == "return_stem"
+        # A stale UI click still overrides a pending automatic request in this run.
+        selected = post("task-command", dict(command="stage", target="pickup_1",
+                        expected_version=0, request_id="manual-stale"), token)
+        assert selected["requested_stage"] == "pickup_1"
+        version = c.snapshot()["stage_version"]
+        post("task-command", dict(command="stage", target="pickup_1",
+             expected_version=0, request_id="manual-stale"), token)
+        assert c.snapshot()["stage_version"] == version
+        assert ctl.agent.mode == "auto"
         with pytest.raises(urllib.error.HTTPError):
             post(
                 "task-command",
@@ -350,7 +360,7 @@ def test_http_mode_authority_and_source_forgery(tmp_path):
                 token,
             )
         assert post("agent-mode", {"mode": "manual"}, token)["mode"] == "manual"
-        after = post("task-command", dict(command="next", expected_version=0, request_id="manual-ok"), token)
+        after = post("task-command", dict(command="next", expected_version=c.snapshot()["stage_version"], request_id="manual-ok"), token)
         assert after["requested_stage"] == "harvest_1" and after["active_stage"] == "pickup_1"
         with urllib.request.urlopen(base + "/api/status") as r:
             state = json.load(r)
@@ -463,3 +473,131 @@ def test_python_virtualenv_symlink_is_preserved(tmp_path):
     interpreter.symlink_to(system)
     s = AgentSettings.parse(dict(repository=str(repo)), tmp_path)
     assert s.python == str(interpreter) and s.python != str(system)
+
+
+def test_started_agent_arms_on_task_ready_and_rearms_after_takeover(tmp_path, monkeypatch):
+    controller = SimpleNamespace(root=tmp_path)
+    agent = AgentSupervisor(controller)
+    agent.settings["profile"] = "workstation"
+    agent.state.update(status="ready", received_unix=time.time())
+    current = task()
+    monkeypatch.setattr(agent, "_task", lambda: current)
+    agent.automatic_requested = True
+    agent.enable_started_agent(None)
+    assert agent.mode == "manual"
+    agent.enable_started_agent(current)
+    assert agent.mode == "auto"
+    agent.set_mode("manual")
+    current["dagger_suspended"] = True
+    agent.enable_started_agent(current)
+    assert agent.mode == "manual"
+    current["dagger_suspended"] = False
+    agent.enable_started_agent(current)
+    assert agent.mode == "auto"
+    agent.stop()
+    agent.enable_started_agent(current)
+    assert agent.mode == "manual"
+
+
+def test_old_observation_before_manual_activation_cannot_advance():
+    gate = DecisionGate()
+    current = task()
+    current["active_applied_unix_s"] = 100.5
+    assert gate.update(packet(100.0), current, now=100.01, model_version="b0") is None
+    assert gate.update(packet(100.6), current, now=100.61, model_version="b0") is None
+    assert gate.update(packet(101.2), current, now=101.22, model_version="b0") == "harvest_1"
+
+
+@pytest.mark.parametrize("profile", ["tomato-b", "tomato-in-hand119"])
+def test_pure_deployment_agent_drives_all_stages_without_dagger(tmp_path, monkeypatch, profile):
+    import numpy as np
+    from deploy.fr3_sharpa_control.agent import InHandGate
+    from deploy.fr3_sharpa_control.agent_settings import TAIRAN_PROVIDER
+    from deploy.fr3_sharpa_runtime.task_rtc import TaskRTC
+    from deploy.fr3_sharpa_runtime.tests.test_tomato_task import FakeRuntime, FakeBackend, until
+
+    monkeypatch.setenv("SHARPA_DAGGER_ENABLED", "0")
+    initial = "pickup" if profile == "tomato-in-hand119" else "pickup_1"
+    control = TaskControl(initial_stage=initial, profile=profile)
+    runtime, backend = FakeRuntime(), FakeBackend()
+
+    def observe(**options):
+        if options.get("on_poll"):
+            options["on_poll"]()
+        return {"observation/state": np.zeros(58, np.float32),
+                "_captured_monotonic_ns": time.monotonic_ns()}
+
+    args = SimpleNamespace(rtc_initial_delay_steps=5, rtc_delay_buffer_size=10,
+                           rtc_prefix_attention_schedule="exp", rtc_max_guidance_weight=5,
+                           execute_steps=15, num_chunks=0)
+    engine = TaskRTC(control, runtime, backend, observe, args, tmp_path)
+    server = TaskServer(tmp_path / "pure-task.sock", control)
+    owner = SimpleNamespace(root=tmp_path, task_endpoint=server.path, task_run_id=control.run_id,
+                            state={"running": True}, operation="execute")
+    agent = AgentSupervisor(owner)
+    agent.settings["profile"] = "workstation"
+    if profile == "tomato-in-hand119":
+        agent.settings["provider"] = TAIRAN_PROVIDER
+        agent.gate = InHandGate()
+    agent.state.update(status="ready", control_eligible=True, received_unix=time.time())
+    agent.automatic_requested = True
+    try:
+        control.ready()
+        agent.enable_started_agent(agent._task())
+        assert agent.mode == "auto"
+        task_rpc(server.path, control.run_id, "start", request_id="start", expected_version=0)
+        until(engine, lambda: control.snapshot()["execution_state"] == "RUNNING")
+
+        for target in control.phases[1:]:
+            before = control.snapshot()
+            predicted_class = ["pickup", "harvest", "return", "adjust"].index(control.stage(target).action)
+            timestamp = time.time()
+            if profile == "tomato-in-hand119":
+                result = packet(timestamp, predicted_class)
+                result.update(future_horizon_s=1.0, control_eligible=False, latency_ms=1,
+                              roi_fallback_frames=0, result_timestamp=timestamp)
+                meta = dict(timestamp=timestamp, captured_unix=timestamp, ros_now=timestamp,
+                            observation_id=str(timestamp), source_age_s=0)
+                agent._display_inhand(result, meta, "b0", agent.epoch)
+            else:
+                selected = None
+                for offset in (0.0, 0.6):
+                    result = packet(timestamp + offset, predicted_class)
+                    selected = agent.gate.update(result, agent._task(),
+                                                 now=timestamp + offset + 0.02, model_version="b0")
+                agent._submit_target(selected, agent._task())
+            assert control.snapshot()["requested_stage"] == target
+            assert control.snapshot()["active_stage"] == before["active_stage"]
+            until(engine, lambda: control.snapshot()["execution_state"] == "RUNNING")
+            assert control.snapshot()["active_stage"] == target
+            assert runtime.calls[-1][0]["prompt"] == control.stage(target).prompt
+
+        # Explicit human rollback also works while automatic Agent control is active.
+        task_rpc(server.path, control.run_id, "stage", request_id="manual-rollback",
+                 expected_version=0, target=control.phases[0])
+        until(engine, lambda: control.snapshot()["execution_state"] == "RUNNING")
+        assert control.snapshot()["active_stage"] == control.phases[0]
+        assert agent.mode == "auto"
+        assert not getattr(control, "dagger_mode", False)
+        assert sum(isinstance(call, tuple) and call[0] == "start" for call in backend.calls) == 1
+
+        agent.stop()
+        assert control.snapshot()["execution_state"] == "RUNNING"
+        task_rpc(server.path, control.run_id, "stop", request_id="stop", expected_version=-1)
+        assert engine.tick() is False
+        assert control.snapshot()["execution_state"] == "STOPPED"
+    finally:
+        server.close()
+        engine.pool.shutdown(wait=True, cancel_futures=True)
+        engine.observation_pool.shutdown(wait=True, cancel_futures=True)
+
+
+def test_pure_deployment_entry_uses_task_executor(monkeypatch):
+    from deploy.fr3_sharpa_runtime import run, task_execution, dagger_execution
+
+    monkeypatch.setenv("SHARPA_DAGGER_ENABLED", "0")
+    args = SimpleNamespace(task_mode="tomato-in-hand119")
+    monkeypatch.setattr(task_execution, "execute_task", lambda supplied: ("pure-task", supplied))
+    monkeypatch.setattr(dagger_execution, "execute_dagger",
+                        lambda supplied: pytest.fail("Pure deployment entered DAgger executor"))
+    assert run.execute_policy_prepare(args) == ("pure-task", args)

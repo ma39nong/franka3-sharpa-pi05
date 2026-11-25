@@ -966,7 +966,7 @@ def test_recovery_requires_separate_pause_and_ready_selection_does_not_start(eng
     command(c, "next")
     assert c.snapshot()["execution_state"] == "READY" and not b.calls
     start_engine(engine)
-    with pytest.raises(ValueError, match="先独立暂停"):
+    with pytest.raises(ValueError, match="就绪或已暂停"):
         command(c, "recover", target="pickup_1", confirmed=True)
     assert c.snapshot()["execution_state"] == "RUNNING"
 

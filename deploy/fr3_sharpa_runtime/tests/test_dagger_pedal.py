@@ -153,7 +153,7 @@ function key(code,extra={}){
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_both_end_buttons_use_the_same_stop_action():
+def test_dagger_controls_keep_their_positions_after_end_button_removal():
     from html.parser import HTMLParser
 
     class Buttons(HTMLParser):
@@ -167,7 +167,11 @@ def test_both_end_buttons_use_the_same_stop_action():
 
     parser = Buttons()
     parser.feed(HTML)
-    assert parser.buttons['daggerEnd']['onclick'] == 'stop()'
+    assert 'daggerEnd' not in parser.buttons
+    assert [key for key in parser.buttons if key.startswith('dagger')] == [
+        'daggerTakeover', 'daggerTakeoverRight', 'daggerResume',
+        'daggerFollow', 'daggerFollowRight',
+    ]
     assert parser.buttons['daggerTakeoverRight']['disabled'] is None
     assert parser.buttons['daggerFollowRight']['disabled'] is None
     assert 'id="daggerHold"' not in HTML

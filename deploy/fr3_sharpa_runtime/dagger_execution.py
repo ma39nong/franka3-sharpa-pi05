@@ -135,7 +135,7 @@ def execute_dagger(args):
                     if generation != last_generation and mode in ('HOLDING','HOLD','HUMAN_LEFT'):
                         task.data['stage_version'] += 1
                         if task.data['active_stage']:
-                            task.data.update(requested_stage=task.data['active_stage'], pending_request_id=None)
+                            task.data.update(requested_stage=task.data.get('manual_selected_stage') or task.data['active_stage'], pending_request_id=None)
                         if task.data['execution_state'] in ('SWITCH_REQUESTED','SWITCHING'):
                             task.transition('RUNNING','DAgger takeover cancels pending stage change')
                         requested_task_version = task.data['stage_version']

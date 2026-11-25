@@ -84,7 +84,9 @@ class DecisionGate:
                 self.count = 0
             self.last = t
             if (
-                task["execution_state"] != "RUNNING"
+                (task.get("active_applied_unix_s") is not None and t < task["active_applied_unix_s"])
+                or task.get("dagger_suspended")
+                or task["execution_state"] != "RUNNING"
                 or task.get("communication_error")
                 or task["active_stage"] != task["requested_stage"]
                 or task["active_stage"] not in PHASES
@@ -117,7 +119,7 @@ class InHandGate:
         self.last = None
 
     def update(self, task, heads, meta, now):
-        if (not task or task["execution_state"] != "RUNNING" or task.get("communication_error")
+        if (not task or task.get("dagger_suspended") or task["execution_state"] != "RUNNING" or task.get("communication_error")
                 or task.get("task_profile") != IN_HAND_PROFILE or task["active_stage"] != task["requested_stage"]):
             self.reset()
             return None
@@ -150,6 +152,7 @@ class AgentSupervisor:
         self.thread = None
         self.process = self.collector = None
         self.mode = "manual"
+        self.automatic_requested = False
         self.epoch = 0
         self.gate = DecisionGate()
         self.state = dict(status="stopped", mode="manual", message="Agent 未启动", confirmations=0)
@@ -210,6 +213,20 @@ class AgentSupervisor:
             self.event("mode_changed", epoch=self.epoch)
             return self.snapshot()
 
+    def enable_started_agent(self, task):
+        """Arm automation once a started Agent and the task are both ready."""
+        if (not self.automatic_requested or self.mode == "auto"
+                or self.closed.is_set() or self.state.get("status") != "ready"
+                or self.state.get("control_eligible", True) is not True
+                or not task or task.get("dagger_suspended")
+                or task.get("execution_state") not in ("READY", "RUNNING")
+                or task["execution_state"] == "RUNNING"
+                and task.get("active_stage") != task.get("requested_stage")):
+            return
+        expected_profile = IN_HAND_PROFILE if self.settings["provider"] == TAIRAN_PROVIDER else "tomato-b"
+        if task.get("task_profile", "tomato-b") == expected_profile:
+            self.set_mode("auto")
+
     def _task(self):
         c = self.controller
         if not c.task_endpoint or not c.state.get("running") or c.operation != "execute":
@@ -237,6 +254,7 @@ class AgentSupervisor:
                 Path, (options.repository, options.checkpoint, options.pretrained, options.python)
             )
             self.closed.clear()
+            self.automatic_requested = options.profile == "workstation"
             self.mode = "manual"
             self.epoch += 1
             self.gate.reset()
@@ -311,7 +329,7 @@ class AgentSupervisor:
 
     def stop(self):
         with self.lock:
-            was_auto = self.mode == "auto"
+            self.automatic_requested = False
             self.mode = "manual"
             self.epoch += 1
             self.gate.reset()
@@ -319,12 +337,11 @@ class AgentSupervisor:
             self.state.update(status="stopping", message="正在停止 Agent", confirmations=0)
             if self.settings.get("provider") == TAIRAN_PROVIDER:
                 self.state.update(current=None, future=None, roi_fallback_frames=None)
-        if was_auto and self.settings.get("provider") != TAIRAN_PROVIDER:
-            self.controller.stop()
         return self.snapshot()
 
     def _fail(self, error):
         with self.lock:
+            self.automatic_requested = False
             was_auto = self.mode == "auto"
             self.mode = "manual"
             self.epoch += 1
@@ -402,6 +419,7 @@ class AgentSupervisor:
                               source_age_s=meta["source_age_s"],
                               roi_fallback_frames=packet["roi_fallback_frames"], **heads)
             self.event("prediction", packet=packet)
+            self.enable_started_agent(self._task() if self.automatic_requested else None)
             if self.mode != "auto" or epoch != self.epoch:
                 return
             try:
@@ -601,7 +619,9 @@ class AgentSupervisor:
                         requested_stage=display_task.get("requested_stage"),
                     )
                     self.event("prediction", packet=packet, task=display_task, target=target, epoch=epoch)
-                    self._submit_target(target, task)
+                    self.enable_started_agent(task)
+                    if epoch == self.epoch:
+                        self._submit_target(target, task)
         except InterruptedError:
             pass
         except Exception as error:
