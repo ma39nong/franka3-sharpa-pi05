@@ -189,9 +189,15 @@ class DeploymentSettings:
     crop_device: str = "cuda"
     prompt: str = DEFAULT_PROMPT
     image_input: str = "auto"
+    dagger: bool = False
 
     def plan(self, *, cache=None, machine_root=None):
+        if type(self.dagger) is not bool or (self.dagger and not self.record):
+            raise ValueError('DAgger必须明确开启并同时录制ROSbag与标签')
         repo = Path(self.repository).expanduser().resolve()
+        if self.dagger and not all((repo / 'deploy/fr3_sharpa_runtime' / name).is_file()
+                                   for name in ('dagger_execution.py','dagger_owner.py')):
+            raise ValueError('所选部署仓库缺少DAgger执行器，请选择franka-sharpa-dagger分支')
         from deploy.fr3_sharpa_runtime.task_stages import stage
         task_profile = self.task_mode if self.task_mode != "none" else "tomato-b"
         stage(self.initial_stage, task_profile)
@@ -350,4 +356,7 @@ def plan_environment(plan):
     env.pop("SHARPA_CAMERA_LEASE_FD", None)  # Never inherit another stale run's lease.
     env.pop("SHARPA_TASK_SOCKET", None)
     env.pop("SHARPA_TASK_RUN_ID", None)
+    for key in ('SHARPA_DAGGER_SOCKET', 'SHARPA_DAGGER_RUN_ID', 'SHARPA_DAGGER_DIRECTORY'):
+        env.pop(key, None)
+    env['SHARPA_DAGGER_ENABLED'] = '1' if plan['settings'].get('dagger') else '0'
     return env

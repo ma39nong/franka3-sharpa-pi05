@@ -152,6 +152,9 @@ def observation_after_completion(args, report):
 
 def execute_policy_prepare(args):
     """Live-state execution, with optional Home/policy prepare before prediction prefixes."""
+    if os.environ.get('SHARPA_DAGGER_ENABLED') == '1':
+        from .dagger_execution import execute_dagger
+        return execute_dagger(args)
     if getattr(args, "task_mode", "none") in ("tomato-b", "tomato-in-hand119"):
         from .task_execution import execute_task
         return execute_task(args)

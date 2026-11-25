@@ -237,7 +237,7 @@ bash deploy/fr3_sharpa_control/record_session.sh export \
 ### 7.4 部署录制 A/B/C/D 评级（franka-sharpa-dagger 分支）
 
 右上“推理与执行”下方的“DAgger · 接管与数据”区域在统一 Prompt 和分阶段模式下均可见。
-本轮新增的是录制评级功能；左臂与左手的在线接管执行接口仍待实现。
+本分支已接入录制评级、左侧人工接管和自动标注。下面第7.6节说明完整操作；当前通过离线模拟与界面验证，真机验收仍待完成。
 
 1. 启动前勾选录制。正常结束、手动停止或安全超限等异常中断后，等待执行与录制收尾。
 2. 在“部署录制 · 数据质量”下拉框选择对应日期/时间的记录；可补充中断原因或数据说明。
@@ -263,13 +263,95 @@ bash deploy/fr3_sharpa_control/record_session.sh export \
 `/teleop/arm_commands` 和 `/openpi/executed_joint_targets`。后者是软件下发目标，
 不能当作已经通过网关或设备确认执行、已经到位的证据。
 
-遥操 Sharpa 配置还记录 `/teleop/validated_arm_commands`、`/teleop/arm_command_status`、
-左右手 `/sharpa/{side}/command`；触觉版另有各指触觉话题，并有自己的身份、质量及连续性报告。
+本分支部署包已额外订阅 `/teleop/validated_arm_commands` 和 `/teleop/arm_command_status`，
+以及 `/dagger/frame`、`/dagger/events`。遥操 Sharpa 配置另有左右手 `/sharpa/{side}/command`；
+触觉版还有各指触觉话题，以及自己的身份、质量和连续性报告。
 因此不能只改 bag 名称就将部署包直接当作遥操训练包。
 
-后续 DAgger 采集还需增加接管起止事件、intervention_id、逐部位 action_owner、
-阶段/Prompt 和模型身份，并检查动作/状态时序。人工控制左侧时右侧保持，
-训练导出应按部位和时间设监督掩码，不能把右侧保持或普通策略动作当成人工专家动作。
+DAgger 已记录接管起止事件、intervention_id、逐部位 action_owner、阶段/Prompt 和模型身份。
+自动导出提供逐帧标签、接管区间和人工监督掩码；完整 LeRobot 数据转换、触觉接入及训练
+仍是独立步骤，必须检查时序与原始包质量。不能把右侧保持或普通策略动作当成人工专家动作。
+
+
+### 7.6 DAgger 完整操作
+
+启动入口不变：在工作机本分支仓库根目录运行 `bash deploy/fr3_sharpa_control/ui.sh`。
+DAgger 是独立的本轮开关，默认关闭；支持统一 Prompt 的串行/RTC，以及原有五阶段、七阶段任务。
+
+1. 佩戴并连接左侧 MANUS 手套，确认左 GELLO 设备身份及校准。退出占用这些输入的其他遥操程序。
+2. 在右上勾选“本次启用 DAgger 接管与自动标注”，录制同时开启；选择权重、模式、Current/Home。
+3. 启动推理并等待就绪，核对配置，再启动执行。分阶段任务仍需点击“开始当前阶段”。
+4. 摘取当前番茄失败时，点击“接管左臂＋左手”。等待界面显示“保持已确认”和“左侧输入就绪”。
+5. 点击“左侧开始跟随”，使用左 GELLO 与左手套继续摘当前这一颗；右臂和右手维持接管前的目标。
+6. 需要调整操作者姿势时点击“保持”；再次跟随会以当前实测左臂姿态和当前 GELLO 输入重新建立相对锚点。
+7. 纠正结束后先点击“保持”，确认稳定后点击“恢复策略”。系统重新观测、推理并低速衔接，不复用旧预测或旧RTC前缀。
+8. 一次录制可重复接管多次。整轮结束点击“结束本轮采集”，等待清理，然后选择A/B/C/D等级和备注。
+
+接管、跟随、保持和恢复不会停止/重启控制服务，不重新连接手SDK。人工阶段不自动Home、不推进阶段，
+并切回手动阶段控制；恢复后如需Agent自动切阶段，必须重新明确选择自动模式。
+DAgger运行时，原任务区的暂停/恢复/跳转按钮不可用，使用右上接管区操作。
+
+“保持已确认”依据同一会话机械臂网关接收状态和连续0.5秒稳定实测反馈，不能用HTTP请求成功代替。
+跟随输入失效时自动进入保护保持；输入恢复仍需再次明确跟随。跟随中持续失效超过1.5秒则结束执行并保留异常数据。
+设备反馈、网关接收、命令时限、关节限位/速度与SDK检查继续生效，原始故障不能通过评级清除。
+
+启动DAgger会创建只读输入链：左GELLO读取、MANUS读取及Sharpa重定向。该链不持有FCI、不创建Sharpa SDK。
+GELLO读取使用原遥操Conda环境；ROS桥隔离Python路径，避免与部署Python混用。
+默认寻找现有 `gello-upper-body-teleop` Conda环境；路径特殊时在启动UI前设置：
+
+```bash
+export SHARPA_GELLO_INPUT_PYTHON=/实际遥操环境/bin/python
+bash deploy/fr3_sharpa_control/ui.sh
+```
+
+MANUS沿用工作机GELLO仓库 `docker/.env` 中的 `MANUS_NATIVE_LIBRARY` 与 `MANUS_CALIBRATION_DIRECTORY`；
+未配置时沿用硬件仓库自身默认原生桥与校准目录。消息overlay需包含ArmCommandStatus；缺少时按原流程重建消息。
+输入启动失败查看本轮 `logs/dagger-inputs.log`，不要另开会连接SDK的完整遥操程序来替代输入链。
+
+### 7.7 自动标注保存位置与含义
+
+启用DAgger后，ROSbag持续记录接管全过程。ROS中的 `/dagger/frame` 保存每次下发对应的标签和状态，
+`/dagger/events` 保存控制权事件及网关反馈。事件以执行器实际发送后的提交为准，按钮点击不会直接生成一条成功执行标签。
+
+同一日期/时间归档目录下另存：
+
+```text
+├── dagger_manifest.json       模型身份、58D顺序、动作语义和GELLO配置哈希
+├── dagger/
+│   ├── frames.jsonl           原始逐帧标签、软件目标、实测关节状态
+│   ├── events.jsonl           接管/保持/恢复/结束和网关接收记录
+│   ├── labels.csv             自动生成的逐帧表（索引从0开始）
+│   ├── interventions.json     接管编号、起止帧/时间及结束原因
+│   ├── supervision.npz        人工监督掩码与时间戳、接管编号
+│   └── labels_export.json     标签导出状态及原始日志是否完整收尾
+└── logs/dagger-inference/     推理与阶段事件、被丢弃的旧预测及接受的预测
+```
+
+| 实际控制状态 | 左臂 | 左手 | 右臂 | 右手 |
+| --- | --- | --- | --- | --- |
+| 策略/自动衔接 | policy | policy | policy | policy |
+| 左侧人工跟随 | human | human | hold | hold |
+| 等待保持/保持/等待恢复预测 | hold | hold | hold | hold |
+
+`intervention_id` 从1递增；接管开始到实际恢复策略之间为同一段，期间可多次保持/跟随。
+正常恢复的human_end对应实际恢复后的首帧；在人工期间直接停止或故障，事件明确保存终止原因和未正常恢复标志。
+`frame_index` 是本DAgger下发流的帧索引，不等于某个相机视频的帧号；对齐图像需使用原始时间戳。
+
+`action` 是软件实际发送的绝对目标，`state` 是实测位置，两者分别保存。网关反馈按同一发送序号匹配；
+不能将发送目标、评级或一个旧的接收确认当作物理到位证据。自动监督仅选择human部位，机械臂还需匹配本帧网关接收；
+右侧hold以及普通策略不标成专家示范。50步训练窗口必须调用 `dagger_export.horizon_mask` 或实现同等边界规则，
+不能把基础帧的掩码直接复制50次；保持/接管边界、时间断档都需处理。
+
+执行结束后自动后台生成标签表与掩码，和视频导出独立。需要重新生成时运行：
+
+```bash
+python -m deploy.fr3_sharpa_runtime.dagger_export "/归档父目录/2026-11-25/15.43"
+```
+
+标签导出不修改原始包和等级，也不自动训练、合并旧数据集或更新模型。
+`training_validation=UNVERIFIED` 表示仍需按评级、图像同步、可读性和任务成功情况筛选。
+四路模型的人工作业段需要在离线转换时根据原始图像重建第四路ROI，不能用仅在策略推理时保存的policy_views直接补齐。
+当前已完成模拟和界面验收；首次真机应逐项核验静止保持、左侧小幅跟随、右侧保持、恢复衔接和一次完整采摘。
 
 
 ## 8. 常见问题
@@ -289,6 +371,6 @@ bash deploy/fr3_sharpa_control/record_session.sh export \
 
 ## 9. 一次部署的简明顺序
 
-**选择代码与权重 → 选择Absolute／Delta → 识别权重 → 选择推理模式 → 启动推理并等就绪 → 设置Current／Home、步数、轮数和录制 → 核对执行配置 → 启动执行 → 停止执行并等清理 → 查看视频。**
+**选择代码与权重 → 识别权重 → 启动推理并等就绪 → 设置执行参数及录制/DAgger → 核对配置 → 启动执行 → 按需接管/恢复 → 停止并等清理 → 评级、查看视频和标签。**
 
 继续同一模型测试时保留推理服务；全部结束后再停止推理并退出UI。

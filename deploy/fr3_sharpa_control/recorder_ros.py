@@ -24,6 +24,13 @@ TOPICS = {
 
 
 SENSORS = frozenset(TOPICS) - {"/teleop/arm_commands", "/openpi/executed_joint_targets"}
+OPTIONAL_TOPICS = {
+    '/dagger/frame': 'std_msgs/msg/String',
+    '/dagger/events': 'std_msgs/msg/String',
+    '/teleop/arm_command_status': 'teleop_interfaces/msg/ArmCommandStatus',
+    '/teleop/validated_arm_commands': 'sensor_msgs/msg/JointState',
+}
+ALL_TOPICS = {**TOPICS, **OPTIONAL_TOPICS}
 MAX_LAST_RECEIVE_AGE_NS = 200_000_000
 PROGRESS_WINDOW_NS = 1_000_000_000
 
@@ -39,16 +46,16 @@ class BagCapture:
         self.seen = set()
         self.clock, self.sleep = clock, sleep
         self.last_rx_monotonic_ns = {}
-        self.recent_rx_monotonic_ns = {topic: deque(maxlen=512) for topic in TOPICS}
+        self.recent_rx_monotonic_ns = {topic: deque(maxlen=512) for topic in ALL_TOPICS}
         self.recording_started_monotonic_ns = None
-        self.counts = {name: 0 for name in TOPICS}
-        self.report = {"status": "PREPARED", "topics": TOPICS, "started_unix_ns": None}
+        self.counts = {name: 0 for name in ALL_TOPICS}
+        self.report = {"status": "PREPARED", "topics": ALL_TOPICS, "started_unix_ns": None}
         self.error = None
         self.stop_marker = stop_marker
 
     def persist(self):
         write_json(self.directory / "recording.json", {**self.report, "counts": self.counts,
-                    "missing_topics": [name for name, count in self.counts.items() if not count]})
+                    "missing_topics": [name for name in TOPICS if not self.counts[name]]})
 
     def _stopped(self):
         if self.stop_marker is not None and self.stop_marker.exists():
@@ -126,7 +133,7 @@ class BagCapture:
                         self.writer = rosbag2_py.SequentialWriter()
                         self.writer.open(rosbag2_py.StorageOptions(uri=str(self.directory / "rosbag"), storage_id="sqlite3"),
                                          rosbag2_py.ConverterOptions("", ""))
-                        for topic, kind in TOPICS.items():
+                        for topic, kind in ALL_TOPICS.items():
                             self.writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=kind, serialization_format="cdr"))
                         activated = self.clock()
                         self.report["writer_initialization_ms"] = (activated - opened) / 1_000_000
@@ -171,7 +178,7 @@ class BagCapture:
                     writer.close()
                 del writer
             if not self.error:
-                self.report["status"] = ("INCOMPLETE" if any(not count for count in self.counts.values()) else "COMPLETE") if self.report["started_unix_ns"] else "NOT_STARTED"
+                self.report["status"] = ("INCOMPLETE" if any(not self.counts[name] for name in TOPICS) else "COMPLETE") if self.report["started_unix_ns"] else "NOT_STARTED"
             self.report.update(ended_unix_ns=time.time_ns(), ended_monotonic_ns=time.monotonic_ns())
             self.persist()
             self.finished.set()
@@ -230,12 +237,13 @@ def main():
     capture = BagCapture(args.directory, stop_marker=marker)
     qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=30, reliability=ReliabilityPolicy.BEST_EFFORT)
     subscriptions = []
-    for topic, kind in TOPICS.items():
+    for topic, kind in ALL_TOPICS.items():
         def callback(message, topic=topic):
             rx_mono_ns = time.monotonic_ns()
             rx_ros_ns = node.get_clock().now().nanoseconds
             capture.accept(topic, message, rx_ros_ns, rx_mono_ns=rx_mono_ns, serialize=serialize_message)
-        subscriptions.append(node.create_subscription(get_message(kind), topic, callback, qos))
+        subscriptions.append(node.create_subscription(get_message(kind), topic, callback,
+            1000 if topic in OPTIONAL_TOPICS else qos))
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):

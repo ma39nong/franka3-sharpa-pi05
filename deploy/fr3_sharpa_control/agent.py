@@ -189,6 +189,8 @@ class AgentSupervisor:
                 if self.state["status"] != "ready" or time.time() - self.state.get("received_unix", 0) > 2:
                     raise ValueError("Agent 和实时观测尚未就绪")
                 task = self._task()
+                if task and task.get('dagger_suspended'):
+                    raise ValueError('人工接管或恢复期间禁止Agent推进阶段')
                 profile = IN_HAND_PROFILE if self.settings["provider"] == TAIRAN_PROVIDER else "tomato-b"
                 if task and task.get("task_profile", "tomato-b") != profile:
                     raise ValueError("119条五阶段使用 tairan；100 条七阶段使用 mengxiang")

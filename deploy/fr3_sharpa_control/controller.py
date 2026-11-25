@@ -98,6 +98,7 @@ class DeploymentController:
         self.task_endpoint = None
         self.task_run_id = None
         self.task_last = None
+        self.dagger_endpoint = self.dagger_run_id = self.dagger_last = None
         from .agent import AgentSupervisor
         self.agent = AgentSupervisor(self)
 
@@ -130,6 +131,7 @@ class DeploymentController:
                 crop["age_s"] = max(0, time.time()-crop["updated_wall_time"])
                 state["interaction_crop"] = crop
         state["task"] = self.task_status()
+        state['dagger'] = self.dagger_status()
         state["agent"] = self.agent.snapshot()
         # Keep detailed files on disk; UI always has the same three terminal panes.
         groups = {
@@ -176,6 +178,29 @@ class DeploymentController:
         elif task_last and executing:
             task_last = {**task_last, "communication_error": "执行端任务通信未连接", "safe_to_resume": False}
         return task_last
+
+    def dagger_status(self):
+        if self.dagger_endpoint and self.dagger_endpoint.exists():
+            try:
+                from deploy.fr3_sharpa_runtime.dagger_io import rpc as dagger_rpc
+                self.dagger_last = dagger_rpc(self.dagger_endpoint, self.dagger_run_id, renew_contact=False)
+            except (OSError, RuntimeError, ValueError) as error:
+                return {**(self.dagger_last or {}), 'communication_error': str(error)}
+        return self.dagger_last
+
+    def dagger_command(self, values):
+        if not self.dagger_endpoint or not self.state.get('running') or self.operation != 'execute':
+            raise ValueError('没有运行中的DAgger采集，请勾选DAgger并启动执行')
+        if values.get('run_id') != self.dagger_run_id:
+            raise ValueError('DAgger采集身份已变化，请刷新后再操作')
+        # Revokes pending Agent intent without stopping its observation process.
+        self.agent.set_mode('manual')
+        from deploy.fr3_sharpa_runtime.dagger_io import rpc as dagger_rpc
+        result = dagger_rpc(self.dagger_endpoint, self.dagger_run_id,
+            command=values['command'], request_id=values['request_id'],
+            expected_generation=values['expected_generation'])
+        self.dagger_last = result
+        return result
 
     def task_command(self, values):
         # Serialize authority changes with the automatic coordinator.
@@ -254,6 +279,11 @@ class DeploymentController:
             self.task_endpoint = None
             self.task_run_id = None
             self.task_last = None
+            self.dagger_endpoint = self.dagger_run_id = self.dagger_last = None
+            if operation == 'execute' and plan['settings'].get('dagger'):
+                self.dagger_endpoint = Path(tempfile.mkdtemp(prefix='sharpa-dagger-')) / 'dagger.sock'
+                self.dagger_run_id = uuid.uuid4().hex
+                self.dagger_last = dict(run_id=self.dagger_run_id, mode='STARTING', generation=0)
             if operation == "execute" and plan["settings"].get("task_mode") in ("tomato-b", "tomato-in-hand119"):
                 self.task_endpoint = Path(tempfile.mkdtemp(prefix="sharpa-task-")) / "task.sock"
                 self.task_run_id = uuid.uuid4().hex
@@ -274,6 +304,9 @@ class DeploymentController:
                 if self.task_endpoint:
                     with suppress(OSError):
                         self.task_endpoint.parent.rmdir()
+                if self.dagger_endpoint:
+                    with suppress(OSError):
+                        self.dagger_endpoint.parent.rmdir()
                 raise
             self.thread = threading.Thread(target=self._run_model if operation == "model" else self._run, daemon=True, name="sharpa-deployment")
             self.thread.start()
@@ -368,6 +401,21 @@ class DeploymentController:
     def wait_exports(self):
         for thread in list(self.export_threads):
             thread.join()
+
+    def _queue_dagger_export(self, directory):
+        report = directory / 'dagger/labels_export.json'
+        write_json(report, dict(status='QUEUED'))
+        self.exports.append(report)
+        def work():
+            with self.export_mutex:
+                try:
+                    from deploy.fr3_sharpa_runtime.dagger_export import export
+                    export(directory)
+                except Exception as error:
+                    write_json(report, dict(status='FAILED',error=str(error),raw_preserved=True))
+        thread = threading.Thread(target=work,daemon=True,name='dagger-label-export')
+        self.export_threads.append(thread)
+        thread.start()
 
     def _prepare_model(self, env):
         key = self._model_identity(self.plan)
@@ -485,6 +533,10 @@ class DeploymentController:
         camera_lease = None
         trace = directory / "logs"
         env["SHARPA_SHUTDOWN_REPORT_DIR"] = str(trace)
+        if self.dagger_endpoint:
+            env.update(SHARPA_DAGGER_SOCKET=str(self.dagger_endpoint),
+                       SHARPA_DAGGER_RUN_ID=self.dagger_run_id,
+                       SHARPA_DAGGER_DIRECTORY=str(directory))
         if self.task_endpoint:
             env["SHARPA_TASK_SOCKET"] = str(self.task_endpoint)
             env["SHARPA_TASK_RUN_ID"] = self.task_run_id
@@ -538,16 +590,22 @@ class DeploymentController:
                     self.update("stopping", "等待双手失能确认和硬件清理完成")
                 if self.recorder and self.recorder.poll() is not None:
                     report = json.loads((directory / "recording.json").read_text()) if (directory / "recording.json").is_file() else {}
-                    if report.get("status") not in ("COMPLETE", "NOT_STARTED") and not self.cancel.is_set():
+                    unexpected_dagger_end = (self.dagger_endpoint is not None and self.dagger_endpoint.exists())
+                    if (unexpected_dagger_end or report.get("status") not in ("COMPLETE", "NOT_STARTED")) and not self.cancel.is_set():
                         failure = "录制器异常退出，已停止执行；原始数据和日志保留"
                         self.stop()
-                if self.task_endpoint and not self.cancel.is_set() and time.monotonic() >= next_heartbeat:
+                if (self.task_endpoint or self.dagger_endpoint) and not self.cancel.is_set() and time.monotonic() >= next_heartbeat:
                     from deploy.fr3_sharpa_runtime.task_control import task_rpc
                     next_heartbeat = time.monotonic() + 1.0
                     # Renew from the local controller even if every browser tab
                     # is suspended. Loss of the controller still expires it.
-                    with suppress(OSError, RuntimeError, ValueError):
-                        task_rpc(self.task_endpoint, self.task_run_id)
+                    if self.task_endpoint:
+                        with suppress(OSError, RuntimeError, ValueError):
+                            task_rpc(self.task_endpoint, self.task_run_id)
+                    if self.dagger_endpoint and self.dagger_endpoint.exists():
+                        from deploy.fr3_sharpa_runtime.dagger_io import rpc as dagger_rpc
+                        with suppress(OSError, RuntimeError, ValueError):
+                            self.dagger_last = dagger_rpc(self.dagger_endpoint, self.dagger_run_id)
                 time.sleep(0.2)
             if self.runtime.returncode not in (0, 130):
                 detail = command_failure_detail(directory / "runtime.log")
@@ -576,6 +634,11 @@ class DeploymentController:
                     self._command(["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "stop"], "hardware_cleanup", env, cancellable=False)
                 except Exception as error:
                     failure = f"{failure or ''} 硬件清理：{error}"
+            if self.dagger_endpoint and (directory/'dagger/frames.jsonl').is_file():
+                try:
+                    self._queue_dagger_export(directory)
+                except Exception as error:
+                    failure = f"{failure or ''} 标签导出提交失败：{error}；原始记录保留"
             if self.recorder and self.recorder.poll() is None:
                 failure = failure or "录制器仍在收尾"
             elif (directory / "rosbag/metadata.yaml").is_file():
@@ -599,6 +662,12 @@ class DeploymentController:
                 self.task_endpoint.unlink(missing_ok=True)
                 with suppress(OSError):
                     self.task_endpoint.parent.rmdir()
+            if self.dagger_endpoint:
+                self.dagger_last = {**(self.dagger_last or {}), 'mode': 'STOPPED',
+                                    'reason': failure or 'execution ended'}
+                self.dagger_endpoint.unlink(missing_ok=True)
+                with suppress(OSError):
+                    self.dagger_endpoint.parent.rmdir()
             if self.plan["settings"]["record"]:
                 try:
                     from .quality import finish

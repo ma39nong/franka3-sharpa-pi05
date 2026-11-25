@@ -68,7 +68,11 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div>
 <div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">
 <section id="dagger-panel" aria-label="DAgger 与录制质量"><h2>DAgger · 接管与数据</h2>
-<p class="muted">接管方案：人工控制左臂＋左手，右侧保持；显式恢复后重新观测与推理。接管执行接口尚未接入。</p>
+<label><input id="dagger" type="checkbox" onchange="daggerChanged()"> 本次启用 DAgger 接管与自动标注（同时开启录制）</label>
+<p class="muted">左臂＋左手由人接管，右侧保持。同一控制服务持续运行；恢复策略会重新观测与推理。</p>
+<div id="daggerStatus" class="notice" role="status">未启用 DAgger</div>
+<div class="actions"><button id="daggerTakeover" onclick="daggerCommand('takeover')" disabled>接管左臂＋左手</button><button id="daggerFollow" onclick="daggerCommand('follow')" disabled>左侧开始跟随</button><button id="daggerHold" onclick="daggerCommand('hold')" disabled>保持</button><button id="daggerResume" onclick="daggerCommand('resume')" disabled>恢复策略</button><button id="daggerEnd" onclick="stop()" disabled>结束本轮采集</button></div>
+<p class="muted">接管后先等待实测保持确认，再开始左侧跟随。结束跟随后先保持，再恢复策略。接管区间、逐部位归属和动作自动记录；故障停止后仍可评级。软件按钮不是硬件急停。</p><div id="daggerError" class="error" role="alert"></div>
 <label for="qualityRun">部署录制 · 数据质量</label><div class="path"><select id="qualityRun" onchange="selectQualityRun()"><option value="">暂无录制</option></select><button onclick="refreshRecordings(true)">刷新</button></div>
 <p id="qualityEvidence" class="notice" role="status">录制收尾后可选择 A/B/C/D；异常中断的包也会保留。</p>
 <label for="qualityNote">评级备注（可选）</label><textarea id="qualityNote" rows="2" maxlength="2000" placeholder="例如：开始后超限停止；人工纠正成功"></textarea>
@@ -111,8 +115,25 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <script>
 let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, executionActive=false, executionStarting=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input'];
-function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input','dagger'];
+function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed','dagger'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
+function daggerChanged(){if($('dagger').checked)$('record').checked=true;invalidate()}
+let daggerState=null,daggerPending=false;
+function renderDagger(d){
+ daggerState=d;const mode=d?.mode,valid=executionActive&&!daggerPending&&!d?.communication_error;
+ const labels={STARTING:'准备中',IDLE:'保持，等待开始阶段',POLICY:'策略执行',HOLDING:'等待实测保持确认',HOLD:'保持已确认',HUMAN_LEFT:'左臂＋左手人工跟随，右侧保持',RESUMING:'等待新观测和新策略',STOPPED:'已结束'};
+ $('daggerStatus').textContent=d?[labels[mode]||mode,d.intervention_id?'接管编号 '+d.intervention_id:'',d.input_ready?'左侧输入就绪':d.input_error||'',d.reason||''].filter(Boolean).join(' · '):'未启用 DAgger';
+ $('daggerTakeover').disabled=!valid||!['POLICY','RESUMING'].includes(mode);
+ $('daggerFollow').disabled=!valid||mode!=='HOLD'||!d?.input_ready;
+ $('daggerHold').disabled=!valid||mode!=='HUMAN_LEFT';
+ $('daggerResume').disabled=!valid||mode!=='HOLD';$('daggerEnd').disabled=!executionActive||!d;
+ if(d?.communication_error)$('daggerError').textContent=d.communication_error;
+}
+async function daggerCommand(command){
+ if(!daggerState||daggerPending)return;const d=daggerState;daggerPending=true;renderDagger(d);
+ try{$('daggerError').textContent='';renderDagger(await api('dagger-command',{command,run_id:d.run_id,request_id:crypto.randomUUID(),expected_generation:d.generation}));await refresh()}
+ catch(e){$('daggerError').textContent=e.message}finally{daggerPending=false;renderDagger(daggerState)}
+}
 async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
 function failure(e){$('error').textContent=e.message}
 function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('previewSummary').textContent='执行配置明细';$('start').disabled=true;$('error').textContent=''}
@@ -155,7 +176,7 @@ async function inspect(){try{
  }catch(e){failure(e)}}
 async function repositoryChanged(){try{let d=await api('repository?path='+encodeURIComponent($('repository').value));repoModes=d.modes;$('repoInfo').textContent='当前分支：'+d.branch+'；仅可选当前代码支持的模式';updateModes();invalidate()}catch(e){failure(e)}}
 async function preview(){try{const c=config();const p=await api('preview',c);$('previewText').textContent=JSON.stringify({分支:p.branch,提交:p.commit.slice(0,8),权重:p.model.checkpoint,模型:p.model.profile,证据:p.model.evidence,归一化:p.model.normalization,论文设置:p.model.paper_algorithm?{归一化:p.model.paper_algorithm.mode,相关噪声系数:p.model.paper_algorithm.beta}:null,方式:p.description,任务模式:c.task_mode,图像输入:p.model.input_views+'路',统一Prompt:c.task_mode==='none'?c.prompt:'按阶段指令',初始阶段:c.initial_stage,人工恢复确认:c.recovery_confirmed,姿态:c.initialization,速度:c.speed,轮数:c.rounds,录制:c.record,归档:p.settings.output},null,2);approved=JSON.stringify(c);approvedPlan=p.approval;approvedModelKey=JSON.stringify([p.settings.repository,p.commit,p.model.identity,p.model.profile,p.port,p.settings.mode]);$('previewSummary').textContent='执行配置已核对 · 点击展开';$('error').textContent='';await refresh()}catch(e){invalidate();failure(e)}}
-async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}}$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';taskModeChanged();modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
+async function tomatoPreset(four=false){if(busy)return;try{let info=await api('info');if(four)await api('agent-mode',{mode:'manual'});for(let [k,v]of Object.entries(four==='in-hand119'?info.in_hand_preset:four?info.crop_preset:info.tomato_preset)){if(fields.includes(k)){if(['record','recovery_confirmed','dagger'].includes(k))$(k).checked=v;else $(k).value=v}}$('initial_stage').value=four==='in-hand119'?'pickup':'pickup_1';taskModeChanged();modelModes=null;modelTypeChanged(true);modeChanged();invalidate();await repositoryChanged();await inspect()}catch(e){failure(e)}}
 async function startModel(){try{const c=config();showLog('inference');await api('start-model',{settings:c});await refresh()}catch(e){failure(e)}}
 function showLog(name){for(let key of ['hardware','inference','execution'])$('terminal-'+key).classList.toggle('is-active',key===name)}
 async function start(){
@@ -173,6 +194,7 @@ async function closeModel(){try{await api('close-model',{});await refresh()}catc
 async function refresh(){try{let s=await api('status');busy=s.running;
 if(executionActive&&!s.execution_running)autoModePending=false;
 executionActive=s.execution_running;
+renderDagger(s.dagger);
 renderAgent(s.agent);renderTask(s.task);applyPendingAgentMode();
 $('phase').textContent=({idle:'空闲',validating:'配置检查',hardware_up:'启动硬件',model_loading:'推理预热中',model_stopping:'停止推理中',model_ready:'推理就绪',model_off:'推理已停止',recording_ready:'准备录制',running:'执行中',stopping:'停止执行中',failed:'失败',stopped:'执行已停止',finished:'执行已完成'})[s.phase]||s.phase;
 $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'正在加载／停止':s.model_ready?(s.model_owned?'已就绪':'已就绪（外部终端）'):s.model_running?'未就绪':'未启动';$('executionState').textContent=s.execution_running?'执行／清理中':'未运行';
@@ -235,6 +257,7 @@ function updateAgentChoice(){$('agentEnvironmentReport').textContent=''}
 async function checkAgentEnvironment(){try{let r=await api('agent-check',agentConfig()),box=$('agentEnvironmentReport');box.replaceChildren();for(let c of r.checks){let line=document.createElement('div');line.textContent=(c.ok?'✓ ':'✗ ')+c.name+'：'+c.detail;line.className=c.ok?'muted':'error';box.append(line)}let note=document.createElement('p');note.textContent=r.note;box.append(note)}catch(e){$('agentError').textContent=e.message}}
 let agentState=null,agentRequestPending=false,autoModePending=false,agentModeRequest=null;
 function agentAutoBlockReason(){
+ if(daggerState&&executionActive&&!['POLICY','IDLE'].includes(daggerState.mode))return 'DAgger 接管或恢复期间保持手动阶段控制。';
  const a=agentState;
  const t=executionActive?taskState:null;
  const profile=t?.task_profile||$('task_mode').value;
@@ -371,14 +394,15 @@ $('autoActivePrompt').hidden=agentState?.mode!=='auto';
 $('autoPromptStage').textContent=(t?.communication_error?'上次确认的 Prompt':'当前激活的 Prompt')+(active?' · '+active.label:'');
 $('autoPromptText').textContent=t?.active_prompt||'等待执行端接入首个动作块';
 $('taskError').textContent=t?.communication_error||t?.last_error||'';
-$('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=stageList.length-1;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state)}
+$('taskStart').disabled=!available||taskPending||state!=='READY';$('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);$('taskResume').disabled=!available||taskPending||state!=='PAUSED'||!t?.safe_to_resume;$('taskNext').disabled=!canSwitch||idx>=stageList.length-1;$('taskRecover').disabled=agentState?.mode==='auto'||!available||taskPending||!['READY','PAUSED'].includes(state);$('taskComplete').disabled=!available||taskPending||t?.active_stage!=='return_stem'||!['RUNNING','PAUSED'].includes(state);
+if(daggerState&&executionActive){for(const id of ['taskPause','taskResume','taskRecover'])$(id).disabled=true;if(t?.dagger_suspended||!['POLICY','IDLE'].includes(daggerState.mode)){for(const id of ['taskStart','taskNext','taskComplete'])$(id).disabled=true}}}
 async function taskCommand(command,target,confirmed=false){if(taskPending||!taskState)return;if(command==='resume'&&!confirm('确认安全状态并重新授权？恢复将获取新三路图像和关节状态，重新推理，绝不续播旧动作。'))return;if(command==='complete'&&!confirm('确认整个任务已由人工验收完成，并执行完整停止和清理？'))return;if(['pause','resume','recover','complete'].includes(command))autoModePending=false;const request={client_clicked_unix_ms:Date.now(),command,request_id:crypto.randomUUID(),expected_version:taskState.stage_version,target,confirmed:confirmed||command==='resume'};taskPending=true;renderTask(taskState);try{taskState=await api('task-command',request);renderTask(taskState);$('error').textContent=''}catch(e){failure(e)}finally{taskPending=false;renderTask(taskState);await refreshTask()}}
 async function recoverTask(){let target=prompt('请输入要恢复的阶段 ID：'+stageList.map(x=>x[0]).join('、'));if(!target)return;if(!stageList.some(x=>x[0]===target)){failure(Error('未知阶段'));return}if(confirm('仅允许就绪或已安全暂停时跳转；运行中请先独立暂停。确认人工恢复到 '+target+'？'))await taskCommand('recover',target,true)}
 async function browse(target,file=false){if(busy)return;pickerTarget=target;pickerFile=file;$('chooseDirectory').hidden=file;$('browsePath').value=$(target).value||$('repository').value;$('picker').showModal();await loadDirectory()}
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对'}}
-(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed','dagger'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','semantics','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
 </script></html>"""
 
 
@@ -496,6 +520,8 @@ def server_for(root, *, port=8766):
                     result = controller.agent.set_mode(data.get("mode"))
                 elif self.path == "/api/task-command":
                     result = controller.task_command(data)
+                elif self.path == '/api/dagger-command':
+                    result = controller.dagger_command(data)
                 elif self.path == "/api/recordings":
                     from .quality import list_recordings
                     result = list_recordings(data["output"])

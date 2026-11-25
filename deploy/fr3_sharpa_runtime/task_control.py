@@ -123,6 +123,11 @@ class TaskControl:
             raise ValueError("有效 request_id 必填")
         fingerprint = hashlib.sha256(json.dumps([command, expected_version, target, confirmed, source]).encode()).hexdigest()
         with self.lock:
+            if getattr(self, 'dagger_mode', False):
+                if command in ('pause', 'resume', 'recover'):
+                    raise ValueError('DAgger运行时请使用接管区的保持、跟随与恢复策略按钮')
+                if getattr(self, 'dagger_suspended', False) and command != 'stop':
+                    raise ValueError('人工接管期间禁止推进阶段；请先恢复策略')
             if source == "operator":
                 self.last_contact = time.monotonic()
             if request_id in self.seen:

@@ -100,6 +100,7 @@ def main() -> None:
         arm_pub.publish(arm)
         publish_targets(values, stamp)
         sequence += 1
+        return sequence - 1, stamp
 
     def fresh_feedback():
         value = feedback.snapshot()
@@ -116,7 +117,7 @@ def main() -> None:
         validate_gateway_admission(node)
         gateway_speed = None
         command_limiter = None
-        if args.online_task_handoff:
+        if args.online_task_handoff or os.environ.get('SHARPA_DAGGER_ENABLED') == '1':
             from .ros_transport import RTCCommandLimiter, read_gateway_joint_speed
             gateway_speed = read_gateway_joint_speed(node)
             command_limiter = RTCCommandLimiter(gateway_speed)
@@ -354,6 +355,13 @@ def main() -> None:
                 stream_log.close()
                 stream_log = None
                 print(json.dumps({"status": "PASS", "published": True, **result}), file=protocol, flush=True)
+            elif operation == "dagger_start":
+                if os.environ.get('SHARPA_DAGGER_ENABLED') != '1' or stream is not None:
+                    raise ValueError('DAgger requires an explicitly enabled independent execution')
+                from .dagger_owner import run_owner
+                run_owner(node, executor, feedback, recording, publish_frame, protocol,
+                          gateway_speed=gateway_speed, initial_request=request, session_id=session_id)
+                break
             elif operation == "ready":
                 print(json.dumps({"status": "PASS", "operation": "ready",
                                   "feedback_topics": ["/sharpa/left/joint_states",
