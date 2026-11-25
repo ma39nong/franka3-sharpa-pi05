@@ -1,0 +1,166 @@
+Franka + Sharpa DAgger 接管调研
+日期：2026-11-25（Asia/Shanghai）
+状态：源码调研及主线离线基线验证；尚未实现接管按钮/运动控制，未启动真机。
+
+1. 分支和调研来源
+
+部署仓库：/home/user/sharpa-pi05
+已 fetch origin main；新分支：franka-sharpa-dagger
+独立工作目录：/home/user/franka-sharpa-dagger
+起点：62f2588a553356b84030097883a0bf3a30a6d156（main / origin/main）
+原部署目录仍检出 tomato-foveavla-v1，没有切换或改动其文件。
+这是本机及远端 main 的起点；本轮没有登录工作机核验运行进程实际加载的代码。
+
+DAgger 参考：
+https://gitlab.litchibot.top/fruit-infra/data-collection/dagger/-/tree/gxc?ref_type=heads
+网页工具访问失败，但 Git SSH 拉取成功。
+只读参考目录：/home/user/dagger-gxc-reference
+gxc：c4a474675d51ede3a19af6c337620eee67919e4a
+
+遥操参考：/home/user/gello_upper_body_teleop
+本地 main：e9d463dea72cb20e9c0797f34e308928699e9234
+git ls-remote franka refs/heads/main 返回相同提交，工作区干净。
+已读取 AGENTS.md 及其引用的 CLAUDE.md。遥操仓库作为只读参考。
+
+2. 目标与建议的首版行为
+
+任务是策略正在采摘某颗番茄却摘不到时，人接管 Franka 左臂与 Sharpa 左手，
+继续处理当前这一颗，保存失败前后与人工纠正数据，然后选择恢复策略或结束。
+这是带人工纠正的 DAgger 数据收集；本轮不包含自动识别采摘失败、在线训练或换权重。
+
+建议首次实现时采用以下约定（属于设计建议，尚非实机验证结果）：
+- 左臂、左手作为一组接管；右臂、右手进入受监测的固定目标保持。
+- 人工接管不切阶段、不选下一颗、不 Home；保留当前 Prompt、阶段、目标标识。
+- 接管进入保持/输入准备，再显式授权左侧跟随，避免输入尚未就绪时突然运动。
+- 纠正后由人点击“恢复策略”或“结束本次采集”。不因松开踏板自动返回策略。
+- 恢复策略时从人工结束后的真实姿态和新相机画面重新推理，使用原部署缓慢衔接。
+- 默认沿用工作中的 GELLO + MANUS→Sharpa 输入链；实际工作机手套源需部署前核对。
+右侧保持、两步接管交互和手套默认值仍可根据现场操作习惯调整。
+
+3. 当前主线的实际接入位置
+
+deploy/fr3_sharpa_control/ui.py：
+- control-card 是右上角“推理与执行”区域，可在其下方加 DAgger 控件。
+- 现有空 dagger-panel 在 task-layout 内，实际位于阶段面板右侧。
+- task_mode 为 none 时，JS 会隐藏整个 taskLayout；直接填空 panel 会导致统一
+  Prompt 模式看不到 DAgger。建议移动/组织为独立区域，不与阶段模式绑定可见性。
+
+deploy/fr3_sharpa_control/controller.py：
+负责 UI 后端与进程生命周期。这里接 DAgger 请求、状态和归档，不在 HTTP 线程发运动。
+
+deploy/fr3_sharpa_runtime/sdk_direct_motion_ros.py、sdk_direct.py：
+执行进程持有双手 SDK，向 Safety Gateway 发布机械臂 ArmCommand，并发布手反馈。
+SDK executor.send() 同时发送左手和右手；需要在其上游完成 58D 命令归属合成。
+新增 DAgger 模式应保持同一硬件所有者，不能再启动第二套 Sharpa 驱动。
+普通串行的 play_command_frames 同样需要逐帧响应接管，不能只等整个 chunk 结束。
+RTC 也应在下发周期处理控制权切换，不能依赖新推理返回后才接管。
+
+deploy/fr3_sharpa_runtime/task_control.py、task_rtc.py：
+现有 pause/resume 是任务暂停机制，不能直接等同 DAgger 接管。
+stop_boundary() 明确要求安全停止证明；当前 SDKTaskBackend.stop() 的双臂物理
+停止确认不足，因此阻止自动恢复。stream_stop 仅清除软件时间线，不是物理 HOLD ACK。
+DAgger 必须新增执行器内保持和反馈确认流程，不能通过置 safe_to_resume=True 绕过。
+阶段切换 Agent 在接管及保持期间应禁止推进，恢复时丢弃接管前预测和切换请求。
+
+4. Wuji gxc 值得借鉴的部分
+
+deploy/fr3_wuji_dagger/controller.py：
+- hold / policy / human / fault 模式，按四个部位分别跟随或 HOLD。
+- 切入人工、HOLD 和恢复策略时递增 generation，清除已安装和在途预测。
+- GELLO 臂使用实测机器人姿态与输入姿态建立相对锚点。
+- 手使用绝对重定向目标；解除 HOLD 前重新检查输入健康。
+- 输入超时进入保护保持，输入恢复仍需人工授权；源重启不能沿用旧锚点。
+- SDK 实际接受的手目标反馈给控制状态，避免用远处的模型目标做保持锚点。
+
+recorder.py、annotations.py、convert.py、README.md 接管标注章节：
+- 事件保留 human_start/end、踏板按下/松开、intervention_id、时间戳及帧映射。
+- 每帧 action_owner 区分 policy / human / hold，顺序为左臂/左手/右臂/右手。
+- 实测 state、请求动作、策略参考动作、设备确认目标分别保存。
+- 部分接管帧不能把其余部位 HOLD 标签当成人工专家标签。
+- 标注可在事后保存失败现象、阶段和备注，不在接管过程中弹窗阻断操作。
+
+参考仓库自带较多测试和历史验证记录，但本轮没有重跑其整套回归，也没有验证其
+当前 gxc 真机效果。历史 README 的通过数、保护阈值和运行结论不能作为 Sharpa 验收。
+
+5. 不能直接复制的部分
+
+Wuji 原生动作：54D = [左臂7, 左手20, 右臂7, 右手20]。
+Sharpa 原生动作：58D = [左臂7, 左手22, 右臂7, 右手22]，30Hz、50帧。
+Sharpa 切片的唯一依据为 deploy/fr3_sharpa_runtime/protocol.py：
+  left_arm  [0:7]    left_hand  [7:29]
+  right_arm [29:36]  right_hand [36:58]
+必须按关节名称校验和重排，不允许补零把20关节手冒充22关节手。
+
+Wuji contract.py 会重排模型动作到另一种 dataset 顺序，并构造108D位置/速度状态；
+Sharpa 当前部署 STATE_DIM=58。不能复制108D转换器或仅把常量54替换58。
+训练导出需对照 Sharpa 现有数据转换器与训练配置确认实际磁盘字段、顺序和单位。
+Delta 权重的在线输出已转绝对目标；导出应明确记录动作语义，训练时再按既有转换
+处理增量，不能把新采集绝对目标直接标成 delta，也不能重复做 delta 变换。
+
+参考 human_source.py 的 MANUS 分支调用 Wuji 专用解算和配置，不能用于 Sharpa。
+Sharpa 可参考现有 adapters/manus/teleop.launch.py 的 manus_sharpa_teleop/retarget_node，
+全量遥操模式将目标重映射到 /teleop/sharpa/{side}/target；只复用读取与重定向，
+不得同时启动其驱动和 DAgger SDK。GELLO 公开入口是 adapters.gello 的
+DualGelloJointInput/load_gello_config，保留设备身份、陈旧、跳变及灵敏度校验。
+输入隔离进程、ROS 环境和消息 overlay 仍需在下一步实现中验证。
+
+遥操 full_launcher.py --takeover 会先停止 teleop-control/hand-control 等服务，
+再停止 franka-control，之后重新启动臂手控制，且默认失能。
+它适合完整程序迁移，不适合摘取途中不断连接的 DAgger 接管按钮。
+遥操采集器的 episode 结束还可能自动 Home 双臂，不能直接套到单次 intervention 结束。
+参考 Wuji 的100Hz执行循环、Ruckig、SG滤波、20ms期限、电流/增益/力矩阈值均是
+另一套硬件和执行契约，不能替换 main 的现有保护或自动移植到 Sharpa。
+
+6. 建议按钮与状态
+
+位置：右上“推理与执行”下方，独立于是否启用分阶段任务。
+最小控件：准备 DAgger / 接管左臂与左手 / 左侧跟随或保持 / 恢复策略 / 结束采集。
+显示：当前控制权、左右侧状态、输入健康、正在切换/已确认保持、录制状态、接管次数。
+同一按钮请求需带 run_id、request_id 和控制代次，重复点击不能重复授权。
+
+建议状态路径：
+  POLICY → TAKEOVER_REQUESTED → HOLD_CONFIRMED → HUMAN_LEFT
+  HUMAN_LEFT → HOLD_CONFIRMED → RESUMING → POLICY
+  任意运行状态 → STOPPING / FAULT
+UI 显示 HUMAN_LEFT 必须基于执行器确认，而非 HTTP 请求已发送。
+控制权切换要清空旧 chunk/RTC prefix、在途 receipt、阶段切换请求；晚到回执不得安装。
+保持是持续发布合规目标并监测反馈，不能仅停止发布或断开手 SDK。
+臂经 Safety Gateway 唯一出口，手经既有 SDK 唯一出口；输入进程不持有 FCI 或手 SDK。
+
+7. 采集与训练的关键缺口
+
+现有 recorder_ros.py 收三相机、双臂/双手状态、ArmCommand 与
+/openpi/executed_joint_targets，尚无 DAgger 控制权和接管事件话题。
+现有 command_publisher 记录软件下发目标；executor.send() 没有返回完整设备 ACK。
+不能将这类记录标成硬件确认执行成功或实测动作；需明确数据语义并扩展回执证据。
+
+首版建议开启 DAgger 后强制本轮连续录制，覆盖失败前策略段、人工纠正段与恢复段，
+每个 intervention 作为事件区间，不反复停止采集器；支持一条 episode 多次接管。
+必须保存58D状态/动作、三相机与所用ROI信息、实际指令、owner、代次、阶段/Prompt、
+checkpoint身份、开始/结束原因和原始时间戳。state与action不能混用。
+左侧人工时 owner=[human,human,hold,hold]；过渡/全保持不能标成人工专家动作。
+相机或写盘失效不能静默丢掉专家标签；按既有故障退出并保存 incomplete 原因。
+
+导出人工纠正数据时，对左右部位及时间分别设损失掩码；50步动作窗口跨越接管边界
+时要逐步掩码或截断，不能将未来策略/保持动作混进同一专家监督窗口。
+先保留原始数据与出处，再验证合并训练集和统计策略，不能自动覆写旧数据或权重。
+
+8. 推荐实施与验收顺序
+
+A. 输入只读预检：左 GELLO、左 MANUS→Sharpa 22关节，无任何运动出口。
+B. 纯软件状态机与58D合成：右侧保持、代次失效、重复请求、断线/故障。
+C. 接入唯一执行器的保持/接管/恢复协议，覆盖串行及RTC；先模拟再实机。
+D. 在现有UI接入按钮、确认状态与录包标签，保证统一Prompt和分阶段都可用。
+E. 原始数据回放/转换检查：短接管、多次接管、故障结尾、时间同步、损失掩码。
+F. 工作机从静止保持、左臂小幅跟随、左手开合、恢复新策略依次验证，再测试摘取。
+验收记录切换延迟、右侧漂移、恢复首帧连续性、过期输入拒绝、旧策略回执拒绝和录制完整性。
+
+9. 本轮已执行的验证
+
+从新分支运行（不启动ROS、硬件或模型推理）：
+/home/user/sharpa-pi05/.venv/bin/python -m pytest -q \
+  deploy/fr3_sharpa_runtime/tests/test_rtc_stream.py \
+  deploy/fr3_sharpa_runtime/tests/test_tomato_task.py \
+  deploy/fr3_sharpa_runtime/tests/test_30hz_contract.py
+结果：86 passed in 13.78s。
+这验证 main 的相关离线基线，不代表 DAgger 已实现或已通过实机验收。
