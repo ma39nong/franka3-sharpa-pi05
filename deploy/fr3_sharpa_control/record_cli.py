@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
 from .plan import allocate_run, desktop
 from .recording import rpc, write_json
+from .quality import begin, finish
 from deploy.fr3_sharpa_runtime.record_console import record_command
 
 
@@ -36,8 +38,10 @@ def main():
     write_json(directory / "run.json", {"command": command, "repository": str(root),
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "weights": {k: v for k, v in env.items() if k.endswith("CHECKPOINT") and k.startswith("SHARPA_")}})
+    begin(directory)
     script = str(root / "deploy/fr3_sharpa_control/record_session.sh")
     recorder = None
+    status = None
     try:
         subprocess.run(["bash", script, "check"], cwd=root, env=env, check=True)
         with (directory / "recorder.log").open("wb") as log:
@@ -53,18 +57,24 @@ def main():
         # to complete disable/readback and hardware cleanup. No tee pipe.
         status = record_command(command + ["--execution-trace-dir", str(directory / "logs")], directory / "runtime.log", env=env, cwd=root)
     finally:
-        if path.exists():
-            with suppress(OSError, RuntimeError, ValueError):
-                rpc(path, "stop", timeout=3)
-        if recorder is not None:
-            try:
-                recorder.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                os.killpg(recorder.pid, signal.SIGINT)
-                raise RuntimeError("录制器尚未关闭，请查看recorder.log；未强制终止写包")
-        path.unlink(missing_ok=True)
-        (sockdir / "stop-recording").unlink(missing_ok=True)
-        sockdir.rmdir()
+        try:
+            if path.exists():
+                with suppress(OSError, RuntimeError, ValueError):
+                    rpc(path, "stop", timeout=3)
+            if recorder is not None:
+                try:
+                    recorder.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    os.killpg(recorder.pid, signal.SIGINT)
+                    raise RuntimeError("录制器尚未关闭，请查看recorder.log；未强制终止写包")
+            path.unlink(missing_ok=True)
+            (sockdir / "stop-recording").unlink(missing_ok=True)
+            sockdir.rmdir()
+        finally:
+            error = sys.exc_info()[1]
+            outcome = "FAILED" if error or status not in (0, 130) else "STOPPED" if status == 130 else "FINISHED"
+            finish(directory, outcome=outcome, reason=str(error) if error else f"execution exit code: {status}",
+                   returncode=status, recorder_closed=recorder is not None and recorder.poll() is not None)
     print(f"本次归档：{directory}", flush=True)
     if (directory / "rosbag/metadata.yaml").is_file():
         result = subprocess.run(["bash", script, "export", str(directory)], cwd=root, env=env)

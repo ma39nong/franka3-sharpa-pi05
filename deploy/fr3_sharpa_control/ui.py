@@ -35,7 +35,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:350px;overflow:auto}#entries button{display:block;background:white;text-align:left;width:100%;border-bottom:1px solid #e5edf1}details{margin:11px 0}summary{cursor:pointer;font-weight:600}.preview{min-height:60px}
 @media(max-width:1100px){.dashboard-row{grid-template-columns:1fr}.logs pre{height:220px}header{padding:6px 18px}main{padding:14px}}
 @media(max-width:520px){.brand-logo{height:60px;width:220px}.card{padding:14px}.row{flex-wrap:wrap}.row>*{flex-basis:42%}}
-.task-stages{display:flex;gap:8px;flex-wrap:wrap}.task-stages .active{background:#087b75;color:white}.task-stages .pending{outline:2px solid #d69e36}.task-stages .passed{border-bottom:3px solid #7bb5b0}.task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}.task-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:16px}@media(max-width:1100px){.task-layout{grid-template-columns:minmax(0,1fr)}.task-layout>#dagger-panel:empty{display:none}}#taskError{color:#b7352f}</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
+.task-stages{display:flex;gap:8px;flex-wrap:wrap}.task-stages .active{background:#087b75;color:white}.task-stages .pending{outline:2px solid #d69e36}.task-stages .passed{border-bottom:3px solid #7bb5b0}.task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px}.task-layout{margin-bottom:16px}#taskError{color:#b7352f}#dagger-panel{margin-top:16px;border-top:1px solid #dae3e9;padding-top:14px}#qualityEvidence{white-space:pre-line;overflow-wrap:anywhere}.grade-buttons{margin-top:10px}.grade-buttons button[aria-pressed=true]{outline:2px solid #087b75}</style><header><div class="brand"><span class="brand-logo" role="img" aria-label="厘清智能"></span></div><span id="phase" class="badge">空闲</span></header>
 <main><section class="dashboard-row configuration" aria-label="部署配置与控制"><article class="card" id="weights-card"><h2>1 · 权重与代码</h2>
 <label>部署仓库目录</label><div class="path"><input id="repository"><button onclick="browse('repository')">选择目录</button></div>
 <div class="muted" id="repoInfo">选择本机部署目录，核对当前代码与权重配置。</div>
@@ -67,6 +67,14 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <div class="control-line"><strong>执行端</strong><span id="executionState" class="muted">未运行</span><div class="actions"><button id="preview" onclick="preview()">核对执行配置</button><button id="start" class="primary" onclick="start()" disabled>启动执行</button><button id="stop" class="stop" onclick="stop()" disabled>停止执行</button></div></div>
 <p class="muted">先启动推理，预热就绪后再核对并启动执行。番茄任务执行端就绪后，还需点击下方“开始当前阶段”。执行自动完成硬件 up；停止执行等效一次 Ctrl-C，等待失能确认及硬件清理，推理端保持运行。停止后可重新选择 Current/Home，再次执行自动 up。</p><div id="message" class="notice">尚未启动设备</div><div id="error" class="error"></div><details id="planDetails"><summary id="previewSummary">执行配置明细</summary><pre id="previewText" class="preview">请选择配置后点击“核对执行配置”。</pre></details><div id="directory" class="muted"></div><div id="recordStatus" class="muted"></div>
 <div id="cropStatus" class="notice">局部图：等待四路模型启动及新观测</div><img id="cropPreview" style="display:none;width:100%;max-width:672px" alt="当前原图框与第四路模型输入">
+<section id="dagger-panel" aria-label="DAgger 与录制质量"><h2>DAgger · 接管与数据</h2>
+<p class="muted">接管方案：人工控制左臂＋左手，右侧保持；显式恢复后重新观测与推理。接管执行接口尚未接入。</p>
+<label for="qualityRun">部署录制 · 数据质量</label><div class="path"><select id="qualityRun" onchange="selectQualityRun()"><option value="">暂无录制</option></select><button onclick="refreshRecordings(true)">刷新</button></div>
+<p id="qualityEvidence" class="notice" role="status">录制收尾后可选择 A/B/C/D；异常中断的包也会保留。</p>
+<label for="qualityNote">评级备注（可选）</label><textarea id="qualityNote" rows="2" maxlength="2000" placeholder="例如：开始后超限停止；人工纠正成功"></textarea>
+<div class="actions grade-buttons"><button id="gradeA" onclick="rateRecording('A')" disabled>A · 优等</button><button id="gradeB" onclick="rateRecording('B')" disabled>B · 一般</button><button id="gradeC" onclick="rateRecording('C')" disabled>C · 报错</button><button id="gradeD" onclick="rateRecording('D')" disabled>D · 放弃</button></div>
+<p class="muted">评级独立于执行结果和录制完整性。原目录与包保留，D 不自动删除；评级不表示已通过训练数据校验。后台视频导出不影响评级。</p><div id="qualityError" class="error" role="alert"></div>
+</section>
 </article></section>
 <div class="task-layout" id="taskLayout">
 <section class="card" id="taskPanel" aria-label="番茄采摘任务状态机"><h2>番茄采摘任务状态机</h2>
@@ -91,7 +99,6 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
 <div class="actions"><button id="taskStart" class="primary" onclick="taskCommand('start')" disabled>开始当前阶段</button><button id="taskPause" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskResume" onclick="taskCommand('resume')" disabled>恢复（重新授权）</button><button id="taskNext" onclick="taskCommand('next')" disabled>切换到下一阶段</button><button id="taskRecover" onclick="recoverTask()" disabled>人工恢复／跳转</button><button id="taskComplete" onclick="taskCommand('complete')" disabled>完成任务</button><button class="stop" onclick="stop()">停止执行</button></div>
 <p class="notice">手中调整任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
-<div class="card" id="dagger-panel"></div>
 </div>
 <section class="dashboard-row logs" id="logs" aria-label="三个终端日志">
 <article class="card" id="terminal-hardware"><h2>终端一 · 硬件日志</h2><pre id="log-hardware" role="log" aria-label="硬件日志">尚无硬件日志</pre></article>
@@ -172,8 +179,53 @@ $('message').textContent=s.message;$('modelState').textContent=s.model_loading?'
 if(s.interaction_crop){let r=s.interaction_crop;$('cropStatus').textContent=`局部图：${r.mode} · ${r.source_monotonic_ns==null?'模型预热样本':r.age_s>2?'画面已过期':'最新查询'} · 检测 ${r.detector_ms.toFixed(1)} ms / 恢复 ${(r.recovery_ms??0).toFixed(1)} ms / 裁剪合计 ${r.crop_total_ms.toFixed(1)} ms · 原图 ${r.source_size.join('×')} · ${JSON.stringify(r.counts)}`;$('cropPreview').style.display='block';$('cropPreview').src='/api/crop-preview?t='+r.updated_wall_time}else{$('cropPreview').style.display='none';$('cropStatus').textContent='局部图：等待四路模型启动及新观测'}
 $('stop').disabled=!s.execution_running||s.stop_requested;$('start').disabled=busy||executionStarting||!s.model_ready||JSON.stringify(s.model_key)!==approvedModelKey||approved!==JSON.stringify(config());$('startModel').disabled=busy||!$('checkpoint').value;$('closeModel').disabled=s.execution_running||(!s.model_owned&&!s.model_loading);$('preview').disabled=busy;
 $('directory').textContent=s.directory?'本次日志目录：'+s.directory:'';$('recordStatus').textContent=[s['recording.json']?'录制：'+s['recording.json'].status:'',s['video_export.json']?'视频：'+s['video_export.json'].status:'',s.exports.length?'后台导出：'+s.exports.length+'项':''].filter(Boolean).join(' · ');
+refreshRecordings();
 for(let key of ['hardware','inference','execution']){let pre=$('log-'+key),end=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-8;let text=s.logs[key]||({'hardware':'尚无硬件日志','inference':'尚无推理日志','execution':'尚无执行日志'})[key];if(pre.textContent!==text){pre.textContent=text;if(end)pre.scrollTop=pre.scrollHeight}}
 for(let f of fields)$(f).disabled=busy;if(!busy){$('steps').disabled=false;$('speed').disabled=['rtc','paper-rtc','train-rtc','train-paper-rtc'].includes($('mode').value)}}catch(e){failure(e)}}
+
+let qualityRows=[],qualityOutput='',qualityKey='',qualityBusy=false,qualityLoading=false,qualityRefreshAt=0,qualitySignature='';
+function selectedRecording(){return qualityRows.find(r=>r.relative===$('qualityRun').value)}
+function selectQualityRun(){
+ const r=selectedRecording();qualityKey=r?.relative||'';$('qualityNote').value=r?.note||'';renderRecordingQuality();
+}
+function renderRecordingQuality(){
+ const r=selectedRecording();
+ for(const g of ['A','B','C','D']){const b=$('grade'+g);b.disabled=qualityBusy||!r?.can_rate;b.setAttribute('aria-pressed',String(r?.grade===g))}
+ $('qualityNote').disabled=qualityBusy||!r?.can_rate;
+ $('qualityEvidence').textContent=r?[
+  r.directory,
+  '执行：'+r.execution.outcome+' · 录制：'+r.recording_status+' · 评级：'+(r.grade?r.grade+' '+r.label:'待评价'),
+  r.execution.reason||'',r.recording_error||'',...r.warnings,
+  !r.review_ready?'等待执行与录制收尾':!r.has_recording?'未开始录包，本次只有诊断记录':!r.can_rate?'录制收尾证据不足，请检查日志':'可评级；评级不会修改故障记录'
+ ].filter(Boolean).join(String.fromCharCode(10)):'此父目录下暂无新版录制记录。正常停止或异常中断并收尾后，可在这里评级。';
+}
+async function refreshRecordings(force=false){
+ if(qualityLoading||qualityBusy||(!force&&Date.now()<qualityRefreshAt))return;
+ const output=$('output').value;if(!output)return;
+ qualityLoading=true;qualityRefreshAt=Date.now()+4500;
+ try{
+  const rows=await api('recordings',{output});if(output!==$('output').value)return;
+  const signature=JSON.stringify([output,rows]);if(signature===qualitySignature)return;
+  const previous=selectedRecording(),changedRoot=output!==qualityOutput;
+  qualityRows=rows;qualityOutput=output;qualitySignature=signature;
+  const box=$('qualityRun');box.replaceChildren();
+  for(const r of rows){const option=document.createElement('option');option.value=r.relative;option.textContent=r.relative+' · '+(r.grade?r.grade+' '+r.label:r.review_ready?'待评价':'收尾中');box.append(option)}
+  if(!changedRoot&&rows.some(r=>r.relative===qualityKey))box.value=qualityKey;
+  const current=selectedRecording();
+  if(changedRoot||previous?.run_id!==current?.run_id||previous?.revision!==current?.revision)selectQualityRun();
+  else renderRecordingQuality();
+ }catch(e){$('qualityError').textContent=e.message}finally{qualityLoading=false}
+}
+async function rateRecording(grade){
+ const r=selectedRecording();if(qualityBusy||!r?.can_rate)return;
+ const output=qualityOutput,note=$('qualityNote').value;qualityBusy=true;renderRecordingQuality();
+ try{
+  $('qualityError').textContent='';
+  await api('rate-recording',{output,relative:r.relative,run_id:r.run_id,expected_revision:r.revision,grade,note});
+  qualitySignature='';
+ }catch(e){$('qualityError').textContent=e.message}
+ finally{qualityBusy=false;await refreshRecordings(true);renderRecordingQuality()}
+}
 
 let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';
 const agentFields={provider:'agentProvider',repository:'agentRepository',checkpoint:'agentCheckpoint',python:'agentPython',pretrained:'agentPretrained',gello_repository:'agentGello',ros_overlay:'agentOverlay'};
@@ -444,6 +496,14 @@ def server_for(root, *, port=8766):
                     result = controller.agent.set_mode(data.get("mode"))
                 elif self.path == "/api/task-command":
                     result = controller.task_command(data)
+                elif self.path == "/api/recordings":
+                    from .quality import list_recordings
+                    result = list_recordings(data["output"])
+                elif self.path == "/api/rate-recording":
+                    from .quality import rate
+                    result = rate(data["output"], data["relative"], run_id=data["run_id"],
+                                  grade=data["grade"], note=data.get("note", ""),
+                                  expected_revision=data["expected_revision"])
                 elif self.path == "/api/stop":
                     result = controller.stop()
                 elif self.path == "/api/close-model":

@@ -261,6 +261,9 @@ class DeploymentController:
                           "plan": self.plan, "stop_requested": False}
             try:
                 write_json(self.directory / "run.json", self.plan)
+                if operation == "execute" and plan["settings"]["record"]:
+                    from .quality import begin
+                    begin(self.directory)
                 write_json(self.root / ".deployment/control_last.json", persisted_values if persisted_values is not None else values)
                 # Save only evidence bound to both manifest and statistics, never path alone.
                 self.cache.mkdir(parents=True, exist_ok=True)
@@ -547,7 +550,8 @@ class DeploymentController:
                         task_rpc(self.task_endpoint, self.task_run_id)
                 time.sleep(0.2)
             if self.runtime.returncode not in (0, 130):
-                raise RuntimeError(f"执行/清理失败，退出码{self.runtime.returncode}；查看runtime.log和独立失能报告")
+                detail = command_failure_detail(directory / "runtime.log")
+                raise RuntimeError(f"执行/清理失败，退出码{self.runtime.returncode}；{detail or '查看runtime.log和独立失能报告'}")
             reports = list(trace.glob("shutdown-*.json"))
             if not reports or any(json.loads(path.read_text()).get("status") != "PASS" for path in reports):
                 raise RuntimeError("未取得完整的双手失能PASS报告，不能将进程结束当作失能成功")
@@ -595,6 +599,15 @@ class DeploymentController:
                 self.task_endpoint.unlink(missing_ok=True)
                 with suppress(OSError):
                     self.task_endpoint.parent.rmdir()
+            if self.plan["settings"]["record"]:
+                try:
+                    from .quality import finish
+                    finish(directory, outcome="FAILED" if failure else "STOPPED" if self.cancel.is_set() else "FINISHED",
+                           reason=failure or ("operator stop" if self.cancel.is_set() else "execution completed"),
+                           returncode=self.runtime.returncode if self.runtime is not None else None,
+                           recorder_closed=self.recorder is not None and self.recorder.poll() is not None)
+                except Exception as error:
+                    failure = f"{failure or ''} 评级记录保存失败：{error}；原始bag保留"
             self.update("failed" if failure else "stopped" if self.cancel.is_set() else "finished",
                         failure or "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动", running=False)
 
