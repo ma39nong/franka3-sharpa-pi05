@@ -72,7 +72,7 @@ dialog{border:0;border-radius:10px;width:760px;max-width:95vw}#entries{height:35
 <p class="muted">左臂＋左手由人接管，右侧保持。同一控制服务持续运行；恢复策略会重新观测与推理。</p>
 <div id="daggerStatus" class="notice" role="status">未启用 DAgger</div>
 <div class="actions"><button id="daggerTakeover" onclick="daggerCommand('takeover')" disabled>接管左臂＋左手</button><button id="daggerFollow" onclick="daggerCommand('follow')" disabled>左侧开始跟随</button><button id="daggerHold" onclick="daggerCommand('hold')" disabled>保持</button><button id="daggerResume" onclick="daggerCommand('resume')" disabled>恢复策略</button><button id="daggerEnd" onclick="stop()" disabled>结束本轮采集</button></div>
-<p class="muted">接管后先等待实测保持确认，再开始左侧跟随。结束跟随后先保持，再恢复策略。接管区间、逐部位归属和动作自动记录；故障停止后仍可评级。软件按钮不是硬件急停。</p><div id="daggerError" class="error" role="alert"></div>
+<p class="muted">接管并确认保持后，A 踏板踩一下切换左臂＋左手跟随／保持，长踩不重复；请让本部署页面获得焦点，编辑输入框时踏板不生效。纠正完成后先保持，再点击恢复策略。接管区间、逐部位归属和动作自动记录；故障停止后仍可评级。软件按钮与踏板不是硬件急停。</p><div id="daggerError" class="error" role="alert"></div>
 <label for="qualityRun">部署录制 · 数据质量</label><div class="path"><select id="qualityRun" onchange="selectQualityRun()"><option value="">暂无录制</option></select><button onclick="refreshRecordings(true)">刷新</button></div>
 <p id="qualityEvidence" class="notice" role="status">录制收尾后可选择 A/B/C/D；异常中断的包也会保留。</p>
 <label for="qualityNote">评级备注（可选）</label><textarea id="qualityNote" rows="2" maxlength="2000" placeholder="例如：开始后超限停止；人工纠正成功"></textarea>
@@ -134,6 +134,22 @@ async function daggerCommand(command){
  try{$('daggerError').textContent='';renderDagger(await api('dagger-command',{command,run_id:d.run_id,request_id:crypto.randomUUID(),expected_generation:d.generation}));await refresh()}
  catch(e){$('daggerError').textContent=e.message}finally{daggerPending=false;renderDagger(daggerState)}
 }
+let daggerPedalDown=false;
+function daggerPedalKey(event){
+ if(event.code!=='KeyA')return;
+ if(event.type==='keyup'){daggerPedalDown=false;return}
+ if(event.repeat||daggerPedalDown)return;
+ daggerPedalDown=true;
+ if(event.isComposing||event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return;
+ const target=event.target;
+ if(target?.isContentEditable||target?.closest?.('input,textarea,select,[role="textbox"]')||document.querySelector('dialog[open]'))return;
+ if(!executionActive||!daggerState||daggerPending||daggerState.communication_error)return;
+ const command=daggerState.mode==='HUMAN_LEFT'?'hold':daggerState.mode==='HOLD'?'follow':null;
+ if(!command||$(command==='hold'?'daggerHold':'daggerFollow').disabled)return;
+ event.preventDefault();daggerCommand(command);
+}
+document.addEventListener('keydown',daggerPedalKey);
+document.addEventListener('keyup',daggerPedalKey);
 async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
 function failure(e){$('error').textContent=e.message}
 function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('previewSummary').textContent='执行配置明细';$('start').disabled=true;$('error').textContent=''}
