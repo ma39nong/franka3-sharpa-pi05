@@ -107,6 +107,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <p class="muted">Space 踏板切换左侧接管／恢复策略；L 踏板开始当前阶段，再踩一次停止执行。A 踏板切换左侧跟随／保持，C 踏板为右侧跟随预留。恢复策略前自动停止跟随并等待保持确认。请让部署页面获得焦点，编辑输入框或弹窗打开时踏板停用，长踩只触发一次。</p><div id="daggerError" class="error" role="alert"></div>
 <label for="qualityNote">最近一条录制的批注（可选）</label><textarea id="qualityNote" rows="2" maxlength="2000" placeholder="填写最近一次录制的批注"></textarea>
 <div class="actions" style="margin-top:10px"><button id="submitQualityNote" onclick="submitQualityNote()" disabled>提交批注</button></div>
+<p id="qualityNoteStatus" class="muted" role="status" aria-live="polite"></p>
 <p id="qualityEvidence" class="notice" role="status">等待录制收尾。</p>
 <p class="muted">评级独立于执行结果和录制完整性。DAgger 按评级归档 rosbag 到等级/episodeXX，D 保留数据；评级不表示已通过训练数据校验。后台导出完成后移动。</p><div id="qualityError" class="error" role="alert"></div>
 </section>
@@ -352,11 +353,13 @@ function showQualityDialog(row,output=qualityOutput){
 function renderRecordingQuality(){
  const r=selectedRecording();
  $('qualityNote').disabled=qualityBusy||!r?.can_rate;
- $('submitQualityNote').disabled=qualityBusy||!r?.can_rate||!r?.grade;
+ $('submitQualityNote').disabled=qualityBusy||!r?.can_rate||!r?.grade||!$('qualityNote').value.trim();
+ $('submitQualityNote').textContent=qualityBusy?'保存中…':'提交批注';
  $('qualityEvidence').textContent=r?[
   r.archive_directory||r.directory,
   r.archive_pending?'等待后台导出完成后归档到 '+r.grade+'/':'',
   '执行：'+r.execution.outcome+' · 录制：'+r.recording_status+' · 评级：'+(r.grade?r.grade+' '+r.label:'待评价'),
+  r.note?'已保存批注：'+r.note:'',
   r.execution.reason||'',r.recording_error||'',r.archive_error?'归档失败，原数据保留：'+r.archive_error:'',...r.warnings
  ].filter(Boolean).join(String.fromCharCode(10)):'暂无已收尾的录制。';
 }
@@ -370,8 +373,9 @@ async function refreshRecordings(force=false){
   const previous=selectedRecording(),changedRoot=output!==qualityOutput;
   qualityRows=rows;qualityOutput=output;
   const current=selectedRecording();
-  if(changedRoot||previous?.run_id!==current?.run_id||previous?.revision!==current?.revision)
-   $('qualityNote').value=current?.note||'';
+  if(changedRoot||previous?.run_id!==current?.run_id){
+   $('qualityNote').value='';$('qualityNoteStatus').textContent='';
+  }
   renderRecordingQuality();
   const pending=rows.find(r=>r.archive&&r.can_rate&&!r.history.some(e=>!e.automatic)&&!qualityDismissed.has(r.run_id));
   if(!executionActive&&pending)showQualityDialog(pending,output);
@@ -382,7 +386,7 @@ async function rateRecording(grade){
  const r=review.row;qualityBusy=true;
  for(const g of ['A','B','C','D'])$('grade'+g).disabled=true;
  try{
-  const note=selectedRecording()?.run_id===r.run_id?$('qualityNote').value:r.note;
+  const note=selectedRecording()?.run_id===r.run_id?($('qualityNote').value.trim()||r.note):r.note;
   await api('rate-recording',{output:review.output,relative:r.relative,run_id:r.run_id,expected_revision:r.revision,grade,note});
   qualityBusy=false;closeQualityDialog();
  }catch(e){$('qualityDialogError').textContent=e.message}
@@ -393,15 +397,24 @@ async function rateRecording(grade){
  }
 }
 async function submitQualityNote(){
- const r=selectedRecording();if(qualityBusy||!r?.grade)return;
+ const r=selectedRecording();if(qualityBusy||!r?.can_rate||!r?.grade||!$('qualityNote').value.trim())return;
  const output=qualityOutput,note=$('qualityNote').value;
+ const feedback=$('qualityNoteStatus');
  qualityBusy=true;renderRecordingQuality();
+ feedback.className='muted';feedback.textContent='正在保存批注…';
  try{
   $('qualityError').textContent='';
   await api('recording-note',{output,relative:r.relative,run_id:r.run_id,expected_revision:r.revision,note});
- }catch(e){$('qualityError').textContent=e.message}
+  $('qualityNote').value='';
+  feedback.textContent='批注已保存至 '+(r.archive?.episode||r.relative)+'。';
+ }catch(e){
+  feedback.className='error';feedback.textContent='批注保存失败：'+e.message+'。输入内容已保留，请重试。';
+ }
  finally{qualityBusy=false;await refreshRecordings(true);renderRecordingQuality()}
 }
+$('qualityNote').addEventListener('input',()=>{
+ $('qualityNoteStatus').textContent='';renderRecordingQuality();
+});
 $('qualityDialog').addEventListener('cancel',event=>{event.preventDefault();if(!qualityBusy)closeQualityDialog()});
 
 let agentPresets={},agentProviderCache={},lastAgentProvider='mengxiang';

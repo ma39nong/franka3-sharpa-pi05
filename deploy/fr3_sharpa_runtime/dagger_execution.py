@@ -9,7 +9,8 @@ import signal
 import subprocess
 import time
 
-from .dagger_io import AuditWriter
+from .dagger import fresh_prediction_budget_s
+from .dagger_io import AuditWriter, rpc as dagger_rpc
 from .motion_worker import MotionWorker
 from .rtc_stream import RTCSettings, require_capabilities
 from .runtime import SharpaRuntime
@@ -111,20 +112,28 @@ def execute_dagger(args):
             prompt = ticket['prompt'] if ticket else args.prompt
             timeout = context['prefix_attention_horizon']/30 if context else 5.
             observation = run.live_observation(args.ros_overlay,prompt,timeout_s=timeout)
-            age = (time.monotonic_ns()-observation['_captured_monotonic_ns'])/1e9
-            budget = timeout if context else .2-age
+            budget = timeout if context else fresh_prediction_budget_s(
+                observation['_captured_monotonic_ns'], time.monotonic_ns())
             if budget <= 0:
                 raise ValueError('DAgger observation expired before inference')
             infer = getattr(runtime, 'infer_task_chunk', runtime.infer_chunk)
             result = infer(observation, rtc_context=context, response_timeout=budget)
             return dict(result=result, receipt=runtime.last_receipt if context else None,
                         captured=observation['_captured_monotonic_ns'],ticket=ticket,
-                        generation=generation, prompt=prompt)
+                        generation=generation, prompt=prompt,
+                        completed_monotonic_ns=time.monotonic_ns(),
+                        inference_timing=dict(getattr(runtime, 'last_timing', {})))
         while True:
             if inputs.poll() is not None:
                 raise RuntimeError('DAgger input-only launcher exited; see dagger-inputs.log')
             audit.check()
-            status = worker.request({'operation':'dagger_status'},timeout=2)
+            if future is not None and future.ticket[2] is None:
+                # A fresh prediction has a strict age budget. Read authority
+                # without queuing a status request behind the 30 Hz dispatch.
+                status = {'dagger': dagger_rpc(os.environ['SHARPA_DAGGER_SOCKET'],
+                    os.environ['SHARPA_DAGGER_RUN_ID'], renew_contact=False)}
+            else:
+                status = worker.request({'operation':'dagger_status'},timeout=2)
             authority = status['dagger']
             generation, mode = authority['generation'], authority['mode']
             if task:
@@ -168,8 +177,16 @@ def execute_dagger(args):
                     emit(event='obsolete_prediction_discarded',generation=prediction_generation)
                     continue
                 metadata, actions, _ = result['result']
+                install_request_ns = time.monotonic_ns()
+                emit(event='prediction_install_requested', generation=generation,
+                     captured_monotonic_ns=result['captured'],
+                     prediction_completed_monotonic_ns=result['completed_monotonic_ns'],
+                     install_request_monotonic_ns=install_request_ns,
+                     coordinator_wait_ms=(install_request_ns-result['completed_monotonic_ns'])/1e6,
+                     inference_timing=result['inference_timing'])
                 request = dict(operation='dagger_install',actions=actions.tolist(),generation=generation,
                     captured_monotonic_ns=result['captured'], receipt=result['receipt'],
+                    install_request_monotonic_ns=install_request_ns,
                     prediction_clip_rad=args.prediction_clip_rad, prompt=result['prompt'],
                     stage=ticket['stage_id'] if ticket else None)
                 if task:

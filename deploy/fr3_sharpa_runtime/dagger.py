@@ -14,6 +14,16 @@ import numpy as np
 GROUPS = ('left_arm', 'left_hand', 'right_arm', 'right_hand')
 SLICES = (slice(0, 7), slice(7, 29), slice(29, 36), slice(36, 58))
 ACTIVE = ('POLICY', 'HOLDING', 'HOLD', 'HUMAN_LEFT', 'RESUMING')
+FRESH_PREDICTION_MAX_AGE_NS = 240_000_000
+
+
+def fresh_prediction_budget_s(captured_monotonic_ns, now_monotonic_ns):
+    age = now_monotonic_ns - captured_monotonic_ns
+    if not 0 <= age <= FRESH_PREDICTION_MAX_AGE_NS:
+        raise ValueError(
+            f'DAgger fresh prediction age {age / 1e6:.3f}ms outside '
+            f'0..{FRESH_PREDICTION_MAX_AGE_NS / 1e6:.0f}ms admission')
+    return (FRESH_PREDICTION_MAX_AGE_NS - age) / 1e9
 
 
 def vector(value, size=58):
@@ -198,7 +208,7 @@ class DaggerAuthority:
                     self.mode = 'HOLDING'
         return self.hold.copy()
 
-    def commit(self, command, measured, *, sequence, stamp_ns, phase, gateway_sequence):
+    def commit(self, command, measured, *, sequence, stamp_ns, phase, gateway_sequence, dispatch_timing=None):
         self.last = vector(command)
         self.sequence = sequence
         self.frame_index += 1
@@ -219,6 +229,8 @@ class DaggerAuthority:
                      model_version=getattr(self, 'model_version', None),
                      action=self.last.tolist(), state=vector(measured).tolist(),
                      action_basis='software_dispatched_target', gateway_sequence=gateway_sequence)
+        if dispatch_timing is not None:
+            frame['dispatch_timing'] = dispatch_timing
         self.last_frame = frame
         for event in self.events:
             self.emit({**frame, **event, 'schema': 'sharpa.dagger.event.v1'})

@@ -13,6 +13,38 @@ ARM_TOPIC = '/dagger/input/left_arm'
 HAND_TOPIC = '/dagger/input/left_hand'
 
 
+class InputPublishers:
+    """Query ROS graph off the dispatch path; stale/ambiguous results fail closed."""
+    def __init__(self, node):
+        self.node = node
+        self.result = (False, 0., 0.)
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self.work, daemon=True, name='dagger-input-graph')
+        self.thread.start()
+
+    def work(self):
+        while not self.stopped.is_set():
+            started = time.monotonic()
+            try:
+                valid = all(len(self.node.get_publishers_info_by_topic(topic)) == 1
+                            for topic in (ARM_TOPIC, HAND_TOPIC))
+            except Exception:
+                valid = False
+            completed = time.monotonic()
+            # Age starts before the queries: a blocked lookup cannot refresh validity.
+            self.result = (valid, started, (completed-started)*1000)
+            self.stopped.wait(.033333333)
+
+    def snapshot(self):
+        valid, checked, query_ms = self.result
+        return dict(valid=valid and 0 <= time.monotonic()-checked <= .2,
+                    query_ms=query_ms)
+
+    def close(self):
+        self.stopped.set()
+        self.thread.join(timeout=1)
+
+
 def configuration(repo):
     data = yaml.safe_load((Path(repo)/'config/modes/gello.yaml').read_text())
     left = data['left']

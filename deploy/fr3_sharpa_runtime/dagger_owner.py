@@ -2,16 +2,15 @@
 import json
 import os
 from pathlib import Path
-import select
 import sys
 import threading
 import time
 
 import numpy as np
 
-from .dagger import DaggerAuthority, vector
-from .dagger_inputs import InputCache, ARM_TOPIC, HAND_TOPIC, configuration
-from .dagger_io import AuditWriter, ControlChannel, FRAME_TOPIC, EVENT_TOPIC
+from .dagger import DaggerAuthority, vector, fresh_prediction_budget_s
+from .dagger_inputs import InputCache, InputPublishers, ARM_TOPIC, HAND_TOPIC, configuration
+from .dagger_io import AuditWriter, ControlChannel, OwnerCommands, FRAME_TOPIC, EVENT_TOPIC
 from .policy_prepare import target_chunk
 from .policy_execution import install_policy_rtc, policy_command, prepare_policy_actions
 from .preflight import FIRST_TARGET_LIMITS_RAD, execute_preflight
@@ -22,6 +21,19 @@ from .sdk_direct import chunk_command_frames
 
 
 HUMAN_HAND_SPEED_RAD_S = 0.8
+DISPATCH_MAX_LATE_PERIODS = 2
+
+
+def dispatch_due(now, due, period, *, last_dispatch=None):
+    """Allow one isolated missed tick, then rebase instead of bursting to catch up."""
+    gap_limit = (DISPATCH_MAX_LATE_PERIODS+1)*period
+    if last_dispatch is not None and now-last_dispatch > gap_limit:
+        raise RuntimeError(f'DAgger 30Hz dispatch deadline missed: dispatch gap {(now-last_dispatch)*1000:.3f}ms '
+                           f'> {gap_limit*1000:.3f}ms')
+    if now-due > DISPATCH_MAX_LATE_PERIODS*period:
+        raise RuntimeError(f'DAgger 30Hz dispatch deadline missed: lateness {(now-due)*1000:.3f}ms '
+                           f'> {DISPATCH_MAX_LATE_PERIODS*period*1000:.3f}ms')
+    return now if now-due > period else due
 
 
 def smooth_follow_target(target, previous, measured, dt, *, size, speed_rad_s, group):
@@ -59,14 +71,15 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
     from teleop_interfaces.msg import ArmCommandStatus
     dt = DT_NS/1e9
     directory = Path(os.environ['SHARPA_DAGGER_DIRECTORY'])
-    audit = AuditWriter(directory/'dagger')
     frame_pub = node.create_publisher(String, FRAME_TOPIC, 30)
     event_pub = node.create_publisher(String, EVENT_TOPIC, 30)
+    def publish_audit(value, encoded):
+        message = String()
+        message.data = encoded
+        (event_pub if 'event' in value else frame_pub).publish(message)
+    audit = AuditWriter(directory/'dagger', publish=publish_audit)
     def emit(value):
         audit.put(value)
-        message = String()
-        message.data = json.dumps(value, ensure_ascii=False, allow_nan=False)
-        (event_pub if 'event' in value else frame_pub).publish(message)
     def fresh():
         value = feedback.snapshot()
         value.validate_freshness(now_ros_ns=node.get_clock().now().nanoseconds,
@@ -117,20 +130,60 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
     core.last_contact = first_tick
     reply(dict(status='PASS', operation='dagger_start', dagger=core.snapshot()))
     reason = 'owner closed'
+    commands = OwnerCommands(sys.stdin)
+    publishers = InputPublishers(node)
+    previous_tick = {}
+    last_dispatch = None
+    timing = {}
+    segment_start = time.monotonic()
+    current_operation = 'idle'
+    def check_dispatch(now, due):
+        lateness_ms = (now-due)*1000
+        fields = dict(schema='sharpa.dagger.event.v1', run_id=core.run_id,
+                      monotonic_ns=time.monotonic_ns(), lateness_ms=lateness_ms,
+                      limit_ms=DISPATCH_MAX_LATE_PERIODS*dt*1000,
+                      dispatch_gap_limit_ms=(DISPATCH_MAX_LATE_PERIODS+1)*dt*1000,
+                      since_dispatch_ms=None if last_dispatch is None else (now-last_dispatch)*1000,
+                      previous_tick=previous_tick)
+        try:
+            rebased = dispatch_due(now, due, dt, last_dispatch=last_dispatch)
+        except RuntimeError:
+            emit(dict(event='dispatch_deadline_missed', **fields))
+            raise
+        if rebased != due:
+            emit(dict(event='dispatch_late', **fields))
+        return rebased
     try:
         while True:
             now = time.monotonic()
             if now < next_tick:
                 time.sleep(min(.003, next_tick-now))
                 continue
-            if now-next_tick > dt:
-                raise RuntimeError('DAgger 30Hz dispatch deadline missed')
+            scheduling_lateness_ms=max(0., (now-next_tick)*1000)
+            next_tick = check_dispatch(now, next_tick)
+            tick_start = segment_start = time.monotonic()
+            cpu_start = time.thread_time()
+            timing = dict(scheduling_lateness_ms=scheduling_lateness_ms)
+            def mark(name):
+                nonlocal segment_start
+                ended = time.monotonic()
+                timing[name] = (ended-segment_start)*1000
+                segment_start = ended
+            current_operation = 'feedback'
             audit.check()
             current = fresh()
+            mark('feedback_ms')
+            current_operation = 'input_cache'
             human = inputs.snapshot()
-            if any(len(node.get_publishers_info_by_topic(topic)) != 1 for topic in (ARM_TOPIC,HAND_TOPIC)):
+            graph = publishers.snapshot()
+            if not graph['valid']:
                 human = None
+            mark('input_cache_ms')
+            timing['graph_query_ms'] = graph['query_ms']
+            current_operation = 'authority_lock'
             with core.lock:
+                mark('authority_lock_ms')
+                current_operation = 'authority'
                 if now-core.last_contact > 5:
                     raise RuntimeError('Local DAgger controller lease expired')
                 previous_generation = core.generation
@@ -156,14 +209,13 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                     timeline = frames = None
                     pending_rtc_actions = None
                     entry_bridge_until = None
+                mark('authority_ms')
+                current_operation = 'commands'
                 for _ in range(4):
-                    readable, _, _ = select.select([sys.stdin], [], [], 0)
-                    if not readable:
+                    request = commands.next()
+                    if request is None:
                         break
-                    line = sys.stdin.readline()
-                    if not line:
-                        return
-                    request = json.loads(line)
+                    request_received_ns = time.monotonic_ns()
                     operation = request.get('operation')
                     if operation == 'close':
                         return
@@ -209,9 +261,17 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                             entry_bridge_until = timeline.installed_at + steps / timeline.node_hz if steps else None
                             frame_index = bridge_steps
                         else:
-                            age = time.monotonic_ns()-request['captured_monotonic_ns']
-                            if not 0 <= age <= 200_000_000:
-                                raise ValueError('DAgger fresh prediction exceeded original 200ms admission')
+                            admission_ns = time.monotonic_ns()
+                            admission_timing = dict(
+                                request_received_monotonic_ns=request_received_ns,
+                                admission_monotonic_ns=admission_ns,
+                                dispatch_wait_ms=(request_received_ns-request.get(
+                                    'install_request_monotonic_ns', request_received_ns))/1e6,
+                                action_validation_ms=(admission_ns-request_received_ns)/1e6,
+                                observation_age_ms=(admission_ns-request['captured_monotonic_ns'])/1e6)
+                            core.event('fresh_prediction_admission', **admission_timing)
+                            fresh_prediction_budget_s(
+                                request['captured_monotonic_ns'], time.monotonic_ns())
                             count = initial_request['execute_steps'] if mode == 'serial' else 50
                             frames, bridge_steps = chunk_command_frames(actions, current.state,
                                 execute_steps=count, speed_scale=initial_request['speed_scale'],
@@ -220,13 +280,15 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                             timeline = None
                             pending_rtc_actions = actions if mode == 'rtc' else None
                             entry_bridge_until = None
-                            result = dict(skipped=0)
+                            result = dict(skipped=0, admission_timing=admission_timing)
                         if not core.accept_policy(request['generation'], stage=request.get('stage'), prompt=request['prompt']):
                             raise RuntimeError('DAgger authority changed during install')
                         plan_done = False
                         acknowledgements.append(dict(status='PASS', **result, prediction_clipping=clipping))
                     else:
                         raise ValueError('Unknown DAgger owner operation: '+str(operation))
+                mark('commands_ms')
+                current_operation = 'target'
                 phase = 'hold'
                 if core.mode == 'POLICY':
                     if frames is not None and not plan_done and (mode == 'serial' or frame_index < bridge_steps):
@@ -269,21 +331,50 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                         execute_preflight(target_chunk(command), current,
                             now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns(),
                             groups=('left_fr3', 'left_sharpa'))
+                mark('target_ms')
+                next_tick = check_dispatch(time.monotonic(), next_tick)
+                current_operation = 'sdk_send'
+                current.validate_freshness(now_ros_ns=node.get_clock().now().nanoseconds,
+                                          now_monotonic_ns=time.monotonic_ns())
                 executor.send(command[LEFT_SHARPA_SLICE], command[RIGHT_SHARPA_SLICE])
+                mark('sdk_send_ms')
+                current_operation = 'arm_publish'
                 sequence, stamp = publish(command)
+                last_dispatch = time.monotonic()
+                mark('arm_publish_ms')
+                current_operation = 'audit_enqueue'
                 core.commit(command, current.state, sequence=sequence, stamp_ns=stamp, phase=phase,
-                            gateway_sequence=gateway.get('sequence'))
+                            gateway_sequence=gateway.get('sequence'), dispatch_timing=dict(timing))
+                mark('audit_enqueue_ms')
+                current_operation = 'replies'
                 control.confirm(pending)
                 for report in acknowledgements:
                     if 'dagger' in report:
                         report['dagger'] = core.snapshot()
                     reply(report)
+                mark('replies_ms')
+            previous_tick = dict(timing, total_ms=(time.monotonic()-tick_start)*1000,
+                                 thread_cpu_ms=(time.thread_time()-cpu_start)*1000)
+            if previous_tick['total_ms'] > dt*1000:
+                emit(dict(schema='sharpa.dagger.event.v1', event='dispatch_slow_tick',
+                          run_id=core.run_id, monotonic_ns=time.monotonic_ns(), **previous_tick))
             next_tick += dt
+            current_operation = 'idle'
     except BaseException as error:
         reason = str(error) or type(error).__name__
+        try:
+            emit(dict(schema='sharpa.dagger.event.v1', event='dispatch_failure',
+                      run_id=core.run_id, monotonic_ns=time.monotonic_ns(), reason=reason,
+                      operation=current_operation, partial_tick=dict(timing),
+                      unfinished_segment_ms=(time.monotonic()-segment_start)*1000,
+                      previous_tick=previous_tick))
+        except Exception:
+            pass  # Diagnostic publication failure must not replace the original fault.
         raise
     finally:
         # Reporting failures must never skip the caller's existing disable path.
+        commands.close()
+        publishers.close()
         try:
             core.end(reason)
         finally:

@@ -1,7 +1,9 @@
 """Bounded auditing and authenticated local DAgger requests; no hardware access."""
 import json
+import os
 from pathlib import Path
 import queue
+import select
 import threading
 import time
 
@@ -12,7 +14,8 @@ EVENT_TOPIC = '/dagger/events'
 
 
 class AuditWriter:
-    def __init__(self, directory):
+    def __init__(self, directory, *, publish=None):
+        self.publish = publish
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.queue = queue.Queue(maxsize=2048)
@@ -43,7 +46,10 @@ class AuditWriter:
                         frames.flush(); events.flush()
                         continue
                     stream = events if 'event' in item else frames
-                    stream.write(json.dumps(item, ensure_ascii=False, allow_nan=False)+'\n')
+                    encoded = json.dumps(item, ensure_ascii=False, allow_nan=False)
+                    stream.write(encoded+'\n')
+                    if self.publish is not None:
+                        self.publish(item, encoded)
         except Exception as error:
             self.error = str(error)
 
@@ -53,6 +59,56 @@ class AuditWriter:
         if self.thread.is_alive():
             raise RuntimeError('DAgger audit did not drain; recording incomplete')
         self.check()
+
+
+class OwnerCommands:
+    """Assemble complete JSON requests outside the timed dispatch thread."""
+    def __init__(self, stream):
+        self.fd = stream.fileno()
+        self.queue = queue.Queue(maxsize=8)
+        self.stopped = threading.Event()
+        self.error = None
+        self.thread = threading.Thread(target=self.work, daemon=True, name='dagger-commands')
+        self.thread.start()
+
+    def work(self):
+        buffer = b''
+        try:
+            while not self.stopped.is_set():
+                ready, _, _ = select.select([self.fd], [], [], .05)
+                if not ready:
+                    continue
+                chunk = os.read(self.fd, 65536)
+                if not chunk:
+                    if buffer:
+                        raise ValueError('Incomplete DAgger command at EOF')
+                    self.queue.put_nowait({'operation': 'close'})
+                    return
+                buffer += chunk
+                while b'\n' in buffer:
+                    line, buffer = buffer.split(b'\n', 1)
+                    if len(line) > 262144:
+                        raise ValueError('DAgger command too large')
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError('DAgger command must be an object')
+                    self.queue.put_nowait(value)
+                if len(buffer) > 262144:
+                    raise ValueError('DAgger command too large')
+        except Exception as error:
+            self.error = str(error) or type(error).__name__
+
+    def next(self):
+        if self.error:
+            raise RuntimeError('DAgger command reader failed: '+self.error)
+        try:
+            return self.queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def close(self):
+        self.stopped.set()
+        self.thread.join(timeout=1)
 
 
 class ControlChannel:

@@ -120,6 +120,7 @@ class InteractionCropper:
         detector_start = time.perf_counter()
         detections = self.locator.predict([image])[0]  # Batch=1, current RGB only.
         detector_ms = (time.perf_counter()-detector_start)*1000
+        detector_detail = dict(getattr(self.locator, 'last_timing', {}))
         hands, sources, attempts = self.recovery.recover(
             image, gray, detections, stamp, self.frame, self.locator,
             sorted({1, *self.selector.roles}))
@@ -166,7 +167,7 @@ class InteractionCropper:
                          hand_sources={str(role): source for role, source in sources.items()},
                          recovery_attempts=attempts, interaction_box=roi['interaction_box'],
                          window_evidence_box=window_evidence, roi_revision=self.revision,
-                         reset=reset, detector_ms=detector_ms,
+                         reset=reset, detector_ms=detector_ms, detector_detail=detector_detail,
                          recovery_ms=recovery_ms,
                          crop_total_ms=(time.perf_counter()-start)*1000,
                          counts=dict(self.counts), updated_wall_time=time.time(),
