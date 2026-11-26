@@ -624,7 +624,11 @@ def main() -> None:
         try:
             print(json.dumps(execute_policy_prepare(args), indent=2))
         except KeyboardInterrupt:
-            print("Execution interrupted; worker released. See the latest *-run.json report.", file=sys.stderr)
+            from .operator_stop import operator_stop_requested
+            if operator_stop_requested():
+                print("人工停止：执行端已退出，正在由控制台确认硬件与录制收尾。", file=sys.stderr)
+            else:
+                print("Execution interrupted; worker released. See the latest *-run.json report.", file=sys.stderr)
             raise SystemExit(130)
         return
     if args.mode == "execute":

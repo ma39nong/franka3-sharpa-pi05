@@ -165,6 +165,15 @@ class TaskControl:
                         raise ValueError("人工恢复入口仅用于就绪或已暂停状态；运行中可直接选择阶段")
                 elif source != "operator" and (index == len(self.phases) - 1 or target != self.phases[index + 1]):
                     raise ValueError("Agent 仅可请求下一阶段")
+                if (manual_selection and target == d["requested_stage"]
+                        and state in ("SWITCH_REQUESTED", "SWITCHING", "RESUMING")):
+                    # A second click must not revoke the in-flight stage prediction.
+                    self.seen[request_id] = fingerprint
+                    if len(self.seen) > 4096:
+                        self.seen.popitem(last=False)
+                    self.event("stage_request_merged", request_id=request_id,
+                               pending_request_id=d["pending_request_id"], target_stage=target)
+                    return self.snapshot()
                 previous, old_version = d["requested_stage"], d["stage_version"]
                 self.event("request_superseded", request_id=d["pending_request_id"], reason="newer operator intent")
                 d.update(

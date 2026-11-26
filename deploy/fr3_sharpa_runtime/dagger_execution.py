@@ -98,6 +98,7 @@ def execute_dagger(args):
             model=metadata, model_version=hashlib.sha256(json.dumps(metadata,sort_keys=True).encode()).hexdigest(),
             task_mode=args.task_mode, action_order=['left_arm_7','left_hand_22','right_arm_7','right_hand_22'],
             action_basis='absolute_software_dispatched_target',fps=30,
+            policy_control_hz=30,human_control_hz=100,
             gello_config_sha256=hashlib.sha256((run.GELLO_REPO/'config/modes/gello.yaml').read_bytes()).hexdigest()))
         initial_owner = worker.request(dict(operation='dagger_start',broker_mode=args.broker_mode,
             execute_steps=args.execute_steps,speed_scale=args.execute_speed_scale,
@@ -156,7 +157,9 @@ def execute_dagger(args):
                         task.transition('SWITCHING','DAgger stage boundary; fresh prediction required')
                         state = 'SWITCHING'
                     if state in ('RESUMING','SWITCHING') and not task.dagger_suspended and requested_task_version != task.data['stage_version']:
-                        worker.request({'operation':'dagger_request_policy','generation':generation},timeout=2)
+                        response = worker.request({'operation':'dagger_request_policy','generation':generation},timeout=2)
+                        if response.get('rejected'):
+                            continue
                         requested_task_version = task.data['stage_version']
                         last_generation = generation
                         continue

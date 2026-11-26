@@ -146,7 +146,8 @@ class DaggerAuthority:
             self.seen.popitem(last=False)
 
     def begin_policy(self):
-        if self.mode not in ('IDLE', 'HOLD', 'POLICY') or self.intervening:
+        # A newer stage may supersede a fresh prediction still awaiting admission.
+        if self.mode not in ('IDLE', 'HOLD', 'POLICY', 'RESUMING') or self.intervening:
             raise ValueError('Policy start not authorized')
         self.invalidate('fresh policy requested')
         self.mode = 'RESUMING'

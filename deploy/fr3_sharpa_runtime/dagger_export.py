@@ -8,6 +8,7 @@ import numpy as np
 
 from deploy.fr3_sharpa_control.recording import write_json
 from .dagger import SLICES, GROUPS
+from .protocol import FPS
 
 
 def rows(path):
@@ -18,18 +19,27 @@ def rows(path):
 
 
 def horizon_mask(frame_mask, stamps, interventions, index, horizon=50):
-    """Supervise only the same human intervention on a continuous 30 Hz window."""
+    """Sample supervision on the policy clock, including 100 Hz human dispatches."""
     result = np.zeros((horizon,58), dtype=bool)
     if interventions[index] < 0:
         return result
+    stamps = np.asarray(stamps, dtype=np.int64)
+    interventions = np.asarray(interventions)
+    previous = index
     for offset in range(horizon):
-        target = index+offset
-        if target >= len(stamps) or interventions[target] != interventions[index]:
+        desired = int(stamps[index]) + offset * 1_000_000_000 // FPS
+        if desired > int(stamps[-1]) + offset:
             break
-        if offset and (not 0 < stamps[target]-stamps[target-1] <= 50_000_000
-                       or not np.any(frame_mask[target] & frame_mask[index])):
+        # Older 30 Hz logs truncate each period to integer nanoseconds.
+        target = int(np.searchsorted(stamps, desired + offset, side='right')) - 1
+        segment = slice(previous, target + 1)
+        if (np.any(interventions[segment] != interventions[index])
+                or np.any(np.diff(stamps[segment]) > 50_000_000)
+                or np.any(np.diff(stamps[segment]) <= 0)
+                or not np.all(np.any(frame_mask[segment] & frame_mask[index], axis=1))):
             break
         result[offset] = frame_mask[target] & frame_mask[index]
+        previous = target
     return result
 
 

@@ -570,7 +570,7 @@ class DeploymentController:
                 mark_stop(self.socket)
                 rpc(self.socket, "stop", timeout=3)
 
-    def stop(self):
+    def stop(self, *, operator_requested=False):
         self.agent.set_mode("manual")
         with self.lock:
             if self.home_thread and self.home_thread.is_alive():
@@ -582,6 +582,8 @@ class DeploymentController:
                 return self.snapshot()
             if self.operation == "model":
                 raise ValueError("推理端正在加载，请使用停止推理")
+            if operator_requested and self.directory:
+                write_json(self.directory / "operator-stop.json", {"reason": "operator stop"})
             self.cancel.set()
             if self.socket:
                 with suppress(OSError):
@@ -656,6 +658,7 @@ class DeploymentController:
         camera_lease = None
         trace = directory / "logs"
         env["SHARPA_SHUTDOWN_REPORT_DIR"] = str(trace)
+        env["SHARPA_OPERATOR_STOP_FILE"] = str(directory / "operator-stop.json")
         if self.dagger_endpoint:
             env.update(SHARPA_DAGGER_SOCKET=str(self.dagger_endpoint),
                        SHARPA_DAGGER_RUN_ID=self.dagger_run_id,
@@ -716,7 +719,7 @@ class DeploymentController:
                     unexpected_dagger_end = (self.dagger_endpoint is not None and self.dagger_endpoint.exists())
                     if (unexpected_dagger_end or report.get("status") not in ("COMPLETE", "NOT_STARTED")) and not self.cancel.is_set():
                         failure = "录制器异常退出，已停止执行；原始数据和日志保留"
-                        self.stop()
+                        self.stop(operator_requested=False)
                 if (self.task_endpoint or self.dagger_endpoint) and not self.cancel.is_set() and time.monotonic() >= next_heartbeat:
                     from deploy.fr3_sharpa_runtime.task_control import task_rpc
                     next_heartbeat = time.monotonic() + 1.0
@@ -742,7 +745,7 @@ class DeploymentController:
         except Exception as error:
             failure = str(error)
             if self.runtime and self.runtime.poll() is None:
-                self.stop()
+                self.stop(operator_requested=False)
                 self.runtime.wait()  # Existing finite disable-confirmation owner controls its timeout.
         finally:
             with self.lock:
@@ -793,6 +796,12 @@ class DeploymentController:
                 self.dagger_endpoint.unlink(missing_ok=True)
                 with suppress(OSError):
                     self.dagger_endpoint.parent.rmdir()
+            if not failure and cleanup_verified and (directory / "operator-stop.json").is_file():
+                try:
+                    from deploy.fr3_sharpa_runtime.operator_stop import finish_operator_reports
+                    finish_operator_reports(trace)
+                except (OSError, ValueError) as error:
+                    failure = f"人工停止报告保存失败：{error}"
             if self.plan["settings"]["record"]:
                 try:
                     from .quality import finish
@@ -802,8 +811,10 @@ class DeploymentController:
                            recorder_closed=self.recorder is not None and self.recorder.poll() is not None)
                 except Exception as error:
                     failure = f"{failure or ''} 评级记录保存失败：{error}；原始bag保留"
-            self.update("failed" if failure else "stopped" if self.cancel.is_set() else "finished",
-                        failure or "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动", running=False)
+            operator_finished = cleanup_verified and (directory / "operator-stop.json").is_file()
+            self.update("failed" if failure else "finished" if operator_finished else "stopped" if self.cancel.is_set() else "finished",
+                        failure or ("人工停止，执行、失能确认和硬件清理已完成；本次运行正常结束" if operator_finished
+                                    else "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动"), running=False)
 
 
 def main():

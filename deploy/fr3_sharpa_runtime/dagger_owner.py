@@ -21,7 +21,12 @@ from .sdk_direct import chunk_command_frames
 
 
 HUMAN_HAND_SPEED_RAD_S = 0.8
+HUMAN_CONTROL_HZ = 100
 DISPATCH_MAX_LATE_PERIODS = 2
+
+
+def dispatch_period(mode):
+    return 1 / HUMAN_CONTROL_HZ if mode == 'HUMAN_LEFT' else DT_NS / 1e9
 
 
 def dispatch_due(now, due, period, *, last_dispatch=None):
@@ -60,16 +65,19 @@ def smooth_left_hand_target(target, previous, measured, dt):
         size=22, speed_rad_s=HUMAN_HAND_SPEED_RAD_S, group='left_sharpa')
 
 
-def smooth_left_arm_target(target, previous, measured, dt, speed_rad_s):
-    return smooth_follow_target(target, previous, measured, dt,
-        size=7, speed_rad_s=speed_rad_s, group='left_fr3')
+def smooth_left_arm_target(target, previous, dt, speed_rad_s):
+    """Match GELLO's per-joint target velocity clipping during following."""
+    target = vector(target, 7)
+    previous = vector(previous, 7)
+    step = speed_rad_s * dt
+    return previous + np.clip(target - previous, -step, step)
 
 
 def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway_speed, initial_request, session_id):
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String
     from teleop_interfaces.msg import ArmCommandStatus
-    dt = DT_NS/1e9
+    policy_period = DT_NS/1e9
     directory = Path(os.environ['SHARPA_DAGGER_DIRECTORY'])
     frame_pub = node.create_publisher(String, FRAME_TOPIC, 30)
     event_pub = node.create_publisher(String, EVENT_TOPIC, 30)
@@ -134,6 +142,8 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
     publishers = InputPublishers(node)
     previous_tick = {}
     last_dispatch = None
+    last_dispatch_period = policy_period
+    last_human_tick = None
     timing = {}
     segment_start = time.monotonic()
     current_operation = 'idle'
@@ -141,12 +151,13 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
         lateness_ms = (now-due)*1000
         fields = dict(schema='sharpa.dagger.event.v1', run_id=core.run_id,
                       monotonic_ns=time.monotonic_ns(), lateness_ms=lateness_ms,
-                      limit_ms=DISPATCH_MAX_LATE_PERIODS*dt*1000,
-                      dispatch_gap_limit_ms=(DISPATCH_MAX_LATE_PERIODS+1)*dt*1000,
+                      limit_ms=DISPATCH_MAX_LATE_PERIODS*policy_period*1000,
+                      dispatch_gap_limit_ms=(DISPATCH_MAX_LATE_PERIODS+1)*policy_period*1000,
                       since_dispatch_ms=None if last_dispatch is None else (now-last_dispatch)*1000,
                       previous_tick=previous_tick)
         try:
-            rebased = dispatch_due(now, due, dt, last_dispatch=last_dispatch)
+            # Keep the existing dispatch timeout budget across control rates.
+            rebased = dispatch_due(now, due, policy_period, last_dispatch=last_dispatch)
         except RuntimeError:
             emit(dict(event='dispatch_deadline_missed', **fields))
             raise
@@ -192,9 +203,10 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                 with ack_lock:
                     gateway = dict(ack)
                 now = time.monotonic()
+                ack_window = int(np.ceil(4 * policy_period / last_dispatch_period))
                 gateway_ok = (bool(gateway) and 0 <= now-gateway['received'] <= .2
                     and set(gateway['accepted']) == {'left','right'} and not gateway['faults']
-                    and gateway['sequence'] >= max(0, core.sequence-4))
+                    and gateway['sequence'] >= max(0, core.sequence-ack_window))
                 if now-first_tick > .2 and not gateway_ok:
                     raise RuntimeError('Missing/stale/rejected FR3 gateway acknowledgement: '+str(gateway))
                 target = core.step(current.state, human, gateway_ok=gateway_ok, now=now)
@@ -224,6 +236,11 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                     elif operation == 'dagger_request_policy':
                         if request.get('generation') != core.generation:
                             acknowledgements.append(dict(status='PASS',rejected=True))
+                            continue
+                        if core.mode not in ('IDLE', 'HOLD', 'POLICY', 'RESUMING') or core.intervening:
+                            # A takeover can arrive after the coordinator reads status.
+                            acknowledgements.append(dict(status='PASS',rejected=True,
+                                                         reason='policy authority changed'))
                             continue
                         core.begin_policy()
                         timeline = frames = None
@@ -315,22 +332,35 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                         phase = 'waiting_prediction'
                 elif core.mode == 'HUMAN_LEFT':
                     phase = 'human_follow'
-                    target[:7] = np.clip(target[:7], limiter.lower[:7]+mapping['margin'], limiter.upper[:7]-mapping['margin'])
-                    target[:7] = smooth_left_arm_target(target[:7], core.last[:7], current.state[:7], dt,
+                    human_period = dispatch_period(core.mode)
+                    elapsed = (human_period if last_human_tick is None
+                               else max(human_period, now-last_human_tick))
+                    # GELLO permits retreat when engagement starts outside the soft range.
+                    lower = np.minimum(limiter.lower[:7]+mapping['margin'], current.state[:7])
+                    upper = np.maximum(limiter.upper[:7]-mapping['margin'], current.state[:7])
+                    target[:7] = np.clip(target[:7], lower, upper)
+                    target[:7] = smooth_left_arm_target(target[:7], core.last[:7], elapsed,
                         min(mapping['arm_speed'], gateway_speed))
                     target[LEFT_SHARPA_SLICE] = smooth_left_hand_target(
                         target[LEFT_SHARPA_SLICE], core.last[LEFT_SHARPA_SLICE],
-                        current.state[LEFT_SHARPA_SLICE], dt)
+                        current.state[LEFT_SHARPA_SLICE], elapsed)
+                if core.mode == 'HUMAN_LEFT':
+                    last_human_tick = now
+                else:
+                    last_human_tick = None
                 if core.mode == 'POLICY':
                     command = policy_command(core.last, target,
                         limiter=policy_limiter, arm_speed=gateway_speed)
+                elif core.mode == 'HUMAN_LEFT':
+                    # Human targets already use independent joint velocity limits.
+                    # Validate the transition without RTC's shared interpolation fraction.
+                    command = policy_command(core.last, target)
+                    execute_preflight(target_chunk(command), current,
+                        now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns(),
+                        groups=('left_sharpa',))
                 else:
                     command = policy_command(core.last, target,
                         limiter=limiter, arm_speed=gateway_speed)
-                    if core.mode == 'HUMAN_LEFT':
-                        execute_preflight(target_chunk(command), current,
-                            now_ros_ns=node.get_clock().now().nanoseconds, now_monotonic_ns=time.monotonic_ns(),
-                            groups=('left_fr3', 'left_sharpa'))
                 mark('target_ms')
                 next_tick = check_dispatch(time.monotonic(), next_tick)
                 current_operation = 'sdk_send'
@@ -341,6 +371,7 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                 current_operation = 'arm_publish'
                 sequence, stamp = publish(command)
                 last_dispatch = time.monotonic()
+                last_dispatch_period = dispatch_period(core.mode)
                 mark('arm_publish_ms')
                 current_operation = 'audit_enqueue'
                 core.commit(command, current.state, sequence=sequence, stamp_ns=stamp, phase=phase,
@@ -355,10 +386,11 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                 mark('replies_ms')
             previous_tick = dict(timing, total_ms=(time.monotonic()-tick_start)*1000,
                                  thread_cpu_ms=(time.thread_time()-cpu_start)*1000)
-            if previous_tick['total_ms'] > dt*1000:
+            period = dispatch_period(core.mode)
+            if previous_tick['total_ms'] > period*1000:
                 emit(dict(schema='sharpa.dagger.event.v1', event='dispatch_slow_tick',
                           run_id=core.run_id, monotonic_ns=time.monotonic_ns(), **previous_tick))
-            next_tick += dt
+            next_tick += period
             current_operation = 'idle'
     except BaseException as error:
         reason = str(error) or type(error).__name__

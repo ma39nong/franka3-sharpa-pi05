@@ -671,7 +671,7 @@ def server_for(root, *, port=8766):
                                   grade=data["grade"], note=data.get("note", ""),
                                   expected_revision=data["expected_revision"])
                 elif self.path == "/api/stop":
-                    result = controller.stop()
+                    result = controller.stop(operator_requested=True)
                 elif self.path == "/api/close-model":
                     controller.close_model()
                     result = controller.snapshot()
