@@ -132,7 +132,7 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
     latest_report = dict(policy_done=True, consumed_since_install=0, phase=0)
     def reply(value):
         print(json.dumps(value, allow_nan=False), file=protocol, flush=True)
-    recording.start()  # Ready before the first DAgger command/label.
+    recording_started = False  # Shared RecordingGate opens only before the first task frame.
     executor.resume_stream()
     first_tick = next_tick = time.monotonic()
     core.last_contact = first_tick
@@ -306,6 +306,23 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                         raise ValueError('Unknown DAgger owner operation: '+str(operation))
                 mark('commands_ms')
                 current_operation = 'target'
+                # Match ordinary rosbag playback: Home/entry bridge and READY/IDLE
+                # hold are unrecorded; open the shared gate before the first task frame.
+                playing_entry_frames = (frames is not None and not plan_done
+                    and (mode == 'serial' or frame_index < bridge_steps))
+                first_task_frame = (core.mode == 'POLICY' and (
+                    frame_index >= bridge_steps if playing_entry_frames
+                    else timeline is not None or pending_rtc_actions is not None))
+                if first_task_frame and not recording_started:
+                    current_operation = 'recording_start'
+                    recording.start()
+                    recording_started = True
+                    executor.resume_stream()
+                    current = fresh()
+                    # Gate activation is an inter-phase operation, not a missed control tick.
+                    now = next_tick = time.monotonic()
+                    last_dispatch = None
+                    current_operation = 'target'
                 phase = 'hold'
                 if core.mode == 'POLICY':
                     if frames is not None and not plan_done and (mode == 'serial' or frame_index < bridge_steps):

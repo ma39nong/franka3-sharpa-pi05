@@ -190,6 +190,12 @@ def main():
     parser.add_argument("--socket", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    import os
+    from .recording_options import enable_rosbag_channels
+    enable_rosbag_channels()
+    if os.environ.get("SHARPA_RECORD_FORMAT", "rosbag") == "mcap":
+        from .mcap_capture import main as mcap_main
+        return mcap_main(args)
     import rclpy
     if args.check:
         import importlib

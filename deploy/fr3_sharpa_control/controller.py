@@ -22,12 +22,17 @@ class Cancelled(Exception):
 
 
 def validate_ui_preferences(values):
-    if not isinstance(values, dict) or set(values) - {'stage_switch_mode', 'dagger_output'}:
+    if not isinstance(values, dict) or set(values) - {'stage_switch_mode', 'dagger_output', 'dagger_recording_format', 'dagger_head_depth', 'dagger_tactile'}:
         raise ValueError('不支持的界面默认选项')
     if 'stage_switch_mode' in values and values['stage_switch_mode'] not in ('manual', 'auto'):
         raise ValueError('阶段切换方式必须为manual或auto')
     if 'dagger_output' in values and not isinstance(values['dagger_output'], str):
         raise ValueError('DAgger保存父目录必须为字符串')
+    if "dagger_recording_format" in values and values["dagger_recording_format"] not in ("mcap", "rosbag"):
+        raise ValueError("样本保存方式仅支持mcap或rosbag")
+    for field in ("dagger_head_depth", "dagger_tactile"):
+        if field in values and type(values[field]) is not bool:
+            raise ValueError("深度/触觉录制开关必须为布尔值")
     return dict(values)
 
 
@@ -405,7 +410,8 @@ class DeploymentController:
                     archive_parent = None
                     if plan["settings"].get("dagger"):
                         archive_parent = plan["settings"].get("dagger_output") or str(Path(plan["settings"]["output"]) / "DAgger")
-                    begin(self.directory, archive_parent=archive_parent)
+                    begin(self.directory, archive_parent=archive_parent,
+                          recording_format=plan_environment(plan)["SHARPA_RECORD_FORMAT"])
                 write_json(self.root / ".deployment/control_last.json", persisted_values if persisted_values is not None else values)
                 # Save only evidence bound to both manifest and statistics, never path alone.
                 self.cache.mkdir(parents=True, exist_ok=True)
@@ -477,6 +483,8 @@ class DeploymentController:
 
     def _queue_export(self, directory, env):
         """Keep old run paths frozen while a new deployment can start after cleanup."""
+        if env.get("SHARPA_RECORD_FORMAT", "rosbag") == "mcap":
+            return  # Native H.264 video is already embedded in MCAP.
         repository = self.plan["settings"]["repository"]
         report = directory / "video_export.json"
         write_json(report, {"status": "QUEUED"})
@@ -757,6 +765,13 @@ class DeploymentController:
                 except subprocess.TimeoutExpired:
                     interrupt(self.recorder)
                     failure = failure or "录制器未正常关闭，视频未导出"
+            if env.get("SHARPA_RECORD_FORMAT") == "mcap" and self.recorder:
+                try:
+                    recording = json.loads((directory / "recording.json").read_text())
+                    if recording.get("status") not in ("COMPLETE", "NOT_STARTED"):
+                        failure = failure or "MCAP录制未完整收尾：" + str(recording.get("error") or recording.get("status"))
+                except (OSError, ValueError) as error:
+                    failure = failure or f"MCAP收尾报告不可读：{error}"
             if hardware_up and (not runtime_started or not cleanup_verified):
                 try:
                     self._command(["bash", "deploy/fr3_sharpa_runtime/hardware.sh", "stop"], "hardware_cleanup", env, cancellable=False)

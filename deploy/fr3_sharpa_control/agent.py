@@ -18,7 +18,7 @@ from deploy.fr3_sharpa_runtime.task_stages import IN_HAND_AGENT_SOURCE, IN_HAND_
 
 LABELS = ("pickup", "harvest", "return", "adjust")
 CLASSES = (0, 1, 2, 3, 0, 1, 2)
-from .agent_settings import AgentSettings, IN_HAND_NORM, TAIRAN_PROVIDER
+from .agent_settings import AgentSettings, TAIRAN_PROVIDER
 from dataclasses import asdict
 
 
@@ -463,7 +463,6 @@ class AgentSupervisor:
                     str(python), "-m", "deploy.fr3_sharpa_control.inhand119_agent_service",
                     "--repository", str(root), "--checkpoint", str(checkpoint),
                     "--pretrained-dir", str(pretrained), "--locator", str(deploy / ".deployment/crop_locator"),
-                    "--norm-stats", str(deploy / IN_HAND_NORM),
                 ]
             self.process = subprocess.Popen(
                 command,

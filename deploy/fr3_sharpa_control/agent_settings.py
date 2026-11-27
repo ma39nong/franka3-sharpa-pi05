@@ -9,9 +9,6 @@ import json
 
 TAIRAN_PROVIDER = "tairan"
 AGENT_PROVIDERS = ("mengxiang", TAIRAN_PROVIDER)
-IN_HAND_NORM = Path(".deployment/checkpoints/tomato-in-hand119/20000/assets") / (
-    "tomato_in_hand119_rgb_crop_v3_r1_delta_30hz/norm_stats.json"
-)
 
 
 @dataclass
@@ -48,10 +45,10 @@ class AgentSettings:
         if values.get("provider") == TAIRAN_PROVIDER:
             defaults.update(
                 profile="workstation",
-                repository=str(Path(deployment_root) / ".deployment/agents/inhand119_four"),
-                checkpoint="head/best_head.pt",
+                repository=str(Path(deployment_root) / ".deployment/agents/inhand204_four"),
+                checkpoint="head_inhand204_four/best_head.pt",
                 python=str(Path(deployment_root) / ".venv/bin/python"),
-                pretrained="encoder",
+                pretrained="encoder_vjepa2",
                 sample_npz="",
             )
         unknown = set(values) - set(defaults)
@@ -96,13 +93,13 @@ class AgentSettings:
             add(name, path.is_file(), path)
         if self.provider == TAIRAN_PROVIDER:
             manifest = Path(self.checkpoint).with_name("manifest.json")
-            add("119 条训练清单", manifest.is_file(), manifest)
+            add("四路 Agent 训练清单", manifest.is_file(), manifest)
             root = Path(deployment_root) if deployment_root else Path(__file__).resolve().parents[2]
-            norm = root / IN_HAND_NORM
             locator = root / ".deployment/crop_locator"
-            add("119 条 ROI 归一化", norm.is_file(), norm)
-            add("119 条 ROI 定位器", all((locator / name).is_file() for name in
+            add("四路 Agent ROI 定位器", all((locator / name).is_file() for name in
                                        ("model.pt", "primary/model.pt", "receipt.json")), locator)
+            add("编码器来源清单", (Path(self.pretrained) / "weights_metadata.json").is_file(),
+                Path(self.pretrained) / "weights_metadata.json")
         add("Python可执行", os.access(self.python, os.X_OK), self.python)
         if os.access(self.python, os.X_OK):
             try:
@@ -129,7 +126,7 @@ class AgentSettings:
                 add("模型依赖与CUDA BF16", False, error)
         if self.profile == "development" and self.provider == TAIRAN_PROVIDER:
             script = Path(self.repository) / "offline_check.py"
-            add("119 条实时模式", False, f"请选工作机实时模式；离线回放入口为 {script}")
+            add("四路 Agent 实时模式", False, f"请选工作机实时模式；离线回放入口为 {script}")
             note = "四路观察的实时输入来自工作机。"
         elif self.profile == "development":
             add("离线观测样本", Path(self.sample_npz).is_file(), self.sample_npz)

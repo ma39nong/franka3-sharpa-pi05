@@ -8,10 +8,17 @@ DOMAIN="$(awk -F= '$1 == "TELEOP_ROS_DOMAIN_ID" {print $2; exit}' "$SHARPA_GELLO
 export ROS_DOMAIN_ID="$DOMAIN" ROS_LOCALHOST_ONLY=1 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI="file://$SHARPA_GELLO_REPO/config/cyclonedds.xml"
 OVERLAY="${SHARPA_ROS_MESSAGES_OVERLAY:-$SHARPA_ROOT/.deployment/sharpa_ros_messages/install}"
+if [[ "${SHARPA_RECORD_FORMAT:-rosbag}" == mcap ]]; then
+  export PYTHONPATH="$SHARPA_ROOT/.deployment/mcap-python${PYTHONPATH:+:$PYTHONPATH}"
+fi
 MODULE=deploy.fr3_sharpa_control.recorder_ros
 if [[ "${1:-}" == check ]]; then
   shift
   set -- --check "$@"
+fi
+if [[ "${1:-}" == benchmark ]]; then
+  MODULE=deploy.fr3_sharpa_control.benchmark_mcap
+  shift
 fi
 if [[ "${1:-}" == export ]]; then
   MODULE=deploy.fr3_sharpa_control.export_video

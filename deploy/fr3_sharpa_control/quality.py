@@ -33,7 +33,14 @@ def read(directory):
     return json.loads((Path(directory) / FILE).read_text())
 
 
-def begin(directory, *, archive_parent=None):
+def payload(directory, value=None):
+    value = read(directory) if value is None else value
+    return Path(directory) / ("mcap" if value.get("recording_format") == "mcap" else "rosbag")
+
+
+def begin(directory, *, archive_parent=None, recording_format="rosbag"):
+    if recording_format not in ("rosbag", "mcap"):
+        raise ValueError("Unsupported recording format")
     directory = Path(directory)
     with locked(directory):
         if (directory / FILE).exists():
@@ -56,10 +63,10 @@ def begin(directory, *, archive_parent=None):
                 episode = f"episode{last + 1}"
                 write_json(counter, {"last": last + 1})
             target = root / "pending" / episode
-            (directory / "rosbag").symlink_to(target, target_is_directory=True)
+            (directory / ("mcap" if recording_format == "mcap" else "rosbag")).symlink_to(target, target_is_directory=True)
             storage = {"root": str(root), "episode": episode, "layout": "bag-episode-v1"}
         write_json(directory / FILE, {
-            "archive": storage,
+            "archive": storage, "recording_format": recording_format,
             "schema": "sharpa.recording-quality.v1", "run_id": uuid.uuid4().hex,
             "grade": None, "label": None, "note": "", "revision": 0, "history": [],
             "review_ready": False, "execution": {"outcome": "RUNNING"},
@@ -68,9 +75,12 @@ def begin(directory, *, archive_parent=None):
 
 def save_quality(directory, value):
     write_json(directory / FILE, value)
-    bag = directory / "rosbag"
+    bag = payload(directory)
     if bag.is_dir():
         write_json(bag / FILE, value)
+        if value.get("recording_format") == "mcap" and (bag / "manifest.json").is_file():
+            from .mcap_storage import seal
+            seal(bag, json.loads((bag / "manifest.json").read_text())["status"])
 
 
 def finish(directory, *, outcome, reason, returncode, recorder_closed):
@@ -82,6 +92,13 @@ def finish(directory, *, outcome, reason, returncode, recorder_closed):
             "outcome": outcome, "reason": reason, "returncode": returncode,
             "recorder_closed": bool(recorder_closed), "ended_unix_ns": time.time_ns(),
         })
+        bag = payload(directory, value)
+        if value.get("recording_format") == "mcap" and (bag / "episode.json").is_file():
+            episode = json.loads((bag / "episode.json").read_text())
+            episode["end_reason"] = reason
+            if outcome == "FAILED":
+                episode["task_result"] = "failure"
+            write_json(bag / "episode.json", episode)
         save_quality(directory, value)
     archive_when_ready(directory)
 
@@ -108,7 +125,7 @@ def archive_when_ready(directory):
         # Older whole-run archives keep their existing location.
         if storage.get("layout") != "bag-episode-v1":
             return
-        link = directory / "rosbag"
+        link = payload(directory, value)
         current = link.resolve()
         destination = Path(storage["root"]) / value["grade"] / storage["episode"]
         if current == destination or not current.is_dir():
@@ -117,7 +134,7 @@ def archive_when_ready(directory):
             if destination.exists() or destination.is_symlink():
                 raise FileExistsError(f"目标 episode 已存在，保留暂存数据：{destination}")
             current.rename(destination)
-            replacement = directory / (".rosbag-" + uuid.uuid4().hex)
+            replacement = directory / (".payload-" + uuid.uuid4().hex)
             try:
                 replacement.symlink_to(destination, target_is_directory=True)
                 os.replace(replacement, link)
@@ -162,7 +179,7 @@ def summary(directory):
             recording = json.loads((directory / "recording.json").read_text())
     except (OSError, ValueError) as error:
         evidence_error = str(error)
-    bag = directory / "rosbag"
+    bag = payload(directory)
     started = recording.get("started_unix_ns") is not None
     available = bag.is_dir() or started
     bag_status = recording.get("status", "UNKNOWN")
@@ -172,7 +189,7 @@ def summary(directory):
     if bag_status != "COMPLETE":
         warnings.append("录制未确认完整：" + str(bag_status))
     if not (bag / "metadata.yaml").is_file():
-        warnings.append("ROSbag 缺少 metadata.yaml，需单独检查可读性")
+        warnings.append(value.get("recording_format", "rosbag") + " 缺少 metadata.yaml，需单独检查可读性")
     if evidence_error:
         warnings.append("录制报告无法读取：" + evidence_error)
     if available and recording.get("ended_unix_ns") is None:

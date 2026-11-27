@@ -56,7 +56,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div id="modeHint" class="notice"></div>
 <label for="task_mode">部署方式</label><select id="task_mode"><option value="none">统一 Prompt · 不分阶段</option><option value="tomato-b">分阶段 · 放回盘中调整（七阶段）</option><option value="tomato-in-hand119">分阶段 · 手中调整（五阶段）</option></select>
 <p class="muted">摘一颗，或统一指令摘一串：选不分阶段。只有训练时使用不同阶段指令的权重才选分阶段；Agent 可选。</p>
-<label><input id="record" type="checkbox"> 录制 ROSbag及视频（四路模型额外保存ROI与四联视频）</label>
+<label><input id="record" type="checkbox"> 录制样本及视频（四路模型额外保存ROI与四联视频）</label>
 <div id="cropFields"><label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator"></div>
 <div id="stageRecovery"><label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
 <div class="muted">非首次阶段必须勾选并重新核对配置。恢复会获取新观测和首块，不复用旧动作。</div></div>
@@ -87,13 +87,18 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div id="autoActivePrompt" class="notice" hidden><strong id="autoPromptStage"></strong><p id="autoPromptText"></p></div>
 <input type="hidden" id="initial_stage">
 <details><summary>当前实际生效的英文 Prompt</summary><pre id="taskPrompt">尚未接入阶段动作</pre></details>
-<div class="actions"><button id="taskStart" class="primary" onclick="taskCommand(taskState?.execution_state==='PAUSED'?'resume':'start')" disabled>开始当前阶段</button><button id="taskPause" title="暂停当前动作，执行端确认可恢复后点击继续当前阶段" onclick="taskCommand('pause')" disabled>暂停</button><button class="stop" onclick="stop()">停止执行</button></div>
+<div class="actions"><button id="taskStart" class="primary" onclick="taskCommand(taskState?.execution_state==='PAUSED'?'resume':'start')" disabled>开始当前阶段</button><button id="taskPause" title="暂停当前动作，执行端确认可恢复后点击继续当前阶段" onclick="taskCommand('pause')" disabled>暂停</button><button id="taskStop" class="stop" onclick="stop()" disabled>停止执行</button></div>
 <p class="notice">手中调整任务切换会等当前动作块发完，再用新观测和新 Prompt 平滑接入下一阶段。其他任务沿用原在线交接。超时、越界或反馈异常会停止并清理。暂停仍需实际安全确认；当前缺少双臂静止保持 ACK，暂停后自动恢复受阻止。关闭浏览器页面不会停止任务。请点击“停止执行”结束任务。本机控制服务失联时会停止任务。这些按钮属于软件控制，不是硬件急停。</p><div id="taskError" role="alert"></div></section>
 <section class="card" id="dagger-panel" aria-label="DAgger 与录制质量"><h2>DAgger · 接管与数据</h2>
 <label><input id="dagger" type="checkbox" onchange="daggerChanged()"> 本次启用 DAgger 接管与自动标注（同时开启录制）</label>
 <details><summary>DAgger 数据保存设置</summary>
 <label for="dagger_output">保存父目录</label><div class="path"><input id="dagger_output" oninput="saveControlPreferences({dagger_output:this.value})" placeholder="留空使用归档父目录下的 DAgger"><button onclick="browse('dagger_output')">浏览…</button></div>
-<div class="notice">A 优等 → A/　B 一般 → B/　C 报错 → C/　D 放弃 → D/<br>未评级暂存 pending/；异常退出后弹窗建议选择 C。评级后等待后台导出结束，将 rosbag 移至对应等级/episodeXX。部署日志另存原日期目录。</div>
+<div class="notice">A 优等 → A/　B 一般 → B/　C 报错 → C/　D 放弃 → D/<br>未评级暂存 pending/；异常退出后弹窗建议选择 C。评级后等待后台导出结束，将本轮样本移至对应等级/episodeXX。部署日志另存原日期目录。</div>
+<label for="dagger_recording_format">样本保存方式</label><select id="dagger_recording_format" onchange="saveControlPreferences({dagger_recording_format:this.value});invalidate()"><option value="mcap">MCAP</option><option value="rosbag">rosbag</option></select>
+<p class="muted">每轮独立保存；MCAP 内嵌 H.264 视频，不同时保存 rosbag。选择后下次启动沿用。</p>
+<label><input id="dagger_head_depth" type="checkbox" onchange="saveControlPreferences({dagger_head_depth:this.checked});invalidate()"> 录制头部深度</label>
+<label><input id="dagger_tactile" type="checkbox" onchange="saveControlPreferences({dagger_tactile:this.checked});invalidate()"> 录制双手触觉</label>
+<p class="muted">首次默认关闭；启用后必须收到对应传感器数据。触觉包含双手十指的原图、形变图与六维力。</p>
 </details>
 <p class="muted">左臂＋左手由人接管，右侧保持。同一控制服务持续运行；恢复策略会重新观测与推理。</p>
 <div id="daggerStatus" class="notice" role="status">未启用 DAgger</div>
@@ -109,7 +114,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div class="actions" style="margin-top:10px"><button id="submitQualityNote" onclick="submitQualityNote()" disabled>提交批注</button></div>
 <p id="qualityNoteStatus" class="muted" role="status" aria-live="polite"></p>
 <p id="qualityEvidence" class="notice" role="status">等待录制收尾。</p>
-<p class="muted">评级独立于执行结果和录制完整性。DAgger 按评级归档 rosbag 到等级/episodeXX，D 保留数据；评级不表示已通过训练数据校验。后台导出完成后移动。</p><div id="qualityError" class="error" role="alert"></div>
+<p class="muted">评级独立于执行结果和录制完整性。DAgger 按评级归档本轮样本到等级/episodeXX，D 保留数据；评级不表示已通过训练数据校验。后台导出完成后移动。</p><div id="qualityError" class="error" role="alert"></div>
 </section>
 </div>
 <section class="dashboard-row logs" id="logs" aria-label="三个终端日志">
@@ -135,8 +140,8 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <script>
 let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, executionActive=false, executionStarting=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input','dagger','dagger_output'];
-function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed','dagger'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input','dagger','dagger_output','dagger_recording_format','dagger_head_depth','dagger_tactile'];
+function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed','dagger','dagger_head_depth','dagger_tactile'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
 function daggerChanged(){if($('dagger').checked)$('record').checked=true;invalidate()}
 let daggerState=null,daggerPending=false;
 function renderDagger(d){
@@ -263,7 +268,9 @@ function saveControlPreferences(values){
  return preferenceSaves;
 }
 function restoreControlPreferences(values){
+ for(const key of ['dagger_head_depth','dagger_tactile'])if(typeof values?.[key]==='boolean')$(key).checked=values[key];
  if(typeof values?.dagger_output==='string')$('dagger_output').value=values.dagger_output;
+ if(['mcap','rosbag'].includes(values?.dagger_recording_format))$('dagger_recording_format').value=values.dagger_recording_format;
 
 }
 function invalidate(){approved=null;approvedPlan=null;approvedModelKey=null;$('previewSummary').textContent='执行配置明细';$('start').disabled=true;$('error').textContent=''}
@@ -515,6 +522,7 @@ $('autoPromptText').textContent=t?.active_prompt||'等待执行端接入首个�
 $('taskError').textContent=t?.communication_error||t?.last_error||'';
 $('taskStart').textContent=state==='PAUSED'?'继续当前阶段':'开始当前阶段';
 $('taskStart').disabled=!available||taskPending||!(state==='READY'||state==='PAUSED'&&t?.safe_to_resume);
+$('taskStop').disabled=!live||$('stop').disabled||!['RUNNING','RESUMING','SWITCH_REQUESTED','SWITCHING','PAUSING','PAUSED'].includes(state);
 $('taskPause').disabled=!available||taskPending||!['RUNNING','RESUMING','SWITCHING','SWITCH_REQUESTED'].includes(state);
 if(daggerState&&executionActive){
  $('taskPause').disabled=true;
@@ -546,7 +554,7 @@ async function browse(target,file=false){if(busy)return;pickerTarget=target;pick
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='dagger_output')saveControlPreferences({dagger_output:path});if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对'}}
-(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed','dagger'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();restoreControlPreferences(d.ui_preferences);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed','dagger','dagger_head_depth','dagger_tactile'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();restoreControlPreferences(d.ui_preferences);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
 </script></html>"""
 
 
@@ -561,6 +569,7 @@ def server_for(root, *, port=8766):
     # The UI uses the current DeploymentSettings defaults for these options.
     defaults.pop("camera_policy", None)
     defaults.pop("crop_device", None)
+    defaults.setdefault("dagger_recording_format", "mcap")
     defaults["recovery_confirmed"] = False  # Reauthorization is never restored from a saved checkbox.
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass

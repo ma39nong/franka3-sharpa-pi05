@@ -1,7 +1,6 @@
-"""Four-view V-JEPA 2 inference for the read-only 119-episode observer."""
+"""Four-view V-JEPA 2 inference using the classifier's own normalization."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -25,7 +24,7 @@ def model_inputs(path, joint_names, cropper, anchor_ns, session):
             or native.dtype != np.uint8 or stamps.shape != (16,) or stamps.dtype.kind != "i"
             or stamps[0] <= 0 or np.any(np.diff(stamps) <= 0) or stamps[-1] > anchor_ns
             or names != JOINT_NAMES or state.shape != (16, 58) or not np.isfinite(state).all()):
-        raise ValueError("119 条四路观测历史格式无效")
+        raise ValueError("四路 Agent 观测历史格式无效")
     local = []
     fallback = 0
     cropper.reset()
@@ -49,7 +48,7 @@ def probabilities(logits):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for option in ("repository", "checkpoint", "pretrained-dir", "locator", "norm-stats"):
+    for option in ("repository", "checkpoint", "pretrained-dir", "locator"):
         parser.add_argument("--" + option, required=True, type=Path)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -59,7 +58,6 @@ def main():
     from tools import tomato_dataset as ds
     from deploy.fr3_sharpa_runtime.crop_vendor.repair import RgbLocator
     from deploy.fr3_sharpa_runtime.interaction_crop import InteractionCropper, locator_identity
-    from deploy.fr3_sharpa_runtime.tomato_model import IN_HAND_STATS_SHA256
 
     torch.set_num_threads(4)
     cv2.setNumThreads(1)
@@ -71,18 +69,16 @@ def main():
     if (tuple(saved["contract"]["cameras"]) != ds.FOUR_CAMERAS
             or saved["prediction_mode"] != "joint" or saved["future_horizon_s"] != 1.0
             or len(joint_names) != len(JOINT_NAMES) or set(joint_names) != set(JOINT_NAMES)):
-        raise ValueError("权重必须匹配 119 条四路、58 关节、当前与 +1 秒预测")
+        raise ValueError("权重必须匹配四路、58 关节、当前与 +1 秒预测")
     encoder, provenance = model.load_encoder(args.pretrained_dir, args.device, saved["contract"]["seed"])
     if provenance != saved["pretrained"]:
         raise ValueError("编码器与训练权重的来源不匹配")
-    norm = args.norm_stats.read_bytes()
-    if hashlib.sha256(norm).hexdigest() != IN_HAND_STATS_SHA256:
-        raise ValueError("119 条 ROI 归一化与已部署版本不匹配")
-    stats = json.loads(norm)["norm_stats"]["state"]
     locator, locator_sha = locator_identity(args.locator)
+    # This right-truss selector uses RGB detections, not normalized joint motion.
+    # Feature normalization is loaded from saved['mean']/saved['std'] below.
     cropper = InteractionCropper(
         RgbLocator(locator, device=args.device),
-        np.asarray(stats["q99"]) - np.asarray(stats["q01"]),
+        None,
         roi_profile="in_hand119_right_truss_v1",
     )
     cropper.locator_sha256 = locator_sha

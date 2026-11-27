@@ -3,6 +3,11 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
 : "${SHARPA_GELLO_REPO:?Run setup_local.py first}"
 : "${SHARPA_GATEWAY_CONFIG:?Run setup_local.py first}"
+# Select recording depth only for this deployment; never rewrite the shared camera profile.
+if [[ "${SHARPA_RECORD_HEAD_DEPTH:-0}" == 1 ]]; then
+  SHARPA_CAMERA_CAM0_PARAMS="$("${SHARPA_PYTHON:-$SHARPA_ROOT/.venv/bin/python}" -m deploy.fr3_sharpa_control.recording_options --depth-profile "${SHARPA_CAMERA_CAM0_PARAMS:?Missing head profile}")"
+  export SHARPA_CAMERA_CAM0_PARAMS
+fi
 COMPOSE=(docker compose --profile openpi-hardware --project-directory "$SHARPA_GELLO_REPO/docker"
   --env-file "$SHARPA_GELLO_REPO/docker/.env"
   -f "$SHARPA_GELLO_REPO/docker/compose.yaml"

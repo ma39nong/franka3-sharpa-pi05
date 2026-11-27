@@ -1,0 +1,157 @@
+# Copy to .deployment/mcap-recording.yaml and fill verified site values.
+session_id: REQUIRED-session-id
+model_root: REQUIRED-materialized-model-directory
+calibration_root: REQUIRED-calibration-directory
+clock_mapping:
+  source_clock_id: host_ros_clock
+  method: ntp
+  valid_from_ns: 0
+  raw_reference: 0
+  unix_reference_ns: 0
+  scale_ns_per_tick: 1.0
+  sync_state: REQUIRED
+  uncertainty_ns: 0
+devices:
+- device_id: rig
+  channels:
+  - source_topic: /cam0/color/image_raw
+    topic: /devices/cam0/cameras/color/color/image_h264
+    type: foxglove_msgs/msg/CompressedVideo
+    recording: enabled
+    value_origin: measured
+    source_type: sensor_msgs/msg/Image
+    role: head
+    crf: 18
+    width: 640
+    height: 400
+    fps: 30
+    color:
+      range: limited
+      matrix: bt709
+      primaries: bt709
+      transfer: iec61966-2-1
+    color_source: 'REQUIRED: verify native full-range sRGB input before recording'
+  - source_topic: /cam1/color/image_raw
+    topic: /devices/cam1/cameras/color/color/image_h264
+    type: foxglove_msgs/msg/CompressedVideo
+    recording: enabled
+    value_origin: measured
+    source_type: sensor_msgs/msg/Image
+    role: wrist_right
+    crf: 16
+    width: 640
+    height: 400
+    fps: 30
+    color:
+      range: limited
+      matrix: bt709
+      primaries: bt709
+      transfer: iec61966-2-1
+    color_source: 'REQUIRED: verify native full-range sRGB input before recording'
+  - source_topic: /cam2/color/image_raw
+    topic: /devices/cam2/cameras/color/color/image_h264
+    type: foxglove_msgs/msg/CompressedVideo
+    recording: enabled
+    value_origin: measured
+    source_type: sensor_msgs/msg/Image
+    role: wrist_left
+    crf: 16
+    width: 640
+    height: 400
+    fps: 30
+    color:
+      range: limited
+      matrix: bt709
+      primaries: bt709
+      transfer: iec61966-2-1
+    color_source: 'REQUIRED: verify native full-range sRGB input before recording'
+  - source_topic: /left/franka/joint_states
+    topic: /devices/fr3_left/state/joints
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: measured
+  - source_topic: /right/franka/joint_states
+    topic: /devices/fr3_right/state/joints
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: measured
+  - source_topic: /sharpa/left/joint_states
+    topic: /devices/sharpa_left/state/joints
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: measured
+  - source_topic: /sharpa/right/joint_states
+    topic: /devices/sharpa_right/state/joints
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: measured
+  - source_topic: /teleop/arm_commands
+    topic: /devices/rig/action/source
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: derived
+    source_type: teleop_interfaces/msg/ArmCommand
+    adapter: arm_command
+  - source_topic: /openpi/executed_joint_targets
+    topic: /devices/rig/action/command
+    type: sensor_msgs/msg/JointState
+    recording: enabled
+    value_origin: derived
+  - source_topic: /cam0/color/camera_info
+    topic: /devices/cam0/cameras/color/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    recording: enabled
+  - source_topic: /cam1/color/camera_info
+    topic: /devices/cam1/cameras/color/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    recording: enabled
+  - source_topic: /cam2/color/camera_info
+    topic: /devices/cam2/cameras/color/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    recording: enabled
+  - source_topic: /tf_static
+    topic: /tf_static
+    type: tf2_msgs/msg/TFMessage
+    recording: enabled
+    snapshot: true
+  - source_topic: /tf
+    topic: /tf
+    type: tf2_msgs/msg/TFMessage
+    recording: enabled
+  - source_topic: /dagger/frame
+    topic: /devices/rig/action/ownership
+    type: std_msgs/msg/Int8MultiArray
+    recording: enabled
+    source_type: std_msgs/msg/String
+    adapter: dagger_ownership
+    group_order:
+    - left_arm
+    - left_hand
+    - right_arm
+    - right_hand
+    owner_codes:
+      hold: 0
+      policy: 1
+      human: 2
+  - source_topic: /dagger/events
+    topic: /recording/events
+    type: std_msgs/msg/String
+    recording: enabled
+  - source_topic: /teleop/arm_command_status
+    source_type: teleop_interfaces/msg/ArmCommandStatus
+    topic: /recording/gateway_feedback
+    type: std_msgs/msg/String
+    adapter: diagnostic_event
+    recording: enabled
+  action_space:
+    control_mode: joint_position
+    basis: absolute
+    unit: rad
+    command_order:
+    - left_arm_7
+    - left_hand_22
+    - right_arm_7
+    - right_hand_22
+    command_semantics: software_dispatched_target_not_hardware_ack
+    source_semantics: arm source target; ownership per sample; full control context
+      in events.jsonl
