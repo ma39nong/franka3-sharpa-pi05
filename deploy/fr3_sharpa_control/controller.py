@@ -162,6 +162,13 @@ class DeploymentController:
             state["home"] = dict(self.home_state)
             state["model_loading"] = bool(state.get("running") and self.operation == "model")
             state["directory"] = str(directory) if directory else None
+        state['classification_pending']=None
+        if self.plan and self.plan.get('settings',{}).get('dagger'):
+            from .quality import previous_unclassified
+            try:
+                state['classification_pending']=previous_unclassified(self.plan['settings']['output'],previous=execution_directory)
+            except (OSError,ValueError,KeyError):
+                state['classification_pending']={'episode':'录制记录无法读取，请检查日志'}
         state["interaction_crop"] = None
         if self.plan and self.plan["model"].get("crop_locator"):
             with suppress(OSError, ValueError):
@@ -376,6 +383,9 @@ class DeploymentController:
             if self.recorder and self.recorder.poll() is None:
                 raise ValueError("上一录制器仍在收尾，请等待或检查运行日志")
             plan = self.preview(values)
+            if operation=='execute' and plan['settings'].get('dagger'):
+                from .quality import require_previous_classified
+                require_previous_classified(plan['settings']['output'],previous=self.execution_directory)
             if expected_approval is not None and expected_approval != plan["approval"]:
                 raise ValueError("核对后权重、代码或配置发生变化，请重新核对最终配置")
             if operation == "execute":

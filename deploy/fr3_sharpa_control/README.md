@@ -195,7 +195,11 @@ bash deploy/fr3_sharpa_runtime/hardware.sh up --exclusive
 
 名称使用工作机本地的小时和分钟，如15.43、15.50，不加入秒。同一分钟重复启动时使用15.43-2、15.43-3等后缀；原子创建目录，不覆盖既有数据。失败启动也保留该时间目录和排查记录。旧编号目录保持原样。不勾录制时不启动bag/video任务，仅保存配置和运行日志。
 
-录制三路RGB、左右FR3反馈、左右Sharpa反馈、原双臂命令，以及新增 `/openpi/executed_joint_targets`（完整58D、实际裁剪/插值后下发目标）。实测反馈与发送目标分别保存，不将命令当成实际到位。原图像header时间戳保留在bag中。视频以同一录制进程的ROS接收时间轴30fps对齐，低帧率画面保持最近收到帧，不按相机帧号硬拼；画面标明head/left_wrist/right_wrist和经过时间。
+rosbag 继续录制三路RGB、左右FR3/Sharpa实测反馈和已选深度、触觉等现有数据。动作类话题仅保存安全网关后的 `/teleop/validated_arm_commands` 和左右 `/sharpa/{left,right}/command`，不保存原双臂命令、硬件命令总线或混合 `/openpi/executed_joint_targets`。手命令由录制端从已有58D实际下发记录按关节名提取，仅写入bag，不创建控制发布者；实测反馈与发送目标分别保存。
+
+rosbag 配置三路RGB CameraInfo、`/tf`、`/tf_static`，从既有 `SHARPA_MCAP_PROFILE`（默认 `.deployment/mcap-recording.yaml`）只读加载两腕真实外参。收到内参和真实静态TF后才能开录；writer建立时写入内参和标定静态TF快照，并保存 `wrist_extrinsics.json`。`episode.json` 和 `COMPLETE` 的总体结构及判据沿用原规则。原图像header保留，视频仍按ROS接收时间轴30fps对齐，低帧率保持最近帧，标明head/left_wrist/right_wrist和经过时间。MCAP内容与编码不受此次rosbag对齐影响。
+
+启用DAgger时，上一段实际开录的样本完成A/B/C/D分类后才能开始下一段，适用于rosbag和MCAP，重启UI后仍检查。不要求先回Home，也不要求等待视频导出；原执行清理和并发Home互斥继续保留。未真正开录的尝试不产生分类门槛，不要求补评更早的历史积压。
 
 bag关闭后导出四个视频。缺失topic、写盘错误、视频编码失败不会报告成功；原始bag保留。视频在独立低优先级队列导出，界面单独显示各轮导出状态。执行、失能和硬件清理完成后即可再次启动，不必等待旧视频编码；导出使用旧轮次冻结的目录，不会写进新实验。导出文件已存在时拒绝覆盖；重新导出前将失败的视频目录移走，保留原始bag。
 

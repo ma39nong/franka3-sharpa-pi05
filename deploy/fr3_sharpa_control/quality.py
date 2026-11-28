@@ -298,3 +298,37 @@ def update_note(output, relative, *, run_id, note, expected_revision):
         raise ValueError("请先在质量弹窗中选择评级")
     return rate(output, relative, run_id=run_id, grade=value["grade"],
                 note=note, expected_revision=expected_revision)
+
+
+def previous_unclassified(output, *, previous=None):
+    """Latest actual DAgger recording only; independent of format, Home and export.
+
+    Read compact and transient reports so the gate also survives UI restarts.
+    Historical earlier ungraded episodes do not become a backlog requirement.
+    """
+    from .recording import run_report
+    candidates=set()
+    root=Path(output).expanduser().resolve()
+    if root.is_dir():
+        candidates.update(path.parent for path in root.glob('????-??-??/*/run.log'))
+        candidates.update(path.parent for path in root.glob('????-??-??/*/'+FILE))
+    if previous is not None:candidates.add(Path(previous))
+    latest=None
+    for directory in sorted(candidates,reverse=True)[:100]:
+        try:
+            run=run_report(directory,'run.json')
+            if not (run.get('settings',{}).get('dagger') or run.get('dagger_enabled')):continue
+            value=read(directory)
+            recording=run_report(directory,'recording.json')
+            stamp=recording.get('started_unix_ns')
+            if not stamp:continue  # No actual episode gate opened.
+            if latest is None or stamp>latest[0]:latest=(stamp,directory,value)
+        except FileNotFoundError:continue
+    if latest is None or latest[2].get('grade') in GRADES:return None
+    _,directory,value=latest
+    return dict(directory=str(directory),episode=(value.get('archive') or {}).get('episode',directory.name),run_id=value['run_id'])
+
+
+def require_previous_classified(output, *, previous=None):
+    pending=previous_unclassified(output,previous=previous)
+    if pending:raise ValueError('请先完成上一段 DAgger 样本的质量分类：'+pending['episode'])

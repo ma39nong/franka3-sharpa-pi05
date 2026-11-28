@@ -40,6 +40,7 @@ class BagCapture:
     def __init__(self, directory, stop_marker=None, *, clock=time.monotonic_ns, sleep=time.sleep, static_extrinsics=None):
         self.static_extrinsics = static_extrinsics or []
         self.static_tf_edges = {}
+        self.camera_info_snapshots = {}
         self.directory = Path(directory)
         self.lock = threading.RLock()
         self.writer = None
@@ -104,6 +105,8 @@ class BagCapture:
                 for transform in message.transforms:
                     self.static_tf_edges[transform.child_frame_id] = transform
                 message = self.calibrated_snapshot(rx_ros_ns)
+            if topic.endswith('/camera_info'):
+                self.camera_info_snapshots[topic]=message
             self.seen.add(topic)
             self.last_rx_monotonic_ns[topic] = max(
                 rx_mono_ns, self.last_rx_monotonic_ns.get(topic, rx_mono_ns))
@@ -141,6 +144,11 @@ class BagCapture:
                     return {"status": "PASS", "active": True}
                 now = self.clock()
                 health = self.readiness(now)
+                if self.static_extrinsics:
+                    missing_calibration=[f'/cam{i}/color/camera_info' for i in range(3)
+                                         if f'/cam{i}/color/camera_info' not in self.camera_info_snapshots]
+                    if not self.static_tf_edges:missing_calibration.append('/tf_static')
+                    if missing_calibration:health.update(ready=False,missing_calibration=missing_calibration)
                 if now >= deadline:
                     raise TimeoutError("录制传感器在5秒内未就绪：" + json.dumps(health, ensure_ascii=False))
                 if health["ready"]:
@@ -162,6 +170,10 @@ class BagCapture:
                         self.recording_started_monotonic_ns = activated
                         self.report.update(status="RECORDING", started_unix_ns=time.time_ns(),
                                            started_monotonic_ns=activated)
+                        from rclpy.serialization import serialize_message
+                        for topic,message in self.camera_info_snapshots.items():
+                            self.writer.write(topic,serialize_message(message),self.report['started_unix_ns'])
+                            self.counts[topic] += 1
                         if self.static_extrinsics:
                             from rclpy.serialization import serialize_message
                             stamp = self.report['started_unix_ns']
@@ -221,17 +233,19 @@ def main():
     if os.environ.get("SHARPA_RECORD_FORMAT", "rosbag") == "mcap":
         from .mcap_capture import main as mcap_main
         return mcap_main(args)
-    static_extrinsics=[]
-    if os.environ.get('SHARPA_DAGGER_ENABLED') == '1':
-        import yaml
-        profile_path=Path(os.environ.get('SHARPA_MCAP_PROFILE',str(Path(__file__).resolve().parents[2]/'.deployment/mcap-recording.yaml')))
-        if profile_path.is_file():
-            static_extrinsics=(yaml.safe_load(profile_path.read_text()) or {}).get('static_extrinsics',[])
-        if static_extrinsics:
-            from .calibrated_tf import validate_specs
-            validate_specs(static_extrinsics)
-            OPTIONAL_TOPICS.update({'/tf_static':'tf2_msgs/msg/TFMessage','/tf':'tf2_msgs/msg/TFMessage'})
-            ALL_TOPICS.update(OPTIONAL_TOPICS)
+    from .rosbag_contract import configure
+    import sys
+    configure(sys.modules[__name__])
+    # The same real wrist calibration already used by MCAP, read only for rosbag.
+    import yaml
+    profile_path=Path(os.environ.get('SHARPA_MCAP_PROFILE',str(Path(__file__).resolve().parents[2]/'.deployment/mcap-recording.yaml')))
+    if not profile_path.is_file():raise ValueError('Rosbag wrist calibration profile missing: '+str(profile_path))
+    profile=yaml.safe_load(profile_path.read_text()) or {}
+    static_extrinsics=profile.get('static_extrinsics',[])
+    if not all(any(spec.get('child_frame','').startswith(camera+'_') for spec in static_extrinsics) for camera in ('cam1','cam2')):
+        raise ValueError('Rosbag requires both real wrist extrinsics')
+    from .calibrated_tf import validate_specs
+    validate_specs(static_extrinsics)
     import rclpy
     if args.check:
         import importlib
@@ -289,14 +303,25 @@ def main():
     capture = BagCapture(args.directory, stop_marker=marker, static_extrinsics=static_extrinsics)
     qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=30, reliability=ReliabilityPolicy.BEST_EFFORT)
     subscriptions = []
+    from .rosbag_contract import COMBINED_SOURCE, HAND_COMMANDS, hand_commands
     for topic, kind in ALL_TOPICS.items():
+        if topic in HAND_COMMANDS.values():continue
         def callback(message, topic=topic):
             rx_mono_ns = time.monotonic_ns()
             rx_ros_ns = node.get_clock().now().nanoseconds
             capture.accept(topic, message, rx_ros_ns, rx_mono_ns=rx_mono_ns, serialize=serialize_message)
         subscriptions.append(node.create_subscription(get_message(kind), topic, callback,
             QoSProfile(depth=100,durability=DurabilityPolicy.TRANSIENT_LOCAL) if topic=='/tf_static' else
-            1000 if topic in OPTIONAL_TOPICS else qos))
+            1000 if topic in OPTIONAL_TOPICS or topic=='/teleop/validated_arm_commands' else qos))
+
+    def submitted_hands(message):
+        rx_mono_ns=time.monotonic_ns();rx_ros_ns=node.get_clock().now().nanoseconds
+        try:
+            for topic,msg in hand_commands(message).items():
+                capture.accept(topic,msg,rx_ros_ns,rx_mono_ns=rx_mono_ns,serialize=serialize_message)
+        except Exception as error:
+            with capture.lock:capture._fail(error)
+    subscriptions.append(node.create_subscription(get_message('sensor_msgs/msg/JointState'),COMBINED_SOURCE,submitted_hands,qos))
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):

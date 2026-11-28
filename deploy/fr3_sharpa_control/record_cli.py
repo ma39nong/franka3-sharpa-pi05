@@ -30,13 +30,16 @@ def main():
         env = dict(os.environ)
         env.pop("SHARPA_RECORD_SOCKET", None)
         os.execvpe(command[0], command, env)
+    if os.environ.get('SHARPA_DAGGER_ENABLED')=='1':
+        from .quality import require_previous_classified
+        require_previous_classified(args.output)
     directory = allocate_run(args.output)
     (directory/"run.log").write_text(COMPACT_HEADER+"\n")
     root = Path(__file__).resolve().parents[2]
     sockdir = Path(tempfile.mkdtemp(prefix="sharpa-record-"))
     path = sockdir / "control.sock"
     env = dict(os.environ, SHARPA_COMPACT_RECORDS="1", SHARPA_MERGED_LOG=str(directory/"run.log"), SHARPA_RECORD_SOCKET=str(path), SHARPA_SHUTDOWN_REPORT_DIR=str(directory / "logs"))
-    write_json(directory / "run.json", {"command": command, "repository": str(root),
+    write_json(directory / "run.json", {"dagger_enabled":env.get('SHARPA_DAGGER_ENABLED')=='1',"command": command, "repository": str(root),
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "weights": {k: v for k, v in env.items() if k.endswith("CHECKPOINT") and k.startswith("SHARPA_")}})
     env.pop("SHARPA_FOUR_VIEW_RECORD_DIR",None)
