@@ -26,7 +26,7 @@ def execute_task(args):
     log_lock = threading.Lock()
 
     def emit(**event):
-        with log_lock, (directory / "task-events.jsonl").open("a", encoding="utf-8") as stream:
+        with log_lock, Path(os.environ.get("SHARPA_MERGED_LOG",str(directory / "task-events.jsonl"))).open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
 
     profile = getattr(args, "task_mode", "tomato-b")

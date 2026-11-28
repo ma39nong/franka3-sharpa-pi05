@@ -19,6 +19,7 @@ from .mcap_video import VideoEncoder
 def channel_role(channel):
     """Presence requirements are independent of storage or message frequency."""
     source = channel['source_topic']
+    if channel.get('adapter')=='dagger_context' or channel.get('presence_policy')=='conditional':return 'event'
     if channel.get('snapshot') or source == '/tf_static' or channel['type'] == 'sensor_msgs/msg/CameraInfo':
         return 'snapshot'
     if source in ('/dagger/frame', '/openpi/executed_joint_targets',
@@ -52,9 +53,27 @@ def load_profile():
         raise ValueError('MCAP requires measured clock_mapping configuration')
     from .recording_options import optional_channels
     profile['devices'].append(dict(device_id='optional_sensors', channels=optional_channels()))
+    if os.environ.get('SHARPA_DAGGER_ENABLED')=='0':
+        for device in profile['devices']:
+            device['channels']=[ch for ch in device['channels'] if not ch['source_topic'].startswith('/dagger/')]
+    from .mcap_actions import gateway_command_profile
+    profile=gateway_command_profile(profile)
     channels=[ch for d in profile['devices'] for ch in d['channels'] if ch.get('recording') in ('enabled','event_driven')]
     sources=[ch['source_topic'] for ch in channels]
-    if len(sources)!=len(set(sources)): raise ValueError('Duplicate MCAP source topic')
+    from collections import Counter
+    for source,count in Counter(sources).items():
+        matches=[ch for ch in channels if ch['source_topic']==source]
+        if source=='/dagger/frame' and all(ch.get('adapter') in ('dagger_ownership','dagger_dispatch','dagger_snapshot','dagger_context') for ch in matches):continue
+        split_groups={ch.get('command_group') for ch in matches}
+        valid_split=(source=='/openpi/executed_joint_targets' and count in (2,4)
+                     and all(ch.get('adapter')=='split_joint_command' for ch in matches)
+                     and split_groups in ({'left_hand','right_hand'},{'left_arm','left_hand','right_arm','right_hand'}))
+        valid_gateway=(source=='/teleop/validated_arm_commands' and count==2
+                       and all(ch.get('adapter')=='split_gateway_command' for ch in matches)
+                       and split_groups=={'left_arm','right_arm'})
+        if count>1 and not (valid_split or valid_gateway):
+            raise ValueError('Duplicate MCAP source topic')
+    if len({ch['topic'] for ch in channels})!=len(channels):raise ValueError('Duplicate MCAP output topic')
     from .recorder_ros import TOPICS
     missing=set(TOPICS)-set(sources)
     if missing: raise ValueError(f'MCAP profile missing current channels: {sorted(missing)}')
@@ -67,6 +86,8 @@ def load_profile():
                 raise ValueError('MCAP camera CRF/native dimensions invalid')
             if ch.get('color') != dict(range='limited',matrix='bt709',primaries='bt709',transfer='iec61966-2-1') or not ch.get('color_source') or ch['color_source'].startswith('REQUIRED'):
                 raise ValueError('MCAP camera requires an explicit full-range sRGB input interpretation/source and declared output color')
+    from .calibrated_tf import validate_specs
+    validate_specs(profile.get('static_extrinsics', []))
     return profile, channels
 
 
@@ -122,8 +143,9 @@ class Capture:
                 if channel.get('recording') in ('enabled','event_driven') and channel_role(channel) == 'event':
                     channel.update(recording='event_driven', presence_policy='conditional')
         self.finished=threading.Event();self.lock=threading.RLock();self.active=False
-        self.error=None;self.writer=None;self.receipts={};self.static={};self.encoders={};self.video_workers={}
-        self.queue=queue.Queue(maxsize=256);self.worker=None;self.started=None;self.close_lock=threading.Lock();self.last_context=None
+        self.error=None;self.writer=None;self.receipts={};self.static={};self.encoders={};self.static_tf_edges={};self.video_workers={}
+        self.queue=queue.Queue(maxsize=256);self.worker=None;self.started=None;self.close_lock=threading.Lock();self.last_context=None;self.last_enqueued_context=None;self.compact=os.environ.get('SHARPA_COMPACT_RECORDS')=='1'
+        self.camera_info_keys={};self.camera_info_repeats_omitted={}
         self.accepted_counts={ch['topic']:0 for ch in channels};self.queue_high_watermark=0
         self.report={'status':'PREPARED','recording_format':'mcap','started_unix_ns':None}
         self.persist()
@@ -132,6 +154,7 @@ class Capture:
         if self.writer is not None:
             self.report['payload_directory']=str(self.writer.target if self.writer.target.exists() else self.writer.directory)
         write_json(self.directory/'recording.json',dict(self.report,error=self.error,
+            camera_info_repeats_omitted=dict(self.camera_info_repeats_omitted),
             accepted_counts=dict(self.accepted_counts),queue_high_watermark=self.queue_high_watermark,
             counts={} if self.writer is None else {k:v['message_count'] for k,v in self.writer.stats.items()}))
 
@@ -142,8 +165,26 @@ class Capture:
         with self.lock:
             previous=self.receipts.get(ch['source_topic'])
             self.receipts[ch['source_topic']]=(time.monotonic(),1+(previous[1] if previous else 0))
-            if channel_role(ch) == 'snapshot': self.static[ch['source_topic']]=(message,rx)
+            if channel_role(ch) == 'snapshot':
+                if ch['type']=='tf2_msgs/msg/TFMessage':
+                    for transform in message.transforms:
+                        self.static_tf_edges[transform.child_frame_id]=transform
+                    combined=type(message)();combined.transforms=list(self.static_tf_edges.values())
+                    message=combined
+                self.static[ch['source_topic']]=(message,rx)
             if not self.active:return
+            if ch['type']=='sensor_msgs/msg/CameraInfo':
+                from .recording_slim import camera_info_signature
+                key=camera_info_signature(message)
+                if self.camera_info_keys.get(ch['topic'])==key:
+                    self.camera_info_repeats_omitted[ch['topic']]=self.camera_info_repeats_omitted.get(ch['topic'],0)+1
+                    return
+                self.camera_info_keys[ch['topic']]=key
+            if ch.get('adapter')=='dagger_context':
+                frame=json.loads(message.data)
+                context={key:frame.get(key) for key in ('mode','phase','generation','intervention_id','stage','prompt','model_version')}
+                if context==self.last_enqueued_context:return
+                self.last_enqueued_context=context
             try:
                 prepared = (self.video_workers[ch['topic']].submit(self.encode_video,ch,message)
                             if ch['type']==VIDEO_TYPE else None)
@@ -185,7 +226,12 @@ class Capture:
             episode_uid=uuid.uuid4().hex,session_id=self.profile['session_id'],recording_id=quality['run_id'],
             task_id=run.get('settings',{}).get('task_mode','deployment'),
             task_description=run.get('settings',{}).get('prompt') or 'Robot deployment',
-            source_type='dagger',source_id=quality['run_id'],end_reason='normal stop')
+            source_type='dagger' if run.get('settings',{}).get('dagger') else 'deployment',source_id=quality['run_id'],end_reason='normal stop')
+        if any(ch.get('adapter')=='split_gateway_command' for ch in self.channels):
+            identity['action_storage_layout']='four-joint-state-command-streams-v2'
+            identity['action_semantics']={'arms':'gateway_validated_target','hands':'sdk_submitted_target'}
+        elif any(ch.get('adapter')=='split_joint_command' for ch in self.channels):
+            identity['action_storage_layout']='four-joint-state-command-streams-v1'
         self.writer=McapEpisode(target,root=root,profile=self.profile,identity=identity,start_time_ns=0)
         for ch in self.channels:
             self.writer.register(ch['topic'],ch['type'])
@@ -211,6 +257,9 @@ class Capture:
                         message,rx=self.static[ch['source_topic']]
                         self.queue.put_nowait((ch,message,self.started,None))
                         self.accepted_counts[ch['topic']]+=1
+                        if ch['type']=='sensor_msgs/msg/CameraInfo':
+                            from .recording_slim import camera_info_signature
+                            self.camera_info_keys[ch['topic']]=camera_info_signature(message)
                 self.active=True
                 self.report.update(status='RECORDING',started_unix_ns=self.started)
                 self.worker=threading.Thread(target=self.work,daemon=True);self.worker.start();self.persist()
@@ -231,15 +280,38 @@ class Capture:
                 item=self.queue.get()
                 if item is None:break
                 ch,msg,rx,prepared=item;topic=ch['topic'];kind=ch['type']
-                if ch.get('adapter')=='depth_rvl':
+                if ch.get('adapter')=='split_gateway_command':
+                    from .mcap_actions import split_gateway_message
+                    parts=split_gateway_message(msg,native(msg.header))
+                    if ch['command_group'] not in parts:continue
+                    stamp=stamp_ns(msg)
+                    value=parts[ch['command_group']]
+                elif ch.get('adapter')=='split_joint_command':
+                    from .mcap_actions import split_message
+                    stamp=stamp_ns(msg)
+                    value=split_message(msg,native(msg.header))[ch['command_group']]
+                elif ch.get('adapter')=='depth_rvl':
                     from .recording_options import depth_payload
                     stamp=stamp_ns(msg)
                     value=dict(header=native(msg.header),format='16UC1; compressedDepth rvl',data=depth_payload(msg))
+                elif ch.get('adapter') in ('dagger_dispatch','dagger_snapshot','dagger_context'):
+                    frame=json.loads(msg.data);stamp=int(frame['source_timestamp_ns']);adapter=ch['adapter']
+                    if adapter=='dagger_dispatch':
+                        fields=['sequence','frame_index','monotonic_ns','gateway_sequence','gateway_valid']
+                        values=[frame['sequence'],frame['frame_index'],frame['monotonic_ns'],frame.get('gateway_sequence') or 0,int(frame.get('gateway_sequence') is not None)]
+                        value=dict(layout=dict(dim=[dict(label=','.join(fields),size=5,stride=5)],data_offset=0),data=values)
+                    elif adapter=='dagger_snapshot':
+                        from .mcap_actions import GROUPS
+                        names=[name for _,group in GROUPS.values() for name in group]
+                        value=dict(header=dict(stamp=dict(sec=stamp//10**9,nanosec=stamp%10**9),frame_id=''),name=names,position=frame['state'],velocity=[],effort=[])
+                    else:
+                        context={key:frame.get(key) for key in ('mode','phase','generation','intervention_id','stage','prompt','model_version')}
+                        value=dict(data=json.dumps(dict(event_id=uuid.uuid4().hex,event_type='control_context',phase='instant',severity='info',stamp_ns=stamp,context=context)))
                 elif ch.get('adapter')=='dagger_ownership':
                     frame=json.loads(msg.data);stamp=int(frame['source_timestamp_ns'])
                     value=dict(layout=dict(dim=[],data_offset=0),data=[{'hold':0,'policy':1,'human':2}[owner] for owner in frame['action_owner']])
                     context={key:frame.get(key) for key in ('mode','phase','generation','intervention_id','stage','prompt','model_version')}
-                    if context!=self.last_context:
+                    if context!=self.last_context and not self.compact:
                         event=dict(event_id=uuid.uuid4().hex,event_type='control_context',phase='instant',severity='info',
                             stamp_ns=stamp,device_id='rig',topic=topic,error_code='',description='DAgger control context changed',context=context)
                         with (self.writer.directory/'events.jsonl').open('a') as stream:stream.write(json.dumps(event)+'\n')
@@ -247,6 +319,9 @@ class Capture:
                 elif kind==VIDEO_TYPE:
                     stamp=stamp_ns(msg)
                     value=prepared.result()
+                elif ch.get('adapter')=='tactile_sample_info':
+                    if len(msg.data)!=3:raise ValueError('Invalid tactile sample metadata')
+                    stamp=int(msg.data[1]);value=native(msg)
                 elif ch.get('adapter')=='arm_command':
                     value=dict(header=native(msg.header),name=list(msg.joint_names),position=list(msg.positions),velocity=[],effort=[])
                     stamp=stamp_ns(msg)
@@ -255,9 +330,13 @@ class Capture:
                            {'data':json.dumps(native(msg))} if ch.get('adapter')=='diagnostic_event' else
                            None if self.serialize is not None else native(msg));stamp=rx
                 elif kind=='tf2_msgs/msg/TFMessage':
-                    value=None if self.serialize is not None else native(msg);stamp=rx
+                    stamp=rx
+                    if topic=='/tf_static' and self.profile.get('static_extrinsics'):
+                        from .calibrated_tf import merge_static
+                        value=merge_static(native(msg),self.profile['static_extrinsics'],stamp)
+                    else:value=None if self.serialize is not None else native(msg)
                 else:value=None;stamp=stamp_ns(msg)
-                if self.serialize is not None and not ch.get('adapter') and kind!=VIDEO_TYPE and topic!='/recording/events':
+                if self.serialize is not None and (not ch.get('adapter') or ch.get('adapter')=='tactile_sample_info') and kind!=VIDEO_TYPE and topic!='/recording/events' and not (topic=='/tf_static' and self.profile.get('static_extrinsics')):
                     self.writer.write_serialized(topic,self.serialize(msg),log_time=rx,publish_time=stamp)
                 else:
                     if value is None:value=native(msg)
@@ -318,11 +397,18 @@ def main(args):
     except BaseException:
         capture.close();node.destroy_node();rclpy.shutdown();raise
     subscriptions=[]
-    for ch in channels:
+    from collections import defaultdict
+    inputs=defaultdict(list)
+    for ch in channels:inputs[ch['source_topic']].append(ch)
+    def receive(group,message):
+        receipt=node.get_clock().now().nanoseconds
+        for channel in group:capture.accept(channel,message,receipt)
+    for group in inputs.values():
+        ch=group[0]
         qos=QoSProfile(depth=30,reliability=ReliabilityPolicy.BEST_EFFORT)
         if ch.get('snapshot'):qos=QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL)
         subscriptions.append(node.create_subscription(get_message(ch.get('source_type',ch['type'])),ch['source_topic'],
-            lambda msg,ch=ch:capture.accept(ch,msg,node.get_clock().now().nanoseconds),qos))
+            lambda msg,group=group:receive(group,msg),qos))
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             try:reply=capture.request(json.loads(self.rfile.readline(65536))['operation'])

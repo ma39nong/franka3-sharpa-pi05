@@ -53,7 +53,9 @@ def record_command(command, path, *, env=None, cwd=None):
     previous = {number: signal.signal(number, forward) for number in (signal.SIGINT, signal.SIGTERM)}
     try:
         # Reject accidental reuse of a previous run's console log.
-        with path.open("xb", buffering=0) as output:
+        from deploy.fr3_sharpa_control.recording import compact_run
+        compact=bool(env and env.get('SHARPA_COMPACT_RECORDS')=='1' and path.name=='run.log' and compact_run(path.parent))
+        with path.open("ab" if compact else "xb", buffering=0) as output:
             child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, env=env, cwd=cwd)
             if interrupted is not None:
                 os.killpg(child.pid, interrupted)

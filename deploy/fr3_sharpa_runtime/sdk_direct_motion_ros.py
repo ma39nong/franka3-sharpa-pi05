@@ -58,6 +58,7 @@ def main() -> None:
     hand_pubs = None
     feedback_stop = threading.Event()
     feedback_thread = None
+    tactile_telemetry = None
     ros_executor = None
     ros_spin_thread = None
     session_id = f"openpi-sdk-direct-{uuid.uuid4().hex}"
@@ -75,6 +76,11 @@ def main() -> None:
                                          "task_epoch": stream.task_epoch if stream is not None else None,
                                          **fields}, allow_nan=False) + "\n")
             stream_log.flush()
+        elif os.environ.get("SHARPA_COMPACT_RECORDS")=="1" and name != "frame":
+            # Retain lifecycle diagnostics in the merged console; high-frequency
+            # targets and feedback are already recorded in the bag.
+            detail={k:v for k,v in fields.items() if k not in ('command','measured','last_command','actions')}
+            stderr(json.dumps(dict(event=name,monotonic_s=time.monotonic(),**detail),allow_nan=False))
 
     def stream_actions(request):
         return prepare_policy_actions(request["actions"],
@@ -136,6 +142,10 @@ def main() -> None:
                     time.sleep(1.0)
         if connect_error is not None:
             raise connect_error
+        if os.environ.get('SHARPA_RECORD_TACTILE')=='1':
+            from .tactile_recording import TactileTelemetry
+            tactile_telemetry=TactileTelemetry(node,{'left':executor.left,'right':executor.right})
+            tactile_telemetry.start()
         arm_pub = node.create_publisher(ArmCommand, config.FR3_TOPIC, 10)
         hand_pubs = (
             node.create_publisher(JointState, "/sharpa/left/joint_states", 10),
@@ -261,7 +271,7 @@ def main() -> None:
                 entry_bridge_until = None
                 path = Path(request["events_path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
-                stream_log = path.open("x", encoding="utf-8")
+                stream_log = None if os.environ.get("SHARPA_COMPACT_RECORDS")=="1" else path.open("x", encoding="utf-8")
                 stream_event("start", generation=stream.generation, clipping=clipping_report,
                              task_epoch=stream.task_epoch, task_request_id=request.get("task_request_id"))
                 print(json.dumps({"status": "PASS", "operation": operation, **stream.status(now),
@@ -327,7 +337,8 @@ def main() -> None:
                 stream_event("stop", **result)
                 stream.invalidate()
                 stream = None
-                stream_log.close()
+                if stream_log is not None:
+                    stream_log.close()
                 stream_log = None
                 print(json.dumps({"status": "PASS", "published": True, **result}), file=protocol, flush=True)
             elif operation == "dagger_start":
@@ -504,6 +515,9 @@ def main() -> None:
                     feedback_thread.join(timeout=1.0)
             except Exception as error:
                 stderr(f"WARNING: SDK feedback thread join failed: {error}")
+            if tactile_telemetry is not None:
+                try:tactile_telemetry.close()
+                except Exception as error:stderr(f'WARNING: tactile worker cleanup failed: {error}')
             # Disable first. Neither ROS cleanup nor console/IPC failure may
             # prevent this attempt on both already-owned device handles.
             try:

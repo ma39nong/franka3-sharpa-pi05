@@ -16,6 +16,8 @@ from .rtc_stream import RTCSettings, require_capabilities
 from .runtime import SharpaRuntime
 from .task_control import TaskControl, TaskLease, TaskServer
 from .task_stages import stage
+from .stage_handoff import (HandoffObservationExpired, handoff_prediction_budget,
+                            handoff_retry_budget)
 
 
 def execute_dagger(args):
@@ -50,7 +52,7 @@ def execute_dagger(args):
         env_prefix = (f'source {shlex.quote(str(setup))}; '
             f'export PYTHONPATH={shlex.quote(str(root))}:{shlex.quote(str(run.GELLO_REPO))}:'
             f'{shlex.quote(str(run.GELLO_REPO/"ros_ws/src/teleop_core"))}:"${{PYTHONPATH:-}}"; ')
-        input_log = (directory/'dagger-inputs.log').open('ab', buffering=0)
+        input_log = Path(os.environ.get('SHARPA_MERGED_LOG',str(directory/'dagger-inputs.log'))).open('ab', buffering=0)
         try:
             inputs = subprocess.Popen(['pixi','run','--locked','-e','ros2','bash','-lc', env_prefix+
                 f'exec ros2 launch {shlex.quote(str(root/"deploy/fr3_sharpa_runtime/dagger_inputs.launch.py"))}'],
@@ -109,12 +111,16 @@ def execute_dagger(args):
             worker.request({'operation':'dagger_request_policy','generation':initial_owner['dagger']['generation']},timeout=2)
         last_generation = None
         requested_task_version = None
-        def predict(ticket, generation, context):
+        switch_boundary = switch_ticket = None
+        def predict(ticket, generation, context, boundary=None):
             prompt = ticket['prompt'] if ticket else args.prompt
             timeout = context['prefix_attention_horizon']/30 if context else 5.
+            if boundary is not None:
+                timeout = min(timeout, handoff_retry_budget(boundary, time.monotonic()))
             observation = run.live_observation(args.ros_overlay,prompt,timeout_s=timeout)
-            budget = timeout if context else fresh_prediction_budget_s(
-                observation['_captured_monotonic_ns'], time.monotonic_ns())
+            budget = (handoff_prediction_budget(boundary, observation['_captured_monotonic_ns']/1e9, time.monotonic())
+                      if boundary is not None else timeout if context else fresh_prediction_budget_s(
+                          observation['_captured_monotonic_ns'], time.monotonic_ns()))
             if budget <= 0:
                 raise ValueError('DAgger observation expired before inference')
             infer = getattr(runtime, 'infer_task_chunk', runtime.infer_chunk)
@@ -143,6 +149,7 @@ def execute_dagger(args):
                     task.dagger_suspended = task.data['dagger_suspended']
                     task.data['inference_status'] = 'dagger_'+mode.lower()
                     if generation != last_generation and mode in ('HOLDING','HOLD','HUMAN_LEFT'):
+                        switch_boundary = switch_ticket = None
                         task.data['stage_version'] += 1
                         if task.data['active_stage']:
                             task.data.update(requested_stage=task.data.get('manual_selected_stage') or task.data['active_stage'], pending_request_id=None)
@@ -157,12 +164,34 @@ def execute_dagger(args):
                         task.transition('SWITCHING','DAgger stage boundary; fresh prediction required')
                         state = 'SWITCHING'
                     if state in ('RESUMING','SWITCHING') and not task.dagger_suspended and requested_task_version != task.data['stage_version']:
-                        response = worker.request({'operation':'dagger_request_policy','generation':generation},timeout=2)
+                        switch_boundary = switch_ticket = None
+                        if state == 'SWITCHING' and mode == 'POLICY' and args.broker_mode == 'rtc':
+                            response = worker.request(dict(operation='dagger_stage_switch', generation=generation,
+                                task_epoch=task.data['stage_version'], request_id=task.data['pending_request_id'],
+                                finish_chunk=args.task_mode == 'tomato-in-hand119'), timeout=2)
+                            if response.get('rejected'):
+                                continue
+                            switch_boundary = response.get('boundary')
+                            if switch_boundary:
+                                delays = settings.history()
+                                emit(event='online_switch_boundary', boundary=switch_boundary,
+                                     stage_version=task.data['stage_version'])
+                        if switch_boundary is None:
+                            # First start / unfinished entry / human recovery retain the old admission.
+                            response = worker.request({'operation':'dagger_request_policy','generation':generation},timeout=2)
                         if response.get('rejected'):
                             continue
                         requested_task_version = task.data['stage_version']
                         last_generation = generation
                         continue
+                    if switch_ticket is not None and status.get('applied_token') == switch_boundary['token']:
+                        with task.installation(switch_ticket) as admitted:
+                            if admitted:
+                                task.activate(switch_ticket, f'dagger-handoff:{generation}:{accepted}')
+                                accepted += 1
+                                emit(event='online_switch_applied', token=switch_boundary['token'],
+                                     stage_version=switch_ticket['stage_version'])
+                        switch_boundary = switch_ticket = None
             last_generation = generation
             if future is not None and future.done():
                 ticket, prediction_generation, context = future.ticket
@@ -171,6 +200,16 @@ def execute_dagger(args):
                     valid = valid and task.valid(ticket)
                 try:
                     result = future.result()
+                except (HandoffObservationExpired, TimeoutError) as error:
+                    if valid and switch_boundary is not None and switch_ticket is None:
+                        handoff_retry_budget(switch_boundary, time.monotonic())
+                        emit(event='online_switch_prediction_retry', reason=str(error),
+                             token=switch_boundary['token'], deadline=switch_boundary['deadline'])
+                        future = None
+                        continue
+                    if valid:
+                        raise
+                    result = None
                 except BaseException:
                     if valid:
                         raise
@@ -179,6 +218,13 @@ def execute_dagger(args):
                 if not valid:
                     emit(event='obsolete_prediction_discarded',generation=prediction_generation)
                     continue
+                if switch_boundary is not None:
+                    try:
+                        handoff_prediction_budget(switch_boundary, result['captured']/1e9, time.monotonic())
+                    except HandoffObservationExpired as error:
+                        emit(event='online_switch_prediction_retry', reason=str(error),
+                             token=switch_boundary['token'], deadline=switch_boundary['deadline'])
+                        continue
                 metadata, actions, _ = result['result']
                 install_request_ns = time.monotonic_ns()
                 emit(event='prediction_install_requested', generation=generation,
@@ -192,14 +238,26 @@ def execute_dagger(args):
                     install_request_monotonic_ns=install_request_ns,
                     prediction_clip_rad=args.prediction_clip_rad, prompt=result['prompt'],
                     stage=ticket['stage_id'] if ticket else None)
+                if switch_boundary is not None:
+                    request.update(operation='dagger_stage_handoff', ticket={**switch_boundary,
+                        'captured_monotonic_s':result['captured']/1e9})
                 if task:
                     with task.installation(ticket) as admitted:
                         installed = worker.request(request,timeout=2) if admitted else {'rejected':True}
-                        if not installed.get('rejected'):
+                        if not installed.get('rejected') and switch_boundary is None:
                             task.activate(ticket, f'dagger:{generation}:{accepted}')
                 else:
                     installed = worker.request(request,timeout=2)
+                if installed.get('rejected') and switch_boundary is not None:
+                    handoff_retry_budget(switch_boundary, time.monotonic())
+                    emit(event='online_switch_prediction_retry', reason=installed.get('reason','handover rejected'),
+                         token=switch_boundary['token'], deadline=switch_boundary['deadline'])
                 if not installed.get('rejected'):
+                    if switch_boundary is not None:
+                        switch_ticket = ticket
+                        emit(event='online_switch_armed', generation=generation, stage=request['stage'],
+                             installation=installed, captured_monotonic_ns=result['captured'], actions=actions.tolist())
+                        continue
                     accepted += 1
                     delays.append(installed['skipped'])
                     emit(event='prediction_installed',generation=generation,stage=request['stage'],
@@ -210,15 +268,19 @@ def execute_dagger(args):
             if task:
                 eligible = eligible and task.data['execution_state'] in ('RESUMING','SWITCHING','RUNNING')
             if eligible and future is None:
-                due = mode == 'RESUMING' or (status['policy_done'] if args.broker_mode=='serial'
+                due = mode == 'RESUMING' or (status.get('policy_done',False) if args.broker_mode=='serial'
                     else status['consumed_since_install'] >= args.execute_steps)
+                if switch_boundary is not None:
+                    handoff = status.get('handoff') or {}
+                    due = switch_ticket is None and (
+                        'finish_chunk_at' not in switch_boundary or handoff.get('tail_finished') is True)
                 if due:
                     if args.num_chunks and accepted >= args.num_chunks and mode=='POLICY':
                         if task and task.data['execution_state']=='RUNNING':
                             task.transition('STOPPING','configured chunk count reached')
                         break
                     context = None
-                    if args.broker_mode=='rtc' and mode=='POLICY':
+                    if args.broker_mode=='rtc' and mode=='POLICY' and switch_boundary is None:
                         response = worker.request(dict(operation='dagger_snapshot',generation=generation,
                             delay_steps=settings.initial_delay_steps if trained else max(delays),
                             schedule=settings.prefix_attention_schedule,weight=settings.max_guidance_weight,
@@ -227,7 +289,10 @@ def execute_dagger(args):
                             continue
                         context = response['context']
                     ticket = task.ticket() if task else None
-                    future = pool.submit(predict,ticket,generation,context)
+                    if switch_boundary is not None:
+                        handoff_retry_budget(switch_boundary, time.monotonic())
+                    future = pool.submit(predict,ticket,generation,context,
+                                         dict(switch_boundary) if switch_boundary else None)
                     future.ticket = (ticket,generation,context)
             time.sleep(.01)
         return dict(status='COMPLETE',accepted_chunks=accepted,dagger_directory=str(directory/'dagger'))

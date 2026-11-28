@@ -24,7 +24,7 @@ header{background:white;color:#123a56;border-bottom:1px solid #dae3e9;padding:6p
 
 main{width:100%;padding:18px 20px 14px}.dashboard-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:16px;align-items:stretch}
 .card{min-width:0;background:white;border:1px solid #dae3e9;border-radius:10px;padding:18px}h2{font-size:17px;margin:0 0 14px}label{display:block;margin-top:11px;font-weight:600}input,select,textarea{width:100%;min-width:0;padding:9px;border:1px solid #b9c8d2;border-radius:6px;background:white;font:inherit;color:inherit}
-input[type=checkbox]{width:auto}.row{display:flex;gap:10px;align-items:end}.row>*{flex:1;min-width:0}.path{display:flex;gap:6px}.path input{min-width:0}.path button{flex:0 0 auto}
+input[type=checkbox]{width:auto}.depth-options{display:flex;gap:18px;align-items:center}.depth-options label{display:flex;align-items:center;gap:5px}.row{display:flex;gap:10px;align-items:end}.row>*{flex:1;min-width:0}.path{display:flex;gap:6px}.path input{min-width:0}.path button{flex:0 0 auto}
 button{border:0;border-radius:6px;padding:9px 12px;background:#dfe9ee;color:#17394a;font:600 13px system-ui;cursor:pointer;white-space:nowrap}button.primary{background:#087b75;color:white}button.stop{background:#b63f37;color:white}button:disabled{opacity:.45;cursor:not-allowed}
 .muted{color:#62778a;font-size:12px}.notice{background:#e9f5f3;padding:10px;border-radius:6px;margin:11px 0;overflow-wrap:anywhere}.error{color:#b7352f;white-space:pre-wrap;overflow-wrap:anywhere}.badge{padding:5px 11px;background:#eef3f6;color:#123a56;border-radius:20px;font-size:12px;white-space:nowrap}
 pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;margin:8px 0;max-height:250px;overflow:auto}.control-line{padding:9px 0;border-bottom:1px solid #e5edf1}.control-line>span{margin-left:10px}.control-line .actions{margin-top:9px}.actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -56,7 +56,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div id="modeHint" class="notice"></div>
 <label for="task_mode">部署方式</label><select id="task_mode"><option value="none">统一 Prompt · 不分阶段</option><option value="tomato-b">分阶段 · 放回盘中调整（七阶段）</option><option value="tomato-in-hand119">分阶段 · 手中调整（五阶段）</option></select>
 <p class="muted">摘一颗，或统一指令摘一串：选不分阶段。只有训练时使用不同阶段指令的权重才选分阶段；Agent 可选。</p>
-<label><input id="record" type="checkbox"> 录制样本及视频（四路模型额外保存ROI与四联视频）</label>
+<label><input id="record" type="checkbox"> 录制样本及视频（三路相机与三路拼接 MP4）</label>
 <div id="cropFields"><label>四路模型局部图定位器目录（model.pt＋receipt.json）</label><input id="crop_locator" placeholder="留空使用所选仓库/.deployment/crop_locator"></div>
 <div id="stageRecovery"><label><input type="checkbox" id="recovery_confirmed"> 人工恢复：已停止旧执行、检查设备，明确授权从选定阶段重新开始</label>
 <div class="muted">非首次阶段必须勾选并重新核对配置。恢复会获取新观测和首块，不复用旧动作。</div></div>
@@ -96,9 +96,9 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <div class="notice">A 优等 → A/　B 一般 → B/　C 报错 → C/　D 放弃 → D/<br>未评级暂存 pending/；异常退出后弹窗建议选择 C。评级后等待后台导出结束，将本轮样本移至对应等级/episodeXX。部署日志另存原日期目录。</div>
 <label for="dagger_recording_format">样本保存方式</label><select id="dagger_recording_format" onchange="saveControlPreferences({dagger_recording_format:this.value});invalidate()"><option value="mcap">MCAP</option><option value="rosbag">rosbag</option></select>
 <p class="muted">每轮独立保存；MCAP 内嵌 H.264 视频，不同时保存 rosbag。选择后下次启动沿用。</p>
-<label><input id="dagger_head_depth" type="checkbox" onchange="saveControlPreferences({dagger_head_depth:this.checked});invalidate()"> 录制头部深度</label>
+<div class="depth-options"><label><input id="dagger_head_depth" type="checkbox" checked onchange="saveControlPreferences({dagger_head_depth:this.checked});invalidate()"> 录制头部相机深度</label><label><input id="dagger_wrist_depth" type="checkbox" checked onchange="saveControlPreferences({dagger_wrist_depth:this.checked});invalidate()"> 录制腕部相机深度</label></div>
 <label><input id="dagger_tactile" type="checkbox" onchange="saveControlPreferences({dagger_tactile:this.checked});invalidate()"> 录制双手触觉</label>
-<p class="muted">首次默认关闭；启用后必须收到对应传感器数据。触觉包含双手十指的原图、形变图与六维力。</p>
+<p class="muted">头部与腕部深度首次默认勾选，可分别选择；腕部包含左右两路。触觉首次默认关闭。启用后必须收到对应传感器数据；触觉包含双手十指的原图、形变图与六维力。</p>
 </details>
 <p class="muted">左臂＋左手由人接管，右侧保持。同一控制服务持续运行；恢复策略会重新观测与推理。</p>
 <div id="daggerStatus" class="notice" role="status">未启用 DAgger</div>
@@ -106,7 +106,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <button id="daggerTakeover" onclick="daggerCommand('takeover')" disabled>接管左侧</button>
 <button id="daggerTakeoverRight" disabled title="暂未实现">接管右侧</button>
 <button id="daggerResume" class="primary" onclick="daggerCommand('resume')" disabled>恢复策略</button>
-<button id="daggerFollow" title="A 踏板切换左侧跟随／保持" onclick="daggerCommand(daggerState?.mode==='HUMAN_LEFT'?'hold':'follow')" disabled>左侧开始跟随</button>
+<button id="daggerFollow" title="A 踏板切换左侧跟随／保持" onclick="toggleFollowing()" disabled>左侧开始跟随</button>
 <button id="daggerFollowRight" disabled title="C 踏板预留，暂未实现">右侧开始跟随</button>
 </div>
 <p class="muted">Space 踏板切换左侧接管／恢复策略；L 踏板开始当前阶段，再踩一次停止执行。A 踏板切换左侧跟随／保持，C 踏板为右侧跟随预留。恢复策略前自动停止跟随并等待保持确认。请让部署页面获得焦点，编辑输入框或弹窗打开时踏板停用，长踩只触发一次。</p><div id="daggerError" class="error" role="alert"></div>
@@ -140,21 +140,93 @@ pre{white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monosp
 <script>
 let token='', approved=null, approvedPlan=null, approvedModelKey=null, busy=false, executionActive=false, executionStarting=false, pickerTarget='', pickerFile=false, repoModes=['serial','rtc'], modelModes=null, previousMode='serial', repoTimer=null;
 const $=id=>document.getElementById(id);
-const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input','dagger','dagger_output','dagger_recording_format','dagger_head_depth','dagger_tactile'];
-function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed','dagger','dagger_head_depth','dagger_tactile'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
+const fields=['repository','checkpoint','mode','initialization','speed','steps','rounds','record','output','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps','task_mode','initial_stage','recovery_confirmed','crop_locator','prompt','image_input','dagger','dagger_output','dagger_recording_format','dagger_head_depth','dagger_wrist_depth','dagger_tactile'];
+function config(){let c={};for(let f of fields)c[f]=['record','recovery_confirmed','dagger','dagger_head_depth','dagger_wrist_depth','dagger_tactile'].includes(f)?$(f).checked:['steps','rounds','train_rtc_max_delay','rtc_initial_delay_steps'].includes(f)?Number($(f).value):$(f).value;return c}
 function daggerChanged(){if($('dagger').checked)$('record').checked=true;invalidate()}
 let daggerState=null,daggerPending=false;
+let followBusy=false,followIntent=null;
 function renderDagger(d){
+ if(d&&daggerState&&d.run_id===daggerState.run_id&&
+  (d.generation<daggerState.generation||d.generation===daggerState.generation&&d.sequence<daggerState.sequence))return;
  daggerState=d;const mode=d?.mode,valid=executionActive&&!daggerPending&&!d?.communication_error;
  const labels={STARTING:'准备中',IDLE:'保持，等待开始阶段',POLICY:'策略执行',HOLDING:'等待实测保持确认',HOLD:'保持已确认',HUMAN_LEFT:'左臂＋左手人工跟随，右侧保持',RESUMING:'等待新观测和新策略',STOPPED:'已结束'};
  $('daggerStatus').textContent=d?[labels[mode]||mode,d.intervention_id?'接管编号 '+d.intervention_id:'',d.input_ready?'左侧输入就绪':d.input_error||'',d.reason||''].filter(Boolean).join(' · '):'未启用 DAgger';
  $('daggerTakeover').disabled=!valid||!['POLICY','RESUMING'].includes(mode);
- $('daggerFollow').disabled=!valid||!(mode==='HUMAN_LEFT'||mode==='HOLD'&&d?.input_ready);
- $('daggerFollow').textContent=mode==='HUMAN_LEFT'?'左侧保持':'左侧开始跟随';
+ const followValid=executionActive&&(!d?.communication_error||mode==='HUMAN_LEFT'||followBusy)&&(!daggerPending||followBusy);
+ $('daggerFollow').disabled=!followValid||!(followBusy||mode==='HUMAN_LEFT'||['HOLD','HOLDING'].includes(mode)&&d?.input_ready);
+ $('daggerFollow').textContent=followBusy?(followIntent?.want?'取消跟随':'左侧开始跟随'):
+  mode==='HUMAN_LEFT'?'左侧保持':'左侧开始跟随';
  $('daggerResume').disabled=!valid||!['HOLD','HOLDING','HUMAN_LEFT'].includes(mode);
  if(d?.communication_error)$('daggerError').textContent=d.communication_error;
 }
+function toggleFollowing(){
+ if(!daggerState||!executionActive||daggerPending&&!followBusy)return;
+ if(daggerState.communication_error&&!followBusy&&daggerState.mode!=='HUMAN_LEFT')return;
+ return setFollowing(followBusy?!followIntent.want:daggerState.mode!=='HUMAN_LEFT');
+}
+async function setFollowing(want){
+ if(!daggerState||!executionActive||daggerState.communication_error&&want&&!followBusy)return;
+ if(followBusy){followIntent.want=want;followIntent.deadline=Date.now()+6000;renderDagger(daggerState);return}
+ if(daggerPending)return;
+ const runId=daggerState.run_id;
+ const intent={want,deadline:Date.now()+6000};followIntent=intent;followBusy=true;daggerPending=true;
+ let d=daggerState;
+ const alive=()=>{if(!executionActive||daggerState?.run_id!==runId)throw Error('采集已结束或身份已变化，跟随操作已取消')};
+ const status=async()=>{
+  const result=await api('dagger-status',undefined,1200);
+  if(!result.execution_running||result.dagger?.run_id!==runId||result.dagger?.communication_error)
+   throw Error('DAgger 通信失效或执行已结束，跟随操作已取消');
+  alive();d=result.dagger;renderDagger(d);
+ };
+ const send=async command=>{
+  alive();
+  const result=await api('dagger-command',{command,run_id:runId,request_id:crypto.randomUUID(),expected_generation:d.generation},1500);
+  alive();if(result.run_id!==runId)throw Error('DAgger 采集身份已变化');
+  d=result;renderDagger(d);
+ };
+ renderDagger(d);$('daggerError').textContent='';
+ try{
+  while(true){
+   alive();
+   if(!intent.want){
+    if(d.mode==='HUMAN_LEFT'){await send('hold');continue}
+    if(['HOLD','HOLDING'].includes(d.mode))break;
+    throw Error('当前已非人工跟随状态，请检查最新状态');
+   }
+   if(d.mode==='HUMAN_LEFT')break;
+   if(d.mode==='HOLDING'){
+    if(Date.now()>=intent.deadline)throw Error('保持确认超时：跟随请求已取消，请检查设备后重新踩踏');
+    $('daggerError').textContent='等待实测保持确认；再次踩 A 或点击可取消本次跟随请求';
+    await new Promise(resolve=>setTimeout(resolve,50));await status();continue;
+   }
+   if(d.mode!=='HOLD'||!d.input_ready)throw Error('人工输入或保持尚未就绪，请检查后重新踩踏');
+   if(Date.now()>=intent.deadline)throw Error('保持确认超时：跟随请求已取消，请检查设备后重新踩踏');
+   try{await send('follow')}
+   catch(e){
+    // These explicit rejections grant no authority. Keep this bounded operator
+    // intent while the executor rechecks its existing measured-hold conditions.
+    if(!/Measured hold changed|Wait for measured hold and gateway admission/.test(e.message))throw e;
+    await new Promise(resolve=>setTimeout(resolve,50));await status();
+   }
+  }
+  $('daggerError').textContent='';
+ }catch(e){
+  // A failed start is never automatically retried. A queued cancellation may
+  // still stop a start that reached the executor before its HTTP reply failed.
+  try{
+   await status();
+   if(!intent.want&&d.mode==='HUMAN_LEFT')await send('hold');
+  }catch(_){
+   if(daggerState?.run_id===runId)renderDagger({...daggerState,communication_error:'跟随控制状态未确认，请先核对通信'});
+  }
+  $('daggerError').textContent=e.name==='AbortError'?'跟随控制请求超时，请核对最新状态；不会自动重新开始跟随':e.message;
+ }finally{
+  followBusy=false;followIntent=null;daggerPending=false;renderDagger(daggerState);
+  void refresh();
+ }
+}
 async function daggerCommand(command){
+ if(command==='follow'||command==='hold')return setFollowing(command==='follow');
  if(!daggerState||daggerPending)return;
  let d=daggerState;const runId=d.run_id;daggerPending=true;renderDagger(d);
  const send=async action=>{
@@ -178,9 +250,9 @@ async function daggerCommand(command){
    }
    if(d.mode!=='HOLD')throw Error('当前状态无法恢复策略，请重新操作');
   }
-  await send(command);await refresh();
+  await send(command);
  }catch(e){$('daggerError').textContent=e.message}
- finally{daggerPending=false;renderDagger(daggerState)}
+ finally{daggerPending=false;renderDagger(daggerState);void refresh()}
 }
 let daggerPedalDown=false;
 function daggerPedalKey(event){
@@ -212,10 +284,9 @@ function followPedalKey(event){
  event.preventDefault();
  if(event.repeat||followPedalsDown.has(event.code))return;
  followPedalsDown.add(event.code);
- if(event.code==='KeyC'||daggerPending||daggerState.communication_error)return;
- const command=daggerState.mode==='HUMAN_LEFT'?'hold':daggerState.mode==='HOLD'?'follow':null;
- if(!command||$('daggerFollow').disabled)return;
- daggerCommand(command);
+ if(event.code==='KeyC')return;
+ if($('daggerFollow').disabled)return;
+ toggleFollowing();
 }
 document.addEventListener('keydown',followPedalKey);
 document.addEventListener('keyup',followPedalKey);
@@ -259,7 +330,15 @@ async function requestArmsHome(){
 document.addEventListener('keydown',homePedalKey);
 document.addEventListener('keyup',homePedalKey);
 window.addEventListener('blur',()=>{homePedalDown=false});
-async function api(path,data){const r=await fetch('/api/'+path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)});let d=await r.json();if(!r.ok)throw Error(d.error);return d}
+async function api(path,data,timeoutMs=0){
+ const controller=timeoutMs?new AbortController():null;
+ const timer=controller?setTimeout(()=>controller.abort(),timeoutMs):null;
+ try{
+  const options=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':token},body:JSON.stringify(data)};
+  if(controller)options.signal=controller.signal;
+  const r=await fetch('/api/'+path,options);const d=await r.json();if(!r.ok)throw Error(d.error);return d;
+ }finally{if(timer!==null)clearTimeout(timer)}
+}
 function failure(e){$('error').textContent=e.message}
 let preferenceSaves=Promise.resolve();
 function saveControlPreferences(values){
@@ -268,7 +347,7 @@ function saveControlPreferences(values){
  return preferenceSaves;
 }
 function restoreControlPreferences(values){
- for(const key of ['dagger_head_depth','dagger_tactile'])if(typeof values?.[key]==='boolean')$(key).checked=values[key];
+ for(const key of ['dagger_head_depth','dagger_wrist_depth','dagger_tactile'])if(typeof values?.[key]==='boolean')$(key).checked=values[key];
  if(typeof values?.dagger_output==='string')$('dagger_output').value=values.dagger_output;
  if(['mcap','rosbag'].includes(values?.dagger_recording_format))$('dagger_recording_format').value=values.dagger_recording_format;
 
@@ -554,7 +633,7 @@ async function browse(target,file=false){if(busy)return;pickerTarget=target;pick
 async function loadDirectory(){try{let d=await api('browse?path='+encodeURIComponent($('browsePath').value));$('browsePath').value=d.path;let box=$('entries');box.replaceChildren();for(let item of d.entries){let b=document.createElement('button');b.textContent=(item.directory?'📁 ':'📄 ')+item.name;b.onclick=()=>{if(item.directory){$('browsePath').value=item.path;loadDirectory()}else if(pickerFile)choosePath(item.path)};box.append(b)}}catch(e){failure(e)}}
 function upDirectory(){let p=$('browsePath').value;$('browsePath').value=p.slice(0,p.lastIndexOf('/'))||'/';loadDirectory()}
 function choosePath(path){$(pickerTarget).value=path;$('picker').close();invalidate();if(pickerTarget==='dagger_output')saveControlPreferences({dagger_output:path});if(pickerTarget==='repository')repositoryChanged();if(['checkpoint','training_record'].includes(pickerTarget)){modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对'}}
-(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed','dagger','dagger_head_depth','dagger_tactile'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();restoreControlPreferences(d.ui_preferences);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
+(async()=>{let d=await api('info');token=d.token;taskCatalogs=d.task_catalogs||{};agentPresets=d.agent_presets||{};lastAgentProvider=d.agent_defaults?.provider||'mengxiang';for(let [k,id]of Object.entries(agentFields))$(id).value=d.agent_defaults?.[k]||'';updateAgentChoice();for(let [k,v] of Object.entries(d.defaults||{}))if(fields.includes(k)){if(['record','recovery_confirmed','dagger','dagger_head_depth','dagger_wrist_depth','dagger_tactile'].includes(k))$(k).checked=v;else $(k).value=v}let savedSteps=$('steps').value;modeChanged();$('steps').value=savedSteps;for(let f of fields)$(f).addEventListener('input',invalidate);$('model_type').addEventListener('change',()=>modelTypeChanged(true));for(let f of ['checkpoint','training_record','train_rtc_max_delay','model_type','rtc_initial_delay_steps'])$(f).addEventListener('input',()=>{modelTypeChanged();$('identity').textContent='权重配置已更改，请重新核对';});$('repository').addEventListener('input',()=>{clearTimeout(repoTimer);repoTimer=setTimeout(repositoryChanged,350)});$('repository').addEventListener('change',repositoryChanged);$('image_input').addEventListener('change',()=>{inspectedViews=null;updateDeploymentFields();invalidate()});$('task_mode').addEventListener('change',taskModeChanged);taskModeChanged();modelTypeChanged();restoreControlPreferences(d.ui_preferences);await repositoryChanged();showLog('execution');await refresh();setInterval(refresh,1500);setInterval(refreshTask,250)})().catch(failure);
 </script></html>"""
 
 
@@ -611,6 +690,9 @@ def server_for(root, *, port=8766):
                     else:
                         path = Path(controller.plan["settings"]["repository"])/".deployment/crop_live/preview.jpg"
                         self.send(200, path.read_bytes(), "image/jpeg")
+                elif parsed.path == "/api/dagger-status":
+                    self.send(200, {"execution_running": bool(controller.state.get("running") and controller.operation == "execute"),
+                                    "dagger": controller.dagger_status()})
                 elif parsed.path == "/api/status":
                     self.send(200, controller.snapshot())
                 elif parsed.path == "/api/repository":

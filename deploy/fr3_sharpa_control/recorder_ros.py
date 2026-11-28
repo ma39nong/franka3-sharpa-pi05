@@ -37,7 +37,9 @@ PROGRESS_WINDOW_NS = 1_000_000_000
 
 class BagCapture:
     """Serialize control requests and callbacks under one lock."""
-    def __init__(self, directory, stop_marker=None, *, clock=time.monotonic_ns, sleep=time.sleep):
+    def __init__(self, directory, stop_marker=None, *, clock=time.monotonic_ns, sleep=time.sleep, static_extrinsics=None):
+        self.static_extrinsics = static_extrinsics or []
+        self.static_tf_edges = {}
         self.directory = Path(directory)
         self.lock = threading.RLock()
         self.writer = None
@@ -98,6 +100,10 @@ class BagCapture:
     def accept(self, topic, message, rx_ros_ns, *, rx_mono_ns, serialize):
         with self.lock:
             stopped = self._stopped()
+            if topic == "/tf_static" and self.static_extrinsics:
+                for transform in message.transforms:
+                    self.static_tf_edges[transform.child_frame_id] = transform
+                message = self.calibrated_snapshot(rx_ros_ns)
             self.seen.add(topic)
             self.last_rx_monotonic_ns[topic] = max(
                 rx_mono_ns, self.last_rx_monotonic_ns.get(topic, rx_mono_ns))
@@ -111,6 +117,19 @@ class BagCapture:
                 self.counts[topic] += 1
             except Exception as error:
                 self._fail(error)
+
+    def calibrated_snapshot(self, stamp_ns):
+        from tf2_msgs.msg import TFMessage
+        from rosidl_runtime_py.set_message import set_message_fields
+        from .calibrated_tf import merge_static
+        transforms=[]
+        for t in self.static_tf_edges.values():
+            transforms.append(dict(header=dict(frame_id=t.header.frame_id,stamp=dict(sec=t.header.stamp.sec,nanosec=t.header.stamp.nanosec)),
+                child_frame_id=t.child_frame_id,transform=dict(translation={k:getattr(t.transform.translation,k) for k in 'xyz'},
+                rotation={k:getattr(t.transform.rotation,k) for k in ('x','y','z','w')})))
+        message=TFMessage()
+        set_message_fields(message,merge_static({'transforms':transforms},self.static_extrinsics,stamp_ns))
+        return message
 
     def _start(self):
         deadline = self.clock() + 5_000_000_000
@@ -143,6 +162,12 @@ class BagCapture:
                         self.recording_started_monotonic_ns = activated
                         self.report.update(status="RECORDING", started_unix_ns=time.time_ns(),
                                            started_monotonic_ns=activated)
+                        if self.static_extrinsics:
+                            from rclpy.serialization import serialize_message
+                            stamp = self.report['started_unix_ns']
+                            self.writer.write('/tf_static',serialize_message(self.calibrated_snapshot(stamp)),stamp)
+                            self.counts['/tf_static'] += 1
+                            write_json(self.directory/'rosbag/wrist_extrinsics.json',{'static_extrinsics':self.static_extrinsics})
                         self.active = True
                         self.persist()
                     except Exception as error:
@@ -196,11 +221,21 @@ def main():
     if os.environ.get("SHARPA_RECORD_FORMAT", "rosbag") == "mcap":
         from .mcap_capture import main as mcap_main
         return mcap_main(args)
+    static_extrinsics=[]
+    if os.environ.get('SHARPA_DAGGER_ENABLED') == '1':
+        import yaml
+        profile_path=Path(os.environ.get('SHARPA_MCAP_PROFILE',str(Path(__file__).resolve().parents[2]/'.deployment/mcap-recording.yaml')))
+        if profile_path.is_file():
+            static_extrinsics=(yaml.safe_load(profile_path.read_text()) or {}).get('static_extrinsics',[])
+        if static_extrinsics:
+            from .calibrated_tf import validate_specs
+            validate_specs(static_extrinsics)
+            OPTIONAL_TOPICS.update({'/tf_static':'tf2_msgs/msg/TFMessage','/tf':'tf2_msgs/msg/TFMessage'})
+            ALL_TOPICS.update(OPTIONAL_TOPICS)
     import rclpy
     if args.check:
         import importlib
         import tempfile
-        import cv2
         import numpy as np
         import rosbag2_py
         for module, names in (("teleop_interfaces.msg", ("ArmCommand",)), ("sensor_msgs.msg", ("Image", "JointState"))):
@@ -214,13 +249,24 @@ def main():
             if hasattr(writer, "close"):
                 writer.close()
             del writer
-            video = cv2.VideoWriter(str(Path(temporary) / "check.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 64))
-            try:
-                if not video.isOpened():
-                    raise RuntimeError("ROS导出环境的MP4编码器不可用")
-                video.write(np.zeros((64, 64, 3), np.uint8))
-            finally:
-                video.release()
+            if os.environ.get("SHARPA_COMPACT_RECORDS") == "1":
+                import av
+                with av.open(str(Path(temporary) / "check.mp4"), "w") as output:
+                    video = output.add_stream("libx264", rate=30)
+                    video.width = video.height = 64
+                    video.pix_fmt = "yuv420p"
+                    frame = av.VideoFrame.from_ndarray(np.zeros((64,64,3),np.uint8),format="rgb24")
+                    for packet in video.encode(frame): output.mux(packet)
+                    for packet in video.encode(): output.mux(packet)
+            else:
+                import cv2
+                video = cv2.VideoWriter(str(Path(temporary) / "check.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 64))
+                try:
+                    if not video.isOpened():
+                        raise RuntimeError("ROS导出环境的MP4编码器不可用")
+                    video.write(np.zeros((64, 64, 3), np.uint8))
+                finally:
+                    video.release()
         # Exercise the worker's optional recording publisher before hardware up.
         # The sink is local; no ROS context, DDS publisher or SDK is constructed.
         from types import SimpleNamespace
@@ -234,13 +280,13 @@ def main():
         return
     if args.directory is None or args.socket is None:
         parser.error("--directory and --socket required")
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
     from rclpy.serialization import serialize_message
     from rosidl_runtime_py.utilities import get_message
     rclpy.init()
     node = rclpy.create_node("sharpa_deployment_recorder")
     marker = args.socket.parent / "stop-recording"
-    capture = BagCapture(args.directory, stop_marker=marker)
+    capture = BagCapture(args.directory, stop_marker=marker, static_extrinsics=static_extrinsics)
     qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=30, reliability=ReliabilityPolicy.BEST_EFFORT)
     subscriptions = []
     for topic, kind in ALL_TOPICS.items():
@@ -249,6 +295,7 @@ def main():
             rx_ros_ns = node.get_clock().now().nanoseconds
             capture.accept(topic, message, rx_ros_ns, rx_mono_ns=rx_mono_ns, serialize=serialize_message)
         subscriptions.append(node.create_subscription(get_message(kind), topic, callback,
+            QoSProfile(depth=100,durability=DurabilityPolicy.TRANSIENT_LOCAL) if topic=='/tf_static' else
             1000 if topic in OPTIONAL_TOPICS else qos))
 
     class Handler(socketserver.StreamRequestHandler):

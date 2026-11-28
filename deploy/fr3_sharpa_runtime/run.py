@@ -38,6 +38,8 @@ def log_expired_inference(observation, timing, *, attempt, age_ns, directory):
     line = json.dumps(payload, ensure_ascii=False, default=str)
     print("[observation-expired] " + line, file=sys.stderr, flush=True)
     try:
+        if os.environ.get("SHARPA_COMPACT_RECORDS")=="1":
+            return  # The structured warning above is already in run.log.
         path = Path(directory) / "inference_timing.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as stream:
@@ -184,7 +186,7 @@ def execute_policy_prepare(args):
              f"exec python -m {worker_module} --enable-hardware")
     worker = None
     trace_writer = (ExecutionTraceWriter(args.execution_trace_dir)
-                    if args.sharpa_backend == "sdk_direct" and getattr(args, "broker_mode", "serial") == "serial" else None)
+                    if args.sharpa_backend == "sdk_direct" and getattr(args, "broker_mode", "serial") == "serial" and os.environ.get("SHARPA_COMPACT_RECORDS")!="1" else None)
     try:
         if args.sharpa_backend == "sdk_direct":
             # Direct SDK owns the Wave devices and publishes their feedback before

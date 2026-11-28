@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from .recording import write_json
+from .recording import write_json, compact_run
 
 GRADES = {"A": "优等", "B": "一般", "C": "报错", "D": "放弃"}
 FILE = "data_quality.json"
@@ -21,7 +21,7 @@ RUN_PATH = re.compile(r"\d{4}-\d{2}-\d{2}/\d{2}\.\d{2}(?:-\d+)?")
 
 @contextmanager
 def locked(directory):
-    with (Path(directory) / ".data_quality.lock").open("a") as lock:
+    with (Path(directory) / ("run.log" if compact_run(directory) else ".data_quality.lock")).open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield
@@ -30,7 +30,24 @@ def locked(directory):
 
 
 def read(directory):
-    return json.loads((Path(directory) / FILE).read_text())
+    directory = Path(directory)
+    if (directory / FILE).is_file():
+        return json.loads((directory / FILE).read_text())
+    if compact_run(directory):
+        for name in ('mcap','rosbag'):
+            episode = directory/name/'episode.json'
+            if episode.is_file():
+                return json.loads(episode.read_text())['quality']
+    if compact_run(directory):
+        with (directory/'run.log').open() as stream:
+            last=None
+            for line in stream:
+                try:
+                    event=json.loads(line)
+                    if event.get('component')=='final_summary':last=event
+                except (ValueError,AttributeError):pass
+            if last and last.get('quality'):return last['quality']
+    raise FileNotFoundError(directory / FILE)
 
 
 def payload(directory, value=None):
@@ -74,10 +91,19 @@ def begin(directory, *, archive_parent=None, recording_format="rosbag"):
 
 
 def save_quality(directory, value):
-    write_json(directory / FILE, value)
-    bag = payload(directory)
+    directory = Path(directory)
+    compact = compact_run(directory)
+    if not compact or (directory/FILE).exists():
+        write_json(directory / FILE, value)
+    bag = payload(directory, value)
     if bag.is_dir():
-        write_json(bag / FILE, value)
+        if compact:
+            episode_path=bag/'episode.json'
+            if episode_path.exists():
+                episode=json.loads(episode_path.read_text());episode['quality']=value
+                write_json(episode_path,episode)
+        else:
+            write_json(bag / FILE, value)
         if value.get("recording_format") == "mcap" and (bag / "manifest.json").is_file():
             from .mcap_storage import seal
             seal(bag, json.loads((bag / "manifest.json").read_text())["status"])
@@ -106,7 +132,7 @@ def finish(directory, *, outcome, reason, returncode, recorder_closed):
 def archive_when_ready(directory):
     """Keep a requested grade durable until all background writers have ended."""
     directory = Path(directory).absolute()
-    if not (directory / FILE).is_file():
+    if not (directory / FILE).is_file() and not compact_run(directory):
         return
     with locked(directory):
         value = read(directory)
@@ -179,6 +205,17 @@ def summary(directory):
             recording = json.loads((directory / "recording.json").read_text())
     except (OSError, ValueError) as error:
         evidence_error = str(error)
+    if not recording and compact_run(directory):
+        episode_path=payload(directory,value)/'episode.json'
+        if episode_path.is_file():
+            recording=json.loads(episode_path.read_text()).get('run_summary',{}).get('recording.json',{})
+    if not recording and compact_run(directory):
+        with (directory/'run.log').open() as stream:
+            for line in stream:
+                try:
+                    event=json.loads(line)
+                    if event.get('component')=='final_summary':recording=event.get('reports',{}).get('recording.json',{})
+                except (ValueError,AttributeError):pass
     bag = payload(directory)
     started = recording.get("started_unix_ns") is not None
     available = bag.is_dir() or started
@@ -213,7 +250,8 @@ def list_recordings(output, *, limit=100):
     if not root.is_dir():
         return []
     # Bounded to the date/minute layout; never recursively scan bag payloads.
-    paths = sorted(root.glob("????-??-??/*/" + FILE), reverse=True)
+    paths = sorted(set(root.glob("????-??-??/*/" + FILE)) |
+                   {p.parent/FILE for p in root.glob("????-??-??/*/run.log") if compact_run(p.parent)}, reverse=True)
     result = []
     for path in paths:
         relative = path.parent.relative_to(root).as_posix()

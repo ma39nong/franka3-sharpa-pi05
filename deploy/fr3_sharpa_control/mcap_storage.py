@@ -11,8 +11,8 @@ import yaml
 
 from .recording import write_json
 
-VERSION = '1.0.0'
-MAX_BYTES = 2_000_000_000 - 16_000_000
+VERSION = '1.2.0'
+MAX_BYTES = 10_000_000_000 - 16_000_000
 VIDEO_TYPE = 'foxglove_msgs/msg/CompressedVideo'
 VIDEO_SCHEMA = '''builtin_interfaces/Time timestamp
 string frame_id
@@ -175,7 +175,7 @@ class McapEpisode:
         if row['first_time_ns'] is None: row['first_time_ns'] = publish_time
         row['last_time_ns'] = publish_time
         if self.stream.tell() > MAX_BYTES:
-            raise RuntimeError('MCAP approaches 2 GB; short-episode recorder does not support splitting')
+            raise RuntimeError('MCAP approaches 10 GB; recorder does not support splitting')
 
     def cancel_prepared(self):
         """Discard only this writer's empty preparation, never a recorded episode."""

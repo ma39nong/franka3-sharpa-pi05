@@ -16,10 +16,35 @@ from .rtc_stream import RTCTimeline
 SWITCH_MAX_SECONDS = 0.75
 BRIDGE_STEPS = 6
 DT = 1 / 30
+HANDOFF_MAX_OBSERVATION_AGE_S = 0.240
 
 
 class HandoffTrajectoryRejected(ValueError):
     """A fresh candidate is unsuitable, while its switch ticket is still valid."""
+
+
+class HandoffObservationExpired(HandoffTrajectoryRejected):
+    """Discard this observation, but retain the pending switch and its deadline."""
+
+
+def handoff_retry_budget(boundary, now):
+    """Keep the original deadline and leave room for the minimum bridge."""
+    budget = boundary['deadline'] - now - (BRIDGE_STEPS + 1) * DT
+    if budget <= 0:
+        raise TimeoutError('Online stage switch deadline leaves no time for a fresh handover')
+    return budget
+
+
+def handoff_prediction_budget(boundary, captured, now):
+    """Reserve one dispatch tick before the owner's authoritative age check."""
+    remaining = handoff_retry_budget(boundary, now)
+    age = now - captured
+    if not math.isfinite(age) or age < 0:
+        raise ValueError('Invalid online handover observation timestamp')
+    fresh = HANDOFF_MAX_OBSERVATION_AGE_S - DT - age
+    if fresh <= 0:
+        raise HandoffObservationExpired('Online handover prediction has no dispatch-time freshness budget')
+    return min(remaining, fresh)
 
 
 def aligned_candidate(actions, captured, start, epoch):
@@ -219,8 +244,11 @@ class StageTimeline(RTCTimeline):
         ):
             raise ValueError("Stale online handover token/epoch/source")
         captured = ticket.get("captured_monotonic_s")
-        if not isinstance(captured, (int, float)) or not 0 <= now - captured <= 0.2:
-            raise ValueError("Online handover observation/result is stale")
+        if (not isinstance(captured, (int, float)) or not math.isfinite(captured)
+                or captured > now):
+            raise ValueError("Invalid online handover observation timestamp")
+        if now - captured > HANDOFF_MAX_OBSERVATION_AGE_S:
+            raise HandoffObservationExpired("Online handover observation/result is stale (>240ms)")
         start = max(now, next_tick)
         end = start + BRIDGE_STEPS * DT
         if end + DT >= expected["deadline"]:

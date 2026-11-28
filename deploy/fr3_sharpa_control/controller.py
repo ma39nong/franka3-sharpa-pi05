@@ -13,7 +13,7 @@ import time
 import uuid
 
 from .plan import DeploymentSettings, allocate_run, plan_environment
-from .recording import mark_stop, rpc, write_json
+from .recording import mark_stop, rpc, write_json, compact_run, compact_finalize, COMPACT_HEADER, run_report
 from deploy.fr3_sharpa_runtime.camera_lease import CameraLease, LEASE_ENV
 
 
@@ -22,7 +22,7 @@ class Cancelled(Exception):
 
 
 def validate_ui_preferences(values):
-    if not isinstance(values, dict) or set(values) - {'stage_switch_mode', 'dagger_output', 'dagger_recording_format', 'dagger_head_depth', 'dagger_tactile'}:
+    if not isinstance(values, dict) or set(values) - {'stage_switch_mode', 'dagger_output', 'dagger_recording_format', 'dagger_head_depth', 'dagger_wrist_depth', 'dagger_tactile'}:
         raise ValueError('不支持的界面默认选项')
     if 'stage_switch_mode' in values and values['stage_switch_mode'] not in ('manual', 'auto'):
         raise ValueError('阶段切换方式必须为manual或auto')
@@ -30,7 +30,7 @@ def validate_ui_preferences(values):
         raise ValueError('DAgger保存父目录必须为字符串')
     if "dagger_recording_format" in values and values["dagger_recording_format"] not in ("mcap", "rosbag"):
         raise ValueError("样本保存方式仅支持mcap或rosbag")
-    for field in ("dagger_head_depth", "dagger_tactile"):
+    for field in ("dagger_head_depth", "dagger_wrist_depth", "dagger_tactile"):
         if field in values and type(values[field]) is not bool:
             raise ValueError("深度/触觉录制开关必须为布尔值")
     return dict(values)
@@ -129,7 +129,7 @@ class DeploymentController:
     def update(self, phase, message, **fields):
         with self.lock:
             self.state.update(phase=phase, message=message, **fields)
-            if self.directory:
+            if self.directory and not compact_run(self.directory):
                 write_json(self.directory / "ui_status.json", self.state)
 
     def save_ui_preferences(self, values):
@@ -179,6 +179,9 @@ class DeploymentController:
                           (self.agent.directory, "model.log"), (self.agent.directory, "observation.log")],
             "execution": [(execution_directory, name) for name in ("parameter_check.log", "recording_check.log", "recorder.log", "runtime.log", "video_export.log")],
         }
+        if execution_directory and compact_run(execution_directory):
+            groups['hardware']=[(execution_directory,'run.log')]
+            groups['execution']=[(execution_directory,'run.log')]
         if state["home"].get("directory"):
             groups["execution"].append((Path(state["home"]["directory"]), "home.log"))
         logs = {}
@@ -201,7 +204,7 @@ class DeploymentController:
         if directory:
             for name in ("recording.json", "video_export.json"):
                 with suppress(OSError, ValueError):
-                    state[name] = json.loads((directory / name).read_text())
+                    state[name] = run_report(directory, name)
         return state
 
     def task_status(self):
@@ -371,7 +374,7 @@ class DeploymentController:
             if self.thread and self.thread.is_alive():
                 raise ValueError("当前部署尚未停止和清理完毕")
             if self.recorder and self.recorder.poll() is None:
-                raise ValueError("上一录制器仍在收尾，请等待或检查recorder.log")
+                raise ValueError("上一录制器仍在收尾，请等待或检查运行日志")
             plan = self.preview(values)
             if expected_approval is not None and expected_approval != plan["approval"]:
                 raise ValueError("核对后权重、代码或配置发生变化，请重新核对最终配置")
@@ -383,6 +386,7 @@ class DeploymentController:
             self.plan = json.loads(json.dumps(plan))
             self.directory = allocate_run(self.root / ".deployment/control_model_sessions" if operation == "model" else plan["settings"]["output"])
             if operation == "execute":
+                (self.directory/'run.log').write_text(COMPACT_HEADER+'\n')
                 self.execution_directory = self.directory
             if operation == "model":
                 # Reusing the same model must retain its original live log path.
@@ -407,7 +411,7 @@ class DeploymentController:
                 write_json(self.directory / "run.json", self.plan)
                 if operation == "execute" and plan["settings"]["record"]:
                     from .quality import begin
-                    archive_parent = None
+                    archive_parent = plan["settings"]["output"]
                     if plan["settings"].get("dagger"):
                         archive_parent = plan["settings"].get("dagger_output") or str(Path(plan["settings"]["output"]) / "DAgger")
                     begin(self.directory, archive_parent=archive_parent,
@@ -432,7 +436,10 @@ class DeploymentController:
 
     def _spawn(self, command, name, env):
         folder = self.model_directory if name in ("model", "model_check") else self.directory
-        output = (folder / f"{name}.log").open("ab", buffering=0)
+        path = folder / ('run.log' if compact_run(folder) else f'{name}.log')
+        output = path.open("ab", buffering=0)
+        if compact_run(folder):
+            output.write((f'\n[component {name}] '+json.dumps(command,ensure_ascii=False)+'\n').encode())
         try:
             process = subprocess.Popen(command, cwd=self.plan["settings"]["repository"], env=env,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
@@ -457,7 +464,7 @@ class DeploymentController:
             time.sleep(0.1)
         if process.returncode:
             folder = self.model_directory if name in ("model", "model_check") else self.directory
-            detail = command_failure_detail(folder / f"{name}.log") if folder else ""
+            detail = command_failure_detail(folder / ("run.log" if compact_run(folder) else f"{name}.log")) if folder else ""
             raise RuntimeError(f"{name} 失败，退出码{process.returncode}；{detail or '请查看对应日志'}")
         if cancellable:
             self._cancelled()
@@ -483,8 +490,6 @@ class DeploymentController:
 
     def _queue_export(self, directory, env):
         """Keep old run paths frozen while a new deployment can start after cleanup."""
-        if env.get("SHARPA_RECORD_FORMAT", "rosbag") == "mcap":
-            return  # Native H.264 video is already embedded in MCAP.
         repository = self.plan["settings"]["repository"]
         report = directory / "video_export.json"
         write_json(report, {"status": "QUEUED"})
@@ -494,7 +499,7 @@ class DeploymentController:
                 try:
                     write_json(report, {"status": "EXPORTING"})
                     export_env = {**env, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
-                    with (directory / "video_export.log").open("wb") as log:
+                    with (directory / ("run.log" if compact_run(directory) else "video_export.log")).open("ab") as log:
                         process = subprocess.Popen(["nice", "-n", "10", "bash", "deploy/fr3_sharpa_control/record_session.sh", "export", str(directory)],
                                                    cwd=repository, env=export_env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                         try:
@@ -508,7 +513,7 @@ class DeploymentController:
                                 process.wait()
                             raise
                     if result:
-                        raise RuntimeError(f"导出退出码{result}，原始bag已保留，详见video_export.log")
+                        raise RuntimeError(f"导出退出码{result}，原始数据已保留，详见运行日志")
                     status = json.loads(report.read_text())
                     if status.get("status") != "COMPLETE":
                         raise RuntimeError("导出进程未提供COMPLETE结果")
@@ -517,6 +522,7 @@ class DeploymentController:
                 finally:
                     from .quality import archive_when_ready
                     archive_when_ready(directory)
+                    compact_finalize(directory)
         thread = threading.Thread(target=work, daemon=True, name="sharpa-video-export")
         self.export_threads.append(thread)
         thread.start()
@@ -662,6 +668,9 @@ class DeploymentController:
     def _run(self):
         env = plan_environment(self.plan)
         directory, failure = self.directory, None
+        env['SHARPA_COMPACT_RECORDS']='1'
+        env['SHARPA_MERGED_LOG']=str(directory/'run.log')
+        env.pop('SHARPA_FOUR_VIEW_RECORD_DIR',None)
         hardware_up = runtime_started = cleanup_verified = False
         camera_lease = None
         trace = directory / "logs"
@@ -676,8 +685,6 @@ class DeploymentController:
             env["SHARPA_TASK_RUN_ID"] = self.task_run_id
         if self.plan["settings"]["record"]:
             env["SHARPA_RECORD_SOCKET"] = str(self.socket)
-            if self.plan['model'].get('crop_locator'):
-                env['SHARPA_FOUR_VIEW_RECORD_DIR'] = str(directory/'policy_views')
         try:
             self._require_model(self.plan, env)
             self._command(self.plan["check"], "parameter_check", env)
@@ -700,7 +707,7 @@ class DeploymentController:
                 while True:
                     self._cancelled()
                     if self.recorder.poll() is not None:
-                        raise RuntimeError("录制器启动失败，请查看recorder.log")
+                        raise RuntimeError("录制器启动失败，请查看run.log")
                     if self.socket.exists():
                         rpc(self.socket, "status")
                         break
@@ -742,8 +749,8 @@ class DeploymentController:
                             self.dagger_last = dagger_rpc(self.dagger_endpoint, self.dagger_run_id)
                 time.sleep(0.2)
             if self.runtime.returncode not in (0, 130):
-                detail = command_failure_detail(directory / "runtime.log")
-                raise RuntimeError(f"执行/清理失败，退出码{self.runtime.returncode}；{detail or '查看runtime.log和独立失能报告'}")
+                detail = command_failure_detail(directory / ("run.log" if compact_run(directory) else "runtime.log"))
+                raise RuntimeError(f"执行/清理失败，退出码{self.runtime.returncode}；{detail or '查看run.log中的执行和失能报告'}")
             reports = list(trace.glob("shutdown-*.json"))
             if not reports or any(json.loads(path.read_text()).get("status") != "PASS" for path in reports):
                 raise RuntimeError("未取得完整的双手失能PASS报告，不能将进程结束当作失能成功")
@@ -784,7 +791,7 @@ class DeploymentController:
                     failure = f"{failure or ''} 标签导出提交失败：{error}；原始记录保留"
             if self.recorder and self.recorder.poll() is None:
                 failure = failure or "录制器仍在收尾"
-            elif (directory / "rosbag/metadata.yaml").is_file():
+            elif any((directory / name / "metadata.yaml").is_file() for name in ('rosbag','mcap')):
                 try:
                     self._queue_export(directory, dict(env))
                 except Exception as error:
@@ -817,19 +824,20 @@ class DeploymentController:
                     finish_operator_reports(trace)
                 except (OSError, ValueError) as error:
                     failure = f"人工停止报告保存失败：{error}"
+            operator_finished = cleanup_verified and (directory / "operator-stop.json").is_file()
             if self.plan["settings"]["record"]:
                 try:
                     from .quality import finish
                     finish(directory, outcome="FAILED" if failure else "FINISHED",
                            reason=failure or ("operator stop" if self.cancel.is_set() else "execution completed"),
                            returncode=self.runtime.returncode if self.runtime is not None else None,
-                           recorder_closed=self.recorder is not None and self.recorder.poll() is not None)
+                           recorder_closed=self.recorder is None or self.recorder.poll() is not None)
                 except Exception as error:
                     failure = f"{failure or ''} 评级记录保存失败：{error}；原始bag保留"
-            operator_finished = cleanup_verified and (directory / "operator-stop.json").is_file()
             self.update("failed" if failure else "finished" if operator_finished else "stopped" if self.cancel.is_set() else "finished",
                         failure or ("人工停止，执行、失能确认和硬件清理已完成；本次运行正常结束" if operator_finished
                                     else "执行、失能确认和硬件清理已完成；可重新选择Home/Current启动"), running=False)
+            compact_finalize(directory)
 
 
 def main():

@@ -192,11 +192,12 @@ class DeploymentSettings:
     dagger: bool = False
     dagger_output: str = ""
     dagger_recording_format: str = "mcap"
-    dagger_head_depth: bool = False
+    dagger_head_depth: bool = True
+    dagger_wrist_depth: bool = True
     dagger_tactile: bool = False
 
     def plan(self, *, cache=None, machine_root=None):
-        if type(self.dagger_head_depth) is not bool or type(self.dagger_tactile) is not bool:
+        if any(type(value) is not bool for value in (self.dagger_head_depth, self.dagger_wrist_depth, self.dagger_tactile)):
             raise ValueError("深度/触觉录制开关必须为布尔值")
         if type(self.dagger) is not bool or (self.dagger and not self.record):
             raise ValueError('DAgger必须明确开启并同时录制样本与标签')
@@ -367,6 +368,7 @@ def plan_environment(plan):
     for key in ('SHARPA_DAGGER_SOCKET', 'SHARPA_DAGGER_RUN_ID', 'SHARPA_DAGGER_DIRECTORY'):
         env.pop(key, None)
     env['SHARPA_RECORD_HEAD_DEPTH'] = '1' if plan['settings'].get('dagger') and plan['settings'].get('dagger_head_depth', False) else '0'
+    env['SHARPA_RECORD_WRIST_DEPTH'] = '1' if plan['settings'].get('dagger') and plan['settings'].get('dagger_wrist_depth', plan['settings'].get('dagger_head_depth', False)) else '0'
     env['SHARPA_RECORD_TACTILE'] = '1' if plan['settings'].get('dagger') and plan['settings'].get('dagger_tactile', False) else '0'
     env['SHARPA_DAGGER_ENABLED'] = '1' if plan['settings'].get('dagger') else '0'
     env['SHARPA_RECORD_FORMAT'] = (plan['settings'].get('dagger_recording_format', 'rosbag')

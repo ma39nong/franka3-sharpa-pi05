@@ -1,0 +1,8 @@
+# Distinguish wrist parameter files while retaining camera serial bindings.
+services:
+  openpi-cameras:
+    volumes:
+      - type: bind
+        source: ${SHARPA_CAMERA_DEPTH_CONFIG:?Set the three-camera depth deployment config}
+        target: /workspace/franka_upper_body_teleop/data_collection/config/cameras.yaml
+        read_only: true

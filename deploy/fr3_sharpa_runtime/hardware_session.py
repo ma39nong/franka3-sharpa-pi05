@@ -31,7 +31,9 @@ class HardwareSession:
             self.overlay,
         ]
         for variable, overlay in (("SHARPA_CAMERA_CAM1_PARAMS", "compose.camera-profile.yaml"),
-                                  ("SHARPA_CAMERA_CAM0_PARAMS", "compose.camera-head.yaml")):
+                                  ("SHARPA_CAMERA_CAM0_PARAMS", "compose.camera-head.yaml"),
+                                  ("SHARPA_CAMERA_CAM2_PARAMS", "compose.camera-left.yaml"),
+                                  ("SHARPA_CAMERA_DEPTH_CONFIG", "compose.camera-depth.yaml")):
             profile = os.environ.get(variable)
             if profile:
                 if not Path(profile).is_absolute() or not Path(profile).is_file():

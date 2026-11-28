@@ -261,8 +261,20 @@ class SharpaSdkDirectExecutor:
                 # boundary so the SDK config always receives the enum it
                 # expects, while avoiding a fragile ``side.value`` access.
                 resolved_side = side if isinstance(side, HandSide) else HandSide(str(side))
+                
+                # return create_hand(SharpaConfig(
+                #     name=f"sharpa-{resolved_side.value}", 
+                #     side=resolved_side, 
+                #     serial=serial)
+                #     )
                 return create_hand(SharpaConfig(
-                    name=f"sharpa-{resolved_side.value}", side=resolved_side, serial=serial))
+                    name=f"sharpa-{resolved_side.value}",
+                    side=resolved_side,
+                    serial=serial,
+                    current_coefficient=(
+                    0.8 if resolved_side == HandSide.RIGHT else 0.6),)
+                    )
+                
             self._factory = factory
         if not sdk_factory:
             # Test factories may accept opaque side values and must not need

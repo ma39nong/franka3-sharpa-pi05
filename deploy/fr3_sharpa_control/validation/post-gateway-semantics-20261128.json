@@ -1,0 +1,736 @@
+{
+  "total": 60,
+  "with_post_gateway_numeric": 29,
+  "missing_post_gateway_numeric": 31,
+  "numeric_available_by_grade": {
+    "A": 10,
+    "B": 8,
+    "C": 1,
+    "D": 10
+  },
+  "preservation_note": "Read-only audit; no historical MCAP or manifests changed",
+  "episodes": [
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode13",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 28573
+      },
+      "gateway_messages": 28573,
+      "left_arm_samples": 28573,
+      "right_arm_samples": 28573,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode16",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 13351
+      },
+      "gateway_messages": 13351,
+      "left_arm_samples": 13351,
+      "right_arm_samples": 13351,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/15.49"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode18",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 4444
+      },
+      "gateway_messages": 4444,
+      "left_arm_samples": 4444,
+      "right_arm_samples": 4444,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/15.57"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode22",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 14406
+      },
+      "gateway_messages": 14406,
+      "left_arm_samples": 14406,
+      "right_arm_samples": 14406,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode23",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 7030
+      },
+      "gateway_messages": 7030,
+      "left_arm_samples": 7030,
+      "right_arm_samples": 7030,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode24",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 8101
+      },
+      "gateway_messages": 8101,
+      "left_arm_samples": 8101,
+      "right_arm_samples": 8101,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode27",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 7949
+      },
+      "gateway_messages": 7949,
+      "left_arm_samples": 7949,
+      "right_arm_samples": 7949,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode35",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 7268
+      },
+      "gateway_messages": 7268,
+      "left_arm_samples": 7268,
+      "right_arm_samples": 7268,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/18.16"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode37",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 16699
+      },
+      "gateway_messages": 16699,
+      "left_arm_samples": 16699,
+      "right_arm_samples": 16699,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/18.20-2"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode39",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 9055
+      },
+      "gateway_messages": 9055,
+      "left_arm_samples": 9055,
+      "right_arm_samples": 9055,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/19.17"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode56",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.39"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode65",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.28"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode66",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.33"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode69",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.57"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode71",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.12"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode76",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/18.04"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode77",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/18.10"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/A/episode80",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/18.56"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode1",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 5252
+      },
+      "gateway_messages": 5252,
+      "left_arm_samples": 5252,
+      "right_arm_samples": 5252,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-25/18.30"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode11",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 3261
+      },
+      "gateway_messages": 3261,
+      "left_arm_samples": 3261,
+      "right_arm_samples": 3261,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode12",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 9668
+      },
+      "gateway_messages": 9668,
+      "left_arm_samples": 9668,
+      "right_arm_samples": 9668,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode2",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 12317
+      },
+      "gateway_messages": 12317,
+      "left_arm_samples": 12317,
+      "right_arm_samples": 12317,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-25/18.42"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode20",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 7111
+      },
+      "gateway_messages": 7111,
+      "left_arm_samples": 7111,
+      "right_arm_samples": 7111,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode28",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 10410
+      },
+      "gateway_messages": 10410,
+      "left_arm_samples": 10410,
+      "right_arm_samples": 10410,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode30",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 14497
+      },
+      "gateway_messages": 14497,
+      "left_arm_samples": 14497,
+      "right_arm_samples": 14497,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode50",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.08"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode51",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.13"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode53",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.23"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode60",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.09"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode61",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.14"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode72",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.30"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode75",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.47"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode79",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/18.52"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/B/episode8",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 2279
+      },
+      "gateway_messages": 2279,
+      "left_arm_samples": 2279,
+      "right_arm_samples": 2279,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/11.41"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/C/episode34",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 13932
+      },
+      "gateway_messages": 13932,
+      "left_arm_samples": 13932,
+      "right_arm_samples": 13932,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode10",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 1983
+      },
+      "gateway_messages": 1983,
+      "left_arm_samples": 1983,
+      "right_arm_samples": 1983,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode14",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 3555
+      },
+      "gateway_messages": 3555,
+      "left_arm_samples": 3555,
+      "right_arm_samples": 3555,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode25",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 7414
+      },
+      "gateway_messages": 7414,
+      "left_arm_samples": 7414,
+      "right_arm_samples": 7414,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode26",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 6233
+      },
+      "gateway_messages": 6233,
+      "left_arm_samples": 6233,
+      "right_arm_samples": 6233,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode29",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 4984
+      },
+      "gateway_messages": 4984,
+      "left_arm_samples": 4984,
+      "right_arm_samples": 4984,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode3",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 4285
+      },
+      "gateway_messages": 4285,
+      "left_arm_samples": 4285,
+      "right_arm_samples": 4285,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-25/19.52"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode31",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 13134
+      },
+      "gateway_messages": 13134,
+      "left_arm_samples": 13134,
+      "right_arm_samples": 13134,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode32",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 3345
+      },
+      "gateway_messages": 3345,
+      "left_arm_samples": 3345,
+      "right_arm_samples": 3345,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode4",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 706
+      },
+      "gateway_messages": 706,
+      "left_arm_samples": 706,
+      "right_arm_samples": 706,
+      "sidecar_runs": [],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode40",
+      "post_gateway_topics": {
+        "/teleop/validated_arm_commands": 6813
+      },
+      "gateway_messages": 6813,
+      "left_arm_samples": 6813,
+      "right_arm_samples": 6813,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-26/19.22"
+      ],
+      "feasibility": "post_gateway_numeric_available"
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode48",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/14.19"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode49",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.04"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode52",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.19"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode54",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.30"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode55",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.34"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode57",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.46"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode58",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.49"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode59",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/15.54"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode62",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.19"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode63",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.23"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode68",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/16.51"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode70",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.04"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode73",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.36"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode74",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/17.42"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    },
+    {
+      "episode": "/home/descfly/桌面/Sharpa部署记录/D/episode78",
+      "post_gateway_topics": {},
+      "gateway_messages": 0,
+      "left_arm_samples": 0,
+      "right_arm_samples": 0,
+      "sidecar_runs": [
+        "/home/descfly/桌面/Sharpa部署记录/2026-11-27/18.24"
+      ],
+      "feasibility": "missing_post_gateway_numeric_not_reconstructable_from_ack_or_state",
+      "sidecar_gateway_numeric_topics": []
+    }
+  ],
+  "gateway_messages_verified": 248055,
+  "gateway_messages_per_side": {
+    "left_arm": 248055,
+    "right_arm": 248055
+  },
+  "test_results": {
+    "targeted_gateway_split_recording_tests": "13 passed",
+    "synthetic_full_mcap_conformance": "27 applicable checks passed",
+    "extended_regression": "43 passed, 3 failed in pre-existing terminal Recorder mock: mkdir on existing storage alias; production terminal/quality code untouched",
+    "hardware_started": false
+  }
+}

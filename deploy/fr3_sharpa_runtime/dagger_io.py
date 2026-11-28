@@ -17,7 +17,9 @@ class AuditWriter:
     def __init__(self, directory, *, publish=None):
         self.publish = publish
         self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self.compact = os.environ.get("SHARPA_COMPACT_RECORDS")=="1"
+        if not self.compact:
+            self.directory.mkdir(parents=True, exist_ok=True)
         self.queue = queue.Queue(maxsize=2048)
         self.error = None
         self.stopped = threading.Event()
@@ -37,21 +39,30 @@ class AuditWriter:
             raise RuntimeError('DAgger audit failed: ' + self.error)
 
     def work(self):
+        import sys
+        from contextlib import ExitStack
         try:
-            with (self.directory/'frames.jsonl').open('x') as frames, (self.directory/'events.jsonl').open('x') as events:
+            with ExitStack() as stack:
+                frames = events = None
+                if not self.compact:
+                    frames=stack.enter_context((self.directory/'frames.jsonl').open('x'))
+                    events=stack.enter_context((self.directory/'events.jsonl').open('x'))
                 while not self.stopped.is_set() or not self.queue.empty():
                     try:
-                        item = self.queue.get(timeout=.1)
+                        item=self.queue.get(timeout=.1)
                     except queue.Empty:
-                        frames.flush(); events.flush()
+                        if frames is not None:frames.flush();events.flush()
                         continue
-                    stream = events if 'event' in item else frames
-                    encoded = json.dumps(item, ensure_ascii=False, allow_nan=False)
-                    stream.write(encoded+'\n')
+                    encoded=json.dumps(item,ensure_ascii=False,allow_nan=False)
+                    if frames is not None:
+                        (events if 'event' in item else frames).write(encoded+'\n')
                     if self.publish is not None:
-                        self.publish(item, encoded)
+                        self.publish(item,encoded)
+                    if self.compact and 'event' in item and (self.publish is None or item['event'] in ('dispatch_failure','run_end') or item['event']=='human_end' and item.get('incomplete')):
+                        diagnostic={k:v for k,v in item.items() if k not in ('actions','action','state')}
+                        print(json.dumps(diagnostic,ensure_ascii=False),file=sys.stderr,flush=True)
         except Exception as error:
-            self.error = str(error)
+            self.error=str(error)
 
     def close(self):
         self.stopped.set()

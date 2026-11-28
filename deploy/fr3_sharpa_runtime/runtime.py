@@ -53,7 +53,7 @@ class SharpaRuntime:
         self.policy_url = policy_url
         self.crop_session = uuid.uuid4().hex
         self.four_view_recording = None
-        if os.environ.get('SHARPA_FOUR_VIEW_RECORD_DIR'):
+        if os.environ.get('SHARPA_FOUR_VIEW_RECORD_DIR') and os.environ.get('SHARPA_COMPACT_RECORDS')!='1':
             from .four_view_recording import recording_for
             self.four_view_recording = recording_for(os.environ['SHARPA_FOUR_VIEW_RECORD_DIR'])
         self.adapter = SharpaActionAdapter()

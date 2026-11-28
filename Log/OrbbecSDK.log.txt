@@ -1,0 +1,131 @@
+[11/28 14:36:02.846343][info][2769430][LinuxUsbPal.cpp:334] Create PollingDeviceWatcher!
+[11/28 14:36:02.846379][info][2769430][DeviceManager.cpp:25] Current found device(s): (2)
+[11/28 14:36:02.846380][info][2769430][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8, Connection: USB3.2
+[11/28 14:36:02.846381][info][2769430][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048, Connection: USB3.2
+[11/28 14:36:02.846385][info][2769430][DeviceManager.cpp:405] Enable net device enumeration: true
+[11/28 14:36:03.965593][info][2769430][DeviceManager.cpp:25] Current device(s) list: (3)
+[11/28 14:36:03.965606][info][2769430][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8, Connection: USB3.2
+[11/28 14:36:03.965606][info][2769430][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048, Connection: USB3.2
+[11/28 14:36:03.965607][info][2769430][DeviceManager.cpp:30] 	- Name: Gemini 435Le, PID: 0x0815, SN/ID: CP4N651006F, Connection: Ethernet, MAC:54:14:FD:23:5E:E3, ip:192.168.1.123
+[11/28 14:36:03.968621][info][2769430][G305Device.cpp:723] UVCAutoRebootOnFault=true for device: Gemini 305
+[11/28 14:36:03.976248][info][2769430][DeviceBase.cpp:665] key: AppSlot,value:1
+[11/28 14:36:03.976251][info][2769430][DeviceBase.cpp:665] key: HwType,value:S1
+[11/28 14:36:03.976251][info][2769430][DeviceBase.cpp:665] key: HwVer,value:V1.3
+[11/28 14:36:03.976252][info][2769430][DeviceBase.cpp:665] key: IspFwVer,value:20260424
+[11/28 14:36:03.976252][info][2769430][DeviceBase.cpp:665] key: IspNeedVer,value:20250920
+[11/28 14:36:03.976252][info][2769430][DeviceBase.cpp:665] key: PresetVer,value:0.0.9
+[11/28 14:36:04.179232][info][2769430][DeviceManager.cpp:199] Device created successfully! Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8 FW: 1.0.70
+[11/28 14:36:04.251646][info][2769430][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:04.251650][info][2769430][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:04.251732][info][2769430][SensorBase.cpp:47] [CV2L761000F8] SensorBase is destroyed
+[11/28 14:36:04.273121][info][2769430][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:04.273124][info][2769430][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:04.275551][info][2769430][G305Device.cpp:723] UVCAutoRebootOnFault=true for device: Gemini 305
+[11/28 14:36:04.283233][info][2769430][DeviceBase.cpp:665] key: AppSlot,value:1
+[11/28 14:36:04.283236][info][2769430][DeviceBase.cpp:665] key: HwType,value:S1
+[11/28 14:36:04.283237][info][2769430][DeviceBase.cpp:665] key: HwVer,value:V1.3
+[11/28 14:36:04.283237][info][2769430][DeviceBase.cpp:665] key: IspFwVer,value:20260424
+[11/28 14:36:04.283238][info][2769430][DeviceBase.cpp:665] key: IspNeedVer,value:20250920
+[11/28 14:36:04.283238][info][2769430][DeviceBase.cpp:665] key: PresetVer,value:0.0.9
+[11/28 14:36:04.485236][info][2769430][DeviceManager.cpp:199] Device created successfully! Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048 FW: 1.0.70
+[11/28 14:36:04.557121][info][2769430][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:04.557125][info][2769430][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:04.557191][info][2769430][SensorBase.cpp:47] [CV2B96100048] SensorBase is destroyed
+[11/28 14:36:04.578629][info][2769430][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:04.578632][info][2769430][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:04.582071][warning][2769430][PropertyServer.cpp:87] [CP4N651006F] Not added to property map, property not found in OBPropertyBaseInfoMap, id=4035
+[11/28 14:36:05.963780][info][2769430][DeviceBase.cpp:665] key: ProductModel,value:G30056-370
+[11/28 14:36:05.963791][info][2769430][DeviceBase.cpp:665] key: SN,value:12345678
+[11/28 14:36:05.963792][info][2769430][DeviceBase.cpp:665] key: SubFwVer,value:4.4.73
+[11/28 14:36:06.997431][info][2769430][DeviceManager.cpp:199] Device created successfully! Name: Gemini 435Le, PID: 0x0815, SN/ID: CP4N651006F FW: 1.3.19
+[11/28 14:36:07.002455][info][2769430][SensorBase.cpp:47] [CP4N651006F] SensorBase is destroyed
+[11/28 14:36:07.002491][warning][2769430][RTSPStreamPort.cpp:96] Stream have not been started!
+[11/28 14:36:41.901005][info][2770249][LinuxUsbPal.cpp:334] Create PollingDeviceWatcher!
+[11/28 14:36:41.901035][info][2770249][DeviceManager.cpp:25] Current found device(s): (2)
+[11/28 14:36:41.901037][info][2770249][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8, Connection: USB3.2
+[11/28 14:36:41.901038][info][2770249][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048, Connection: USB3.2
+[11/28 14:36:41.901040][info][2770249][DeviceManager.cpp:405] Enable net device enumeration: true
+[11/28 14:36:42.924649][info][2770249][DeviceManager.cpp:25] Current device(s) list: (3)
+[11/28 14:36:42.924656][info][2770249][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8, Connection: USB3.2
+[11/28 14:36:42.924657][info][2770249][DeviceManager.cpp:34] 	- Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048, Connection: USB3.2
+[11/28 14:36:42.924658][info][2770249][DeviceManager.cpp:30] 	- Name: Gemini 435Le, PID: 0x0815, SN/ID: CP4N651006F, Connection: Ethernet, MAC:54:14:FD:23:5E:E3, ip:192.168.1.123
+[11/28 14:36:42.926583][info][2770249][G305Device.cpp:723] UVCAutoRebootOnFault=true for device: Gemini 305
+[11/28 14:36:42.934212][info][2770249][DeviceBase.cpp:665] key: AppSlot,value:1
+[11/28 14:36:42.934215][info][2770249][DeviceBase.cpp:665] key: HwType,value:S1
+[11/28 14:36:42.934215][info][2770249][DeviceBase.cpp:665] key: HwVer,value:V1.3
+[11/28 14:36:42.934216][info][2770249][DeviceBase.cpp:665] key: IspFwVer,value:20260424
+[11/28 14:36:42.934216][info][2770249][DeviceBase.cpp:665] key: IspNeedVer,value:20250920
+[11/28 14:36:42.934216][info][2770249][DeviceBase.cpp:665] key: PresetVer,value:0.0.9
+[11/28 14:36:43.137225][info][2770249][DeviceManager.cpp:199] Device created successfully! Name: Gemini 305, PID: 0x0840, SN/ID: CV2L761000F8 FW: 1.0.70
+[11/28 14:36:43.223087][info][2770249][Pipeline.cpp:54] [CV2L761000F8] Pipeline created with device: {name: Gemini 305, sn: CV2L761000F8}, @0x62A207F2C2E0
+[11/28 14:36:43.223116][info][2770249][Pipeline.cpp:228] [CV2L761000F8] Check and set config done!
+[11/28 14:36:43.224998][info][2770249][Pipeline.cpp:266] [CV2L761000F8] Try to start streams!
+[11/28 14:36:43.225003][info][2770249][VideoSensor.cpp:58] [CV2L761000F8] Try to start stream: {type: Depth, format: Y16, width: 640, height: 480, fps: 30}
+[11/28 14:36:43.226706][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STOPPED to STARTING@Depth
+[11/28 14:36:43.226708][info][2770249][VideoSensor.cpp:127] [CV2L761000F8] Start backend stream: {type: Depth, format: Z16, width: 640, height: 480, fps: 30}
+[11/28 14:36:43.228107][info][2770249][VideoSensor.cpp:58] [CV2L761000F8] Try to start stream: {type: Color, format: MJPG, width: 640, height: 480, fps: 30}
+[11/28 14:36:43.228114][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STOPPED to STARTING@Color
+[11/28 14:36:43.228115][info][2770249][VideoSensor.cpp:127] [CV2L761000F8] Start backend stream: {type: Color, format: MJPG, width: 640, height: 480, fps: 30}
+[11/28 14:36:43.230063][info][2770249][Pipeline.cpp:293] [CV2L761000F8] Start streams done!
+[11/28 14:36:43.230065][info][2770249][Pipeline.cpp:250] [CV2L761000F8] Pipeline start done!
+[11/28 14:36:43.699210][info][2770338][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STARTING to STREAMING@Depth
+[11/28 14:36:43.726579][info][2770339][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STARTING to STREAMING@Color
+[11/28 14:36:48.257985][info][2770249][Pipeline.cpp:367] [CV2L761000F8] Try to stop pipeline!
+[11/28 14:36:48.257994][info][2770249][Pipeline.cpp:343] [CV2L761000F8] Try to stop streams!
+[11/28 14:36:48.258004][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STREAMING to STOPPING@Color
+[11/28 14:36:48.316130][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STOPPING to STOPPED@Color
+[11/28 14:36:48.316170][info][2770249][Pipeline.cpp:357] [CV2L761000F8] Sensor stream stopped, sensorType=Color
+[11/28 14:36:48.316174][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STREAMING to STOPPING@Depth
+[11/28 14:36:48.369144][info][2770249][SensorBase.cpp:210] [CV2L761000F8] Stream state changed from STOPPING to STOPPED@Depth
+[11/28 14:36:48.369173][info][2770249][Pipeline.cpp:357] [CV2L761000F8] Sensor stream stopped, sensorType=Depth
+[11/28 14:36:48.369174][info][2770249][Pipeline.cpp:363] [CV2L761000F8] Stop streams done!
+[11/28 14:36:48.389163][info][2770249][Pipeline.cpp:392] [CV2L761000F8] Stop pipeline done!
+[11/28 14:36:48.389187][info][2770249][Pipeline.cpp:65] [CV2L761000F8] Pipeline destroyed! @0x62A207F2C2E0
+[11/28 14:36:48.389259][info][2770249][SensorBase.cpp:47] [CV2L761000F8] SensorBase is destroyed
+[11/28 14:36:48.393224][info][2770249][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:48.393225][info][2770249][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:48.393312][info][2770249][SensorBase.cpp:47] [CV2L761000F8] SensorBase is destroyed
+[11/28 14:36:48.407510][info][2770249][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:48.407512][info][2770249][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:48.464303][info][2770249][G305Device.cpp:723] UVCAutoRebootOnFault=true for device: Gemini 305
+[11/28 14:36:48.471871][info][2770249][DeviceBase.cpp:665] key: AppSlot,value:1
+[11/28 14:36:48.471872][info][2770249][DeviceBase.cpp:665] key: HwType,value:S1
+[11/28 14:36:48.471873][info][2770249][DeviceBase.cpp:665] key: HwVer,value:V1.3
+[11/28 14:36:48.471873][info][2770249][DeviceBase.cpp:665] key: IspFwVer,value:20260424
+[11/28 14:36:48.471874][info][2770249][DeviceBase.cpp:665] key: IspNeedVer,value:20250920
+[11/28 14:36:48.471874][info][2770249][DeviceBase.cpp:665] key: PresetVer,value:0.0.9
+[11/28 14:36:48.674625][info][2770249][DeviceManager.cpp:199] Device created successfully! Name: Gemini 305, PID: 0x0840, SN/ID: CV2B96100048 FW: 1.0.70
+[11/28 14:36:48.763674][info][2770249][Pipeline.cpp:54] [CV2B96100048] Pipeline created with device: {name: Gemini 305, sn: CV2B96100048}, @0x62A207FB6DD0
+[11/28 14:36:48.763700][info][2770249][Pipeline.cpp:228] [CV2B96100048] Check and set config done!
+[11/28 14:36:48.765419][info][2770249][Pipeline.cpp:266] [CV2B96100048] Try to start streams!
+[11/28 14:36:48.765424][info][2770249][VideoSensor.cpp:58] [CV2B96100048] Try to start stream: {type: Depth, format: Y16, width: 640, height: 480, fps: 30}
+[11/28 14:36:48.767123][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STOPPED to STARTING@Depth
+[11/28 14:36:48.767125][info][2770249][VideoSensor.cpp:127] [CV2B96100048] Start backend stream: {type: Depth, format: Z16, width: 640, height: 480, fps: 30}
+[11/28 14:36:48.768357][info][2770249][VideoSensor.cpp:58] [CV2B96100048] Try to start stream: {type: Color, format: MJPG, width: 640, height: 480, fps: 30}
+[11/28 14:36:48.768362][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STOPPED to STARTING@Color
+[11/28 14:36:48.768363][info][2770249][VideoSensor.cpp:127] [CV2B96100048] Start backend stream: {type: Color, format: MJPG, width: 640, height: 480, fps: 30}
+[11/28 14:36:48.770074][info][2770249][Pipeline.cpp:293] [CV2B96100048] Start streams done!
+[11/28 14:36:48.770074][info][2770249][Pipeline.cpp:250] [CV2B96100048] Pipeline start done!
+[11/28 14:36:49.349556][info][2770526][VideoSensor.cpp:153] [CV2B96100048] Depth backend frame callback, frameRate=24.756851fps
+[11/28 14:36:49.354121][info][2770526][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STARTING to STREAMING@Depth
+[11/28 14:36:49.354275][info][2770530][SensorBase.cpp:379] [CV2B96100048] Depth Streaming... frameRate=24.756851fps
+[11/28 14:36:49.381575][info][2770527][VideoSensor.cpp:153] [CV2B96100048] Color backend frame callback, frameRate=24.403183fps
+[11/28 14:36:49.381579][info][2770527][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STARTING to STREAMING@Color
+[11/28 14:36:49.381647][info][2770531][SensorBase.cpp:379] [CV2B96100048] Color Streaming... frameRate=24.403183fps
+[11/28 14:36:53.779761][info][2770249][Pipeline.cpp:367] [CV2B96100048] Try to stop pipeline!
+[11/28 14:36:53.779769][info][2770249][Pipeline.cpp:343] [CV2B96100048] Try to stop streams!
+[11/28 14:36:53.779779][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STREAMING to STOPPING@Color
+[11/28 14:36:53.823777][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STOPPING to STOPPED@Color
+[11/28 14:36:53.823794][info][2770249][Pipeline.cpp:357] [CV2B96100048] Sensor stream stopped, sensorType=Color
+[11/28 14:36:53.823798][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STREAMING to STOPPING@Depth
+[11/28 14:36:53.871785][info][2770249][SensorBase.cpp:210] [CV2B96100048] Stream state changed from STOPPING to STOPPED@Depth
+[11/28 14:36:53.871821][info][2770249][Pipeline.cpp:357] [CV2B96100048] Sensor stream stopped, sensorType=Depth
+[11/28 14:36:53.871822][info][2770249][Pipeline.cpp:363] [CV2B96100048] Stop streams done!
+[11/28 14:36:53.891800][info][2770249][Pipeline.cpp:392] [CV2B96100048] Stop pipeline done!
+[11/28 14:36:53.891825][info][2770249][Pipeline.cpp:65] [CV2B96100048] Pipeline destroyed! @0x62A207FB6DD0
+[11/28 14:36:53.891904][info][2770249][SensorBase.cpp:47] [CV2B96100048] SensorBase is destroyed
+[11/28 14:36:53.895895][info][2770249][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:53.895896][info][2770249][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done
+[11/28 14:36:53.895995][info][2770249][SensorBase.cpp:47] [CV2B96100048] SensorBase is destroyed
+[11/28 14:36:53.910398][info][2770249][ObLibuvcDevicePort.cpp:87] uvc_close done.
+[11/28 14:36:53.910400][info][2770249][ObLibuvcDevicePort.cpp:88] ~ObLibuvcDevicePort done

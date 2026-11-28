@@ -16,7 +16,7 @@ from .policy_execution import install_policy_rtc, policy_command, prepare_policy
 from .preflight import FIRST_TARGET_LIMITS_RAD, execute_preflight
 from .protocol import DT_NS, LEFT_SHARPA_SLICE, RIGHT_SHARPA_SLICE
 from .ros_transport import RTCCommandLimiter, validate_action_ranges
-from .rtc_stream import RTCTimeline
+from .stage_handoff import StageTimeline as RTCTimeline, HandoffTrajectoryRejected
 from .sdk_direct import chunk_command_frames
 
 
@@ -128,6 +128,7 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
     mode = initial_request['broker_mode']
     policy_limiter = limiter if mode == 'rtc' and initial_request.get('online_task_handoff') else None
     entry_bridge_until = None
+    stage_handoff = None
     first_tick = next_tick = time.monotonic()
     latest_report = dict(policy_done=True, consumed_since_install=0, phase=0)
     def reply(value):
@@ -217,7 +218,9 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                     pending_rtc_actions = None
                     entry_bridge_until = None
                     plan_done = True
+                    stage_handoff = None
                 if core.mode != 'POLICY':
+                    stage_handoff = None
                     timeline = frames = None
                     pending_rtc_actions = None
                     entry_bridge_until = None
@@ -233,6 +236,37 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                         return
                     if operation == 'dagger_status':
                         acknowledgements.append(dict(status='PASS', dagger=core.snapshot(), **latest_report))
+                    elif operation == 'dagger_stage_switch':
+                        if request['generation'] != core.generation or core.mode != 'POLICY' or core.intervening:
+                            acknowledgements.append(dict(status='PASS', rejected=True))
+                            continue
+                        if timeline is None or frame_index < bridge_steps or mode != 'rtc':
+                            acknowledgements.append(dict(status='PASS', entry_pending=True))
+                            continue
+                        boundary = timeline.begin_switch(request['task_epoch'], request['request_id'], now,
+                            finish_chunk=request.get('finish_chunk') is True)
+                        # Revoke old inference tickets while retaining the moving source curve.
+                        core.generation += 1
+                        stage_handoff = None
+                        core.event('stage_switch_requested', boundary=boundary)
+                        acknowledgements.append(dict(status='PASS', dagger=core.snapshot(), boundary=boundary))
+                    elif operation == 'dagger_stage_handoff':
+                        if (request['generation'] != core.generation or core.mode != 'POLICY'
+                                or core.intervening or timeline is None):
+                            acknowledgements.append(dict(status='PASS', rejected=True))
+                            continue
+                        actions, clipping = prepare_policy_actions(request['actions'],
+                            limiter=policy_limiter, max_correction_rad=request['prediction_clip_rad'])
+                        try:
+                            result = timeline.prepare_handoff(actions, request['ticket'], now, next_tick,
+                                core.last, gateway_speed, validate_action_ranges, validate_continuation=False,
+                                limit_step=policy_limiter.step_toward)
+                        except HandoffTrajectoryRejected as error:
+                            acknowledgements.append(dict(status='PASS', rejected=True, reason=str(error)))
+                            continue
+                        stage_handoff = dict(token=result['token'], stage=request['stage'], prompt=request['prompt'])
+                        core.event('stage_handoff_armed', **result)
+                        acknowledgements.append(dict(status='PASS', **result, prediction_clipping=clipping))
                     elif operation == 'dagger_request_policy':
                         if request.get('generation') != core.generation:
                             acknowledgements.append(dict(status='PASS',rejected=True))
@@ -247,10 +281,12 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                         pending_rtc_actions = None
                         entry_bridge_until = None
                         plan_done = True
+                        stage_handoff = None
                         target = core.hold.copy()
                         acknowledgements.append(dict(status='PASS', dagger=core.snapshot()))
                     elif operation == 'dagger_snapshot':
-                        if request['generation'] != core.generation or core.mode != 'POLICY' or timeline is None or frame_index < bridge_steps:
+                        if (request['generation'] != core.generation or core.mode != 'POLICY'
+                                or timeline is None or frame_index < bridge_steps or timeline.switch is not None):
                             acknowledgements.append(dict(status='PASS', rejected=True))
                         else:
                             context = timeline.snapshot(now, delay_steps=request['delay_steps'],
@@ -270,7 +306,8 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                                 acknowledgements.append(dict(status='PASS', rejected=True, reason='obsolete prefix'))
                                 continue
                             result = install_policy_rtc(timeline, actions, receipt, now, core.last,
-                                arm_speed=gateway_speed if policy_limiter is not None else None)
+                                arm_speed=gateway_speed if policy_limiter is not None else None,
+                                task_epoch=timeline.task_epoch)
                             if result.get('rejected'):
                                 acknowledgements.append(dict(status='PASS', **result))
                                 continue
@@ -336,12 +373,12 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                             # Anchor to the actual bridge completion tick. Dispatch
                             # counts and monotonic time can differ by scheduler jitter.
                             timeline = RTCTimeline(pending_rtc_actions, now,
-                                initial_request['speed_scale'])
+                                initial_request['speed_scale'], task_epoch=0)
                             pending_rtc_actions = None
                         sample_time = (max(timeline.installed_at, next_tick)
                             if entry_bridge_until is not None and next_tick <= entry_bridge_until else now)
                         target = timeline.sample(sample_time)
-                        phase = 'policy'
+                        phase = 'stage_bridge' if stage_handoff is not None else 'policy'
                         status = timeline.status(now)
                         latest_report = dict(policy_done=False, **status)
                     elif plan_done:
@@ -387,6 +424,13 @@ def run_owner(node, executor, feedback, recording, publish, protocol, *, gateway
                 mark('sdk_send_ms')
                 current_operation = 'arm_publish'
                 sequence, stamp = publish(command)
+                if timeline is not None:
+                    timeline.mark_dispatched(now, command)
+                    if stage_handoff and timeline.applied_token == stage_handoff['token']:
+                        core.accept_policy(core.generation, stage=stage_handoff['stage'], prompt=stage_handoff['prompt'])
+                        core.event('stage_handoff_applied', token=stage_handoff['token'])
+                        stage_handoff = None
+                    latest_report = dict(policy_done=False, **timeline.status(now))
                 last_dispatch = time.monotonic()
                 last_dispatch_period = dispatch_period(core.mode)
                 mark('arm_publish_ms')
